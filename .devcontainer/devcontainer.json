@@ -1,0 +1,104 @@
+// For format details, see https://aka.ms/devcontainer.json.
+{
+  "name": "bitsyscerts",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+
+  // Expose PostgreSQL and the two application servers.
+  "forwardPorts": [5432, 8000, 5173],
+  "portsAttributes": {
+    "5432": {
+      "label": "PostgreSQL",
+      "onAutoForward": "silent"
+    },
+    "8000": {
+      "label": "FastAPI (uvicorn)",
+      "onAutoForward": "notify"
+    },
+    "5173": {
+      "label": "React App (Vite)",
+      "onAutoForward": "notify"
+    }
+  },
+
+  // Runs once when the container is first created.
+  "postCreateCommand": "bash .devcontainer/setup-git.sh && bash .devcontainer/post-setup.sh",
+
+  // Runs on every container start (including reopens after closing VS Code).
+  "postStartCommand": "",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Python toolchain
+        "ms-python.python",
+        "ms-python.mypy-type-checker",
+        "charliermarsh.ruff",
+        // TypeScript / React toolchain
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        // Config / data files
+        "tamasfe.even-better-toml",
+        // Database
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg",
+        // Source control
+        "github.vscode-pull-request-github"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "editor.formatOnSave": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff"
+        },
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        "[typescriptreact]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode"
+        },
+        // Point SQLTools at the in-container dev database
+        "sqltools.connections": [
+          {
+            "name": "ctpool-dev",
+            "driver": "PostgreSQL",
+            "host": "localhost",
+            "port": 5432,
+            "database": "ctpool",
+            "username": "ctpool",
+            "password": "ctpool"
+          },
+          {
+            "name": "ctpool-test",
+            "driver": "PostgreSQL",
+            "host": "localhost",
+            "port": 5432,
+            "database": "ctpool_test",
+            "username": "ctpool",
+            "password": "ctpool"
+          }
+        ]
+      }
+    }
+  },
+
+  // Inject DATABASE_URL so the app and tests pick it up automatically.
+  "remoteEnv": {
+    "DATABASE_URL": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool",
+    "TEST_DATABASE_URL": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
+  },
+
+  "containerEnv": {
+    "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock"
+  },
+
+  "mounts": [
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.gitconfig,target=/tmp/host-gitconfig,type=bind,consistency=cached,readonly"
+  ],
+
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": false
+}
