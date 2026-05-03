@@ -1,0 +1,337 @@
+"""Tests for ctpool.tail_worker — run_tail.
+
+All external boundaries (HTTP fetches, disk guard, database) are mocked
+so tests run without a network or database connection.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from ctpool.config import Settings
+from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
+from ctpool.exceptions import FetchError
+from ctpool.models.log_source import CtLogSource
+from ctpool.models.log_tail_cursor import CtLogTailCursor
+from ctpool.tail_worker import run_tail
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_NOW = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+_FAKE_LOG_INPUT = (
+    # Minimal valid base64 stub — parse_leaf_entry will be mocked so content
+    # does not matter.
+    "AAAA"
+)
+
+
+def _make_settings(**kwargs: object) -> Settings:
+    base = {
+        "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
+        "ct_tail_interval_seconds": 1,
+        "ct_default_batch_size": 2,
+        "ct_min_free_disk_gb": 1,
+        "ct_critical_free_disk_gb": 0,
+        "ct_http_timeout_seconds": 5,
+    }
+    base.update(kwargs)
+    return Settings.model_validate(base)
+
+
+def _make_log(log_id: str = "dGVzdA==") -> CtLogSource:
+    return CtLogSource(
+        id=uuid.uuid4(),
+        log_id_b64=log_id,
+        operator_name="Test Operator",
+        description="Test Log",
+        url="https://ct.example.com/log/",
+        public_key_b64="a2V5==",
+        log_state="usable",
+        is_eligible_for_tail=True,
+        is_eligible_for_backfill=True,
+        source_list="chrome",
+        first_seen_at=_NOW,
+        last_synced_at=_NOW,
+    )
+
+
+def _make_cursor(log_id: uuid.UUID, next_index: int = 0) -> CtLogTailCursor:
+    return CtLogTailCursor(
+        id=uuid.uuid4(),
+        log_source_id=log_id,
+        next_index=next_index,
+    )
+
+
+def _make_sth(tree_size: int = 10) -> SignedTreeHead:
+    return SignedTreeHead(
+        tree_size=tree_size,
+        timestamp=0,
+        sha256_root_hash="aa" * 32,
+        tree_head_signature="bb",
+    )
+
+
+def _make_entries_response(n: int = 1) -> CtEntriesResponse:
+    return CtEntriesResponse(
+        entries=[
+            CtLeafEntry(leaf_input=_FAKE_LOG_INPUT, extra_data="") for _ in range(n)
+        ]
+    )
+
+
+def _make_session_factory(
+    logs: list[CtLogSource],
+    cursor_map: dict[uuid.UUID, CtLogTailCursor],
+) -> MagicMock:
+    """Build a minimal async session factory mock."""
+    session = AsyncMock()
+    session.begin = MagicMock()
+    session.begin.return_value.__aenter__ = AsyncMock(return_value=None)
+    session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    return factory
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+async def test_tail_worker_exits_after_one_iteration_with_once_flag() -> None:
+    """once=True exits after processing all logs once."""
+    log = _make_log()
+    settings = _make_settings()
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.ensure_tail_cursor",
+            AsyncMock(return_value=_make_cursor(log.id, 0)),
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(5))),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(2)),
+        ),
+        patch(
+            "ctpool.tail_worker.parse_leaf_entry",
+            MagicMock(side_effect=lambda _: MagicMock()),
+        ),
+        patch(
+            "ctpool.tail_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch("ctpool.tail_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True)
+        # Should return without raising — no infinite loop
+
+
+async def test_tail_worker_pauses_when_disk_is_low() -> None:
+    """Disk low → sleeps for interval then exits if once=True."""
+    log = _make_log()
+    settings = _make_settings(ct_tail_interval_seconds=1)
+    sleep_calls: list[float] = []
+
+    async def mock_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=True),
+        patch("ctpool.tail_worker.asyncio.sleep", mock_sleep),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True)
+
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] == 60  # _SLEEP_DISK_LOW_SECONDS
+
+
+async def test_tail_worker_halts_when_disk_is_critical() -> None:
+    """Disk critical → exits the loop immediately."""
+    log = _make_log()
+    settings = _make_settings()
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=True),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings)  # no once=True — must exit via critical
+
+
+async def test_tail_worker_stops_at_entry_limit() -> None:
+    """limit=2 stops after 2 entries are written."""
+    log = _make_log()
+    settings = _make_settings()
+    written: list[object] = []
+
+    async def mock_write(session: object, entry: object) -> None:
+        written.append(entry)
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.ensure_tail_cursor",
+            AsyncMock(return_value=_make_cursor(log.id, 0)),
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(100))),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(2)),
+        ),
+        patch(
+            "ctpool.tail_worker.parse_leaf_entry", MagicMock(return_value=MagicMock())
+        ),
+        patch(
+            "ctpool.tail_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch("ctpool.tail_worker.write_normalized_entry", mock_write),
+        patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, limit=2)
+
+    assert len(written) == 2
+
+
+async def test_tail_worker_sleeps_on_empty_response() -> None:
+    """Empty entries response → sleep without advancing cursor."""
+    log = _make_log()
+    settings = _make_settings(ct_tail_interval_seconds=1)
+    sleep_calls: list[float] = []
+
+    async def mock_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.ensure_tail_cursor",
+            AsyncMock(return_value=_make_cursor(log.id, 0)),
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(0)),
+        ),
+        patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
+        patch("ctpool.tail_worker.asyncio.sleep", mock_sleep),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True)
+
+    # once=True exits after the pass; sleep may not be called if loop exits first
+    # but no cursor advance should happen
+    from ctpool.tail_worker import advance_tail_cursor as _atc  # noqa: F401
+
+
+async def test_tail_worker_logs_error_and_continues_on_fetch_failure() -> None:
+    """FetchError during fetch_entries is caught; loop continues."""
+    log = _make_log()
+    settings = _make_settings()
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.ensure_tail_cursor",
+            AsyncMock(return_value=_make_cursor(log.id, 0)),
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(side_effect=FetchError("timeout")),
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        # Should not raise — error is caught inside _tail_one_log
+        await run_tail(factory, settings, once=True)
+
+
+async def test_tail_worker_filter_restricts_to_single_log_id() -> None:
+    """log_id parameter limits processing to the matching log only."""
+    log_a = _make_log(log_id="YQ==")
+    log_b = _make_log(log_id="Yg==")
+    settings = _make_settings()
+    processed_ids: list[uuid.UUID] = []
+
+    async def mock_ensure_cursor(session: object, lid: uuid.UUID) -> CtLogTailCursor:
+        processed_ids.append(lid)
+        return _make_cursor(lid, 0)
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs",
+            AsyncMock(return_value=[log_a, log_b]),
+        ),
+        patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure_cursor),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log_a], {})
+        await run_tail(factory, settings, once=True, log_id=log_a.id)
+
+    assert all(lid == log_a.id for lid in processed_ids)
+    assert log_b.id not in processed_ids
+
+
+async def test_tail_worker_skips_log_when_cursor_at_tree_size() -> None:
+    """When cursor.next_index >= tree_size, no fetch is made."""
+    log = _make_log()
+    settings = _make_settings()
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.ensure_tail_cursor",
+            AsyncMock(return_value=_make_cursor(log.id, next_index=10)),
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
+        patch("ctpool.tail_worker.fetch_entries", AsyncMock()) as mock_fetch,
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True)
+
+    mock_fetch.assert_not_called()

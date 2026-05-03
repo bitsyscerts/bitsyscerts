@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ctpool"
+version = "0.1.0"
+description = "Certificate Transparency ingestion, indexing, and intelligence CLI"
+requires-python = ">=3.12"
+dependencies = [
+    "typer==0.25.1",
+    "httpx==0.28.1",
+    "cryptography==47.0.0",
+    "psycopg[binary]==3.3.4",
+    "sqlalchemy[asyncio]==2.0.49",
+    "alembic==1.18.4",
+    "pydantic==2.13.3",
+    "pydantic-settings==2.14.0",
+    "rich==15.0.0",
+    "tldextract==5.3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.3",
+    "pytest-asyncio==1.3.0",
+    "pytest-httpx==0.36.2",
+    "pytest-mock==3.15.1",
+    "pytest-cov==7.1.0",
+    "ruff==0.15.12",
+    "mypy==1.20.2",
+]
+
+[project.scripts]
+ctpool = "ctpool.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ctpool"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "S", "B", "A", "C4", "PTH"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=ctpool --cov-report=term-missing --cov-fail-under=75"
+
+[tool.coverage.run]
+source = ["ctpool"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true

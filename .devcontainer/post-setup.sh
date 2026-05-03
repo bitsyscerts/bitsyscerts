@@ -19,7 +19,46 @@ warn() { echo -e "${YELLOW}[!] $1${RESET}"; }
 
 # ---------------------------------------------------------------------------
 # 1. Start PostgreSQL
+#
+# The devcontainer.json bind-mounts ./data/postgres → /var/lib/postgresql so
+# that the database persists across container rebuilds on the developer's
+# workstation.  This creates two first-run concerns:
+#
+#   a) Ownership: the bind-mounted directory is created by Docker as root or
+#      by the host user (UID 1000).  PostgreSQL requires the data directory to
+#      be owned by the postgres system user (UID 999).  Fix unconditionally.
+#
+#   b) Cluster init: if the directory is empty (first ever run), we must
+#      initialise the cluster before starting the service.
 # ---------------------------------------------------------------------------
+step "Fixing PostgreSQL data directory ownership"
+sudo chown -R postgres:postgres /var/lib/postgresql
+
+# Detect the installed PostgreSQL major version (e.g. 15, 16) dynamically so
+# this script does not break when the Dockerfile upgrades PostgreSQL.
+PG_VERSION=$(pg_lsclusters --no-header 2>/dev/null | awk '{print $1; exit}' || true)
+if [[ -z "$PG_VERSION" ]]; then
+    # Fallback: ask the pg_config binary
+    PG_VERSION=$(pg_config --version 2>/dev/null | grep -oP '\d+' | head -1 || echo "15")
+fi
+CLUSTER_DATA="/var/lib/postgresql/${PG_VERSION}/main"
+
+if [[ ! -f "${CLUSTER_DATA}/PG_VERSION" ]]; then
+    step "Initialising PostgreSQL cluster data directory (first run)"
+    # The cluster config in /etc/postgresql/ was created by apt install postgresql
+    # during the Docker image build.  The bind mount on /var/lib/postgresql
+    # shadows that pre-built data directory with an empty host directory, so the
+    # data must be re-initialised.  We use initdb directly rather than
+    # pg_ctlcluster because the `initdb` action is not supported on all Debian
+    # versions of pg_ctlcluster.
+    sudo mkdir -p "${CLUSTER_DATA}"
+    sudo chown postgres:postgres "${CLUSTER_DATA}"
+    sudo -u postgres /usr/lib/postgresql/${PG_VERSION}/bin/initdb -D "${CLUSTER_DATA}"
+    ok "Cluster ${PG_VERSION}/main data initialised"
+else
+    ok "PostgreSQL cluster already initialised — reusing existing data"
+fi
+
 step "Starting PostgreSQL service"
 sudo service postgresql start
 

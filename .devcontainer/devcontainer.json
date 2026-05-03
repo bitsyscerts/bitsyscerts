@@ -27,7 +27,8 @@
   "postCreateCommand": "bash .devcontainer/setup-git.sh && bash .devcontainer/post-setup.sh",
 
   // Runs on every container start (including reopens after closing VS Code).
-  "postStartCommand": "",
+  // Ensures PostgreSQL is running after the container is reopened without a full rebuild.
+  "postStartCommand": "sudo service postgresql start || true",
 
   "customizations": {
     "vscode": {
@@ -96,7 +97,10 @@
 
   "mounts": [
     "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
-    "source=${localEnv:HOME}/.gitconfig,target=/tmp/host-gitconfig,type=bind,consistency=cached,readonly"
+    "source=${localEnv:HOME}/.gitconfig,target=/tmp/host-gitconfig,type=bind,consistency=cached,readonly",
+    // Persist PostgreSQL data on the host workstation under ./data/postgres (git-ignored).
+    // Files will be owned by UID 999 (the postgres system user) on the host — this is expected.
+    "source=${localWorkspaceFolder}/data/postgres,target=/var/lib/postgresql,type=bind,consistency=delegated"
   ],
 
   "remoteUser": "vscode",

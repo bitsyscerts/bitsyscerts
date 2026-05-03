@@ -445,4 +445,31 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
-# End of https://www.toptal.com/developers/gitignore/api/windows,macos,linux,git,node,react,python,venv,dotenv,visualstudiocode
+# End of https://www.toptal.com/developers/gitignore/api/windows,macos,linux,git
+
+# =============================================================================
+# BitsysCerts — project-specific ignores
+# =============================================================================
+
+# PostgreSQL data directory (bind-mounted into the Dev Container at
+# /var/lib/postgresql; files are owned by UID 999 on the host — normal).
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+.coverage
+htmlcov/
+
+# Environment files with real secrets
+.env
+
+# Editor / OS
+.DS_Store
+,node,react,python,venv,dotenv,visualstudiocode
