@@ -335,3 +335,45 @@ async def test_tail_worker_skips_log_when_cursor_at_tree_size() -> None:
         await run_tail(factory, settings, once=True)
 
     mock_fetch.assert_not_called()
+
+
+async def test_tail_worker_calls_on_batch_callback_with_correct_args() -> None:
+    """on_batch is called with (log_url, batch_count, total_count)
+    when entries are written.
+    """
+    log = _make_log()
+    settings = _make_settings()
+    calls: list[tuple[str, int, int]] = []
+
+    def capture(url: str, count: int, total: int) -> None:
+        calls.append((url, count, total))
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.ensure_tail_cursor",
+            AsyncMock(return_value=_make_cursor(log.id, 0)),
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(2))),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(2)),
+        ),
+        patch("ctpool.tail_worker.parse_leaf_entry", MagicMock()),
+        patch("ctpool.tail_worker.build_normalized_entry", MagicMock()),
+        patch("ctpool.tail_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True, on_batch=capture)
+
+    assert len(calls) == 1
+    url, count, total = calls[0]
+    assert url == log.url
+    assert count == 2
+    assert total == 2

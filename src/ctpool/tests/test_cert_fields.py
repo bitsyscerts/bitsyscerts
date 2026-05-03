@@ -1,4 +1,10 @@
-"""Tests for ctpool.cert_fields — X.509 certificate field extractor."""
+"""Tests for ctpool.cert_fields — X.509 certificate field extractor.
+
+Consolidation rationale: all cert_fields tests are co-located in one file
+because they share build helpers (_make_ec_cert, _make_rsa_cert,
+_make_tbs_certificate_der) that are only used here.  The file will be split
+if a new extractor module is introduced or the test count exceeds ~300 lines.
+"""
 
 from __future__ import annotations
 
@@ -53,6 +59,29 @@ def _make_ec_cert(
         )
     cert = builder.sign(key, hashes.SHA256())
     return cert.public_bytes(serialization.Encoding.DER)
+
+
+def _make_tbs_certificate_der() -> bytes:
+    """Return a raw TBSCertificate DER, as found inside a CT precert_entry."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "precert.example.com")])
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName("precert.example.com")]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    # tbs_certificate_bytes is the raw TBSCertificate DER — no outer wrapper.
+    return cert.tbs_certificate_bytes
 
 
 def _make_rsa_cert(cn: str = "rsa.example.com") -> bytes:
@@ -195,3 +224,28 @@ def test_extract_ed25519_cert_falls_back_to_unknown_key_algorithm() -> None:
     result = extract_certificate_fields(der, is_precertificate=False)
     assert result.public_key_algorithm_name == "unknown"
     assert result.public_key_bits_or_curve is None
+
+
+# ---------------------------------------------------------------------------
+# Precertificate TBSCertificate wrapping
+# ---------------------------------------------------------------------------
+
+
+def test_precert_raw_tbs_parsed_via_wrapping() -> None:
+    """extract_certificate_fields parses a raw TBSCertificate
+    when is_precertificate=True.
+    """
+    tbs_der = _make_tbs_certificate_der()
+    result = extract_certificate_fields(tbs_der, is_precertificate=True)
+    assert result.is_precertificate is True
+    assert result.subject_common_name == "precert.example.com"
+    assert "precert.example.com" in result.san_dns_names
+
+
+def test_raw_tbs_without_precert_flag_raises_parse_error() -> None:
+    """extract_certificate_fields raises ParseError for a raw TBS
+    when is_precertificate=False.
+    """
+    tbs_der = _make_tbs_certificate_der()
+    with pytest.raises(ParseError, match="Cannot parse DER"):
+        extract_certificate_fields(tbs_der, is_precertificate=False)

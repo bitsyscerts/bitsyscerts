@@ -10,6 +10,7 @@ import asyncio
 import logging
 import socket
 import uuid as _uuid
+from collections.abc import Callable
 from os import getpid
 
 import httpx
@@ -127,6 +128,7 @@ async def run_tail(
     once: bool = False,
     limit: int | None = None,
     log_id: _uuid.UUID | None = None,
+    on_batch: Callable[[str, int, int], None] | None = None,
 ) -> None:
     """Main tail worker loop.
 
@@ -140,6 +142,9 @@ async def run_tail(
         once:            Exit after one full pass over all eligible logs.
         limit:           Stop after processing this many total entries.
         log_id:          Restrict to a single CT log UUID.
+        on_batch:        Optional callback(log_url, batch_count, total_count)
+                         called after each non-empty batch. Use for progress
+                         reporting; omit for silent/daemon operation.
     """
     _logger.info("tail worker starting worker_id=%s", _worker_id())
     total_processed = 0
@@ -184,6 +189,8 @@ async def run_tail(
                     limit_remaining=limit_remaining,
                 )
                 total_processed += processed
+                if processed > 0 and on_batch is not None:
+                    on_batch(log.url, processed, total_processed)
                 if not is_empty:
                     any_empty = False
 

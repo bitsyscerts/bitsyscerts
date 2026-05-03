@@ -46,7 +46,9 @@
         "mtxr.sqltools",
         "mtxr.sqltools-driver-pg",
         // Source control
-        "github.vscode-pull-request-github"
+        "github.vscode-pull-request-github",
+        // makefile
+        "ms-vscode.makefile-tools"
       ],
       "settings": {
         "python.defaultInterpreterPath": "/usr/local/bin/python",
@@ -98,6 +100,7 @@
   "mounts": [
     "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
     "source=${localEnv:HOME}/.gitconfig,target=/tmp/host-gitconfig,type=bind,consistency=cached,readonly",
+    "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached",
     // Persist PostgreSQL data on the host workstation under ./data/postgres (git-ignored).
     // Files will be owned by UID 999 (the postgres system user) on the host — this is expected.
     "source=${localWorkspaceFolder}/data/postgres,target=/var/lib/postgresql,type=bind,consistency=delegated"

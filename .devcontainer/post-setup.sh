@@ -17,6 +17,9 @@ step() { echo -e "${CYAN}[*] $1${RESET}"; }
 ok()   { echo -e "${GREEN}[+] $1${RESET}"; }
 warn() { echo -e "${YELLOW}[!] $1${RESET}"; }
 
+# Ensure pip-installed scripts (e.g. ctpool) are on PATH for this script
+export PATH="$HOME/.local/bin:$PATH"
+
 # ---------------------------------------------------------------------------
 # 1. Start PostgreSQL
 #
@@ -53,6 +56,12 @@ if [[ ! -f "${CLUSTER_DATA}/PG_VERSION" ]]; then
     # versions of pg_ctlcluster.
     sudo mkdir -p "${CLUSTER_DATA}"
     sudo chown postgres:postgres "${CLUSTER_DATA}"
+    # Clear any stale files from a previous failed or partial init.
+    # find -mindepth 1 deletes contents without removing the directory itself.
+    if [[ -n "$(sudo ls -A "${CLUSTER_DATA}" 2>/dev/null)" ]]; then
+        warn "Cluster directory is non-empty but uninitialised — clearing stale data"
+        sudo find "${CLUSTER_DATA}" -mindepth 1 -delete
+    fi
     sudo -u postgres /usr/lib/postgresql/${PG_VERSION}/bin/initdb -D "${CLUSTER_DATA}"
     ok "Cluster ${PG_VERSION}/main data initialised"
 else
@@ -135,10 +144,13 @@ fi
 
 # ---------------------------------------------------------------------------
 # 6. Install semgrep for security scanning (optional)
+#    Use pipx so semgrep's dependencies are fully isolated and cannot
+#    downgrade packages (e.g. click) that ctpool depends on.
 # ---------------------------------------------------------------------------
 if ! command -v semgrep >/dev/null 2>&1; then
     step "Installing semgrep (security scanner)"
-    pip install -q --user semgrep && ok "semgrep installed" || warn "semgrep install failed — skipping"
+    pip install -q --user pipx 2>/dev/null || true
+    pipx install semgrep && ok "semgrep installed" || warn "semgrep install failed — skipping"
 fi
 
 # ---------------------------------------------------------------------------
@@ -149,6 +161,7 @@ if ! grep -Fq '# === BitsysCerts Development Aliases ===' "$HOME/.bashrc"; then
     cat >> "$HOME/.bashrc" << 'EOF'
 
 # === BitsysCerts Development Aliases ===
+export PATH="$HOME/.local/bin:$PATH"
 alias ll="ls -la"
 alias fd="fdfind"
 alias sg="semgrep"

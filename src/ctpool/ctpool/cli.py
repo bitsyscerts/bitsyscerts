@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Callable
 from typing import Annotated
 
 import typer
@@ -22,6 +23,20 @@ from rich.console import Console
 
 from ctpool.config import get_settings
 from ctpool.db import create_engine, create_session_factory
+
+
+def _make_progress_callback(
+    console: Console,
+) -> Callable[[str, int, int], None]:
+    """Return a callback that prints one Rich line per batch to *console*."""
+
+    def _on_batch(log_url: str, count: int, total: int) -> None:
+        console.print(
+            f"  [cyan]{log_url}[/cyan] +{count:,} entries ([dim]{total:,} total[/dim])"
+        )
+
+    return _on_batch
+
 
 app = typer.Typer(name="ctpool", no_args_is_help=True, add_completion=False)
 _console = Console()
@@ -139,6 +154,9 @@ def tail(
     log_id: Annotated[
         uuid.UUID | None, typer.Option("--log-id", help="Restrict to one log UUID.")
     ] = None,
+    progress: Annotated[
+        bool, typer.Option("--progress", help="Print a line per batch.")
+    ] = False,
 ) -> None:
     """Tail new CT log entries continuously."""
     from ctpool.tail_worker import run_tail
@@ -146,7 +164,17 @@ def tail(
     settings = get_settings()
     engine = create_engine(settings)
     factory = create_session_factory(engine)
-    asyncio.run(run_tail(factory, settings, once=once, limit=limit, log_id=log_id))
+    on_batch = _make_progress_callback(_console) if progress else None
+    asyncio.run(
+        run_tail(
+            factory,
+            settings,
+            once=once,
+            limit=limit,
+            log_id=log_id,
+            on_batch=on_batch,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +196,9 @@ def backfill(
     log_id: Annotated[
         uuid.UUID | None, typer.Option("--log-id", help="Restrict to one log UUID.")
     ] = None,
+    progress: Annotated[
+        bool, typer.Option("--progress", help="Print a line per batch.")
+    ] = False,
 ) -> None:
     """Claim and process historical CT log backfill ranges."""
     from ctpool.backfill_worker import run_backfill
@@ -175,9 +206,16 @@ def backfill(
     settings = get_settings()
     engine = create_engine(settings)
     factory = create_session_factory(engine)
+    on_batch = _make_progress_callback(_console) if progress else None
     asyncio.run(
         run_backfill(
-            factory, settings, once=once, limit=limit, days=days, log_id=log_id
+            factory,
+            settings,
+            once=once,
+            limit=limit,
+            days=days,
+            log_id=log_id,
+            on_batch=on_batch,
         )
     )
 

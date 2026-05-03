@@ -19,6 +19,12 @@ from ctpool.pipeline_schemas import ParsedCertificate
 # OID for the CT poison extension (RFC 6962 §3.1) — marks precertificates
 _CT_POISON_OID = "1.3.6.1.4.1.11129.2.4.3"
 
+# Minimal DER shells used when wrapping a raw TBSCertificate for precerts.
+# sha256WithRSAEncryption AlgorithmIdentifier (tag+OID+NULL params, 15 bytes).
+_SHA256_RSA_ALGO_ID: bytes = bytes.fromhex("300d06092a864886f70d01010b0500")
+# Empty BIT STRING: tag 0x03, length 1, zero unused-bits padding byte.
+_EMPTY_SIG: bytes = bytes([0x03, 0x01, 0x00])
+
 
 def extract_certificate_fields(
     der: bytes, is_precertificate: bool
@@ -36,10 +42,7 @@ def extract_certificate_fields(
     Raises:
         ParseError: If the DER cannot be decoded or required fields are absent.
     """
-    try:
-        cert = x509.load_der_x509_certificate(der)
-    except Exception as exc:
-        raise ParseError(f"Cannot parse DER certificate: {exc}") from exc
+    cert = _load_certificate(der, is_precertificate)
 
     fingerprint = hashlib.sha256(der).hexdigest()
     spki = _compute_spki_sha256(cert)
@@ -77,6 +80,45 @@ def extract_certificate_fields(
 # ------------------------------------------------------------------
 # Private helpers
 # ------------------------------------------------------------------
+
+
+def _encode_der_length(n: int) -> bytes:
+    """Encode *n* as a DER length field (single or multi-byte form)."""
+    if n < 0x80:
+        return bytes([n])
+    if n < 0x100:
+        return bytes([0x81, n])
+    if n < 0x10000:
+        return bytes([0x82, n >> 8, n & 0xFF])
+    return bytes([0x83, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
+
+
+def _wrap_tbs_as_certificate(tbs_der: bytes) -> bytes:
+    """Wrap a raw TBSCertificate in a minimal Certificate DER shell.
+
+    CT precert entries contain a bare TBSCertificate (RFC 6962 §3.2).
+    The ``cryptography`` library requires a full Certificate SEQUENCE,
+    so we add a dummy outer wrapper with a placeholder signature to allow
+    field extraction.  The signature algorithm stored will be
+    sha256WithRSAEncryption regardless of the actual algorithm — only
+    TBSCertificate fields (SANs, validity, issuer, subject, public key)
+    should be treated as authoritative for precerts.
+    """
+    inner = tbs_der + _SHA256_RSA_ALGO_ID + _EMPTY_SIG
+    return b"\x30" + _encode_der_length(len(inner)) + inner
+
+
+def _load_certificate(der: bytes, is_precertificate: bool) -> x509.Certificate:
+    """Load *der* as a Certificate, falling back to TBS wrapping for precerts."""
+    try:
+        return x509.load_der_x509_certificate(der)
+    except Exception as exc:
+        if not is_precertificate:
+            raise ParseError(f"Cannot parse DER certificate: {exc}") from exc
+    try:
+        return x509.load_der_x509_certificate(_wrap_tbs_as_certificate(der))
+    except Exception as exc:
+        raise ParseError(f"Cannot parse DER certificate: {exc}") from exc
 
 
 def _compute_spki_sha256(cert: x509.Certificate) -> str:

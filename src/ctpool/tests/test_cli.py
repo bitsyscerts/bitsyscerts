@@ -215,3 +215,38 @@ def test_unknown_subcommand_exits_nonzero() -> None:
     """An unrecognised subcommand exits with a non-zero code."""
     result = _runner.invoke(app, ["nonexistent"])
     assert result.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
+# --progress flag
+# ---------------------------------------------------------------------------
+
+
+def test_tail_progress_flag_is_accepted() -> None:
+    """tail --progress exits zero (flag is wired up and accepted)."""
+    with (
+        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli.create_engine", return_value=MagicMock()),
+        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
+        patch("ctpool.cli.asyncio.run") as mock_run,
+    ):
+        mock_run.return_value = None
+        result = _runner.invoke(app, ["tail", "--once", "--progress"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+def test_backfill_progress_flag_is_accepted() -> None:
+    """backfill --progress exits zero (flag is wired up and accepted)."""
+    with (
+        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli.create_engine", return_value=MagicMock()),
+        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
+        patch("ctpool.cli.asyncio.run") as mock_run,
+    ):
+        mock_run.return_value = None
+        result = _runner.invoke(app, ["backfill", "--once", "--progress"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()

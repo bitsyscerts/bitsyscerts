@@ -10,6 +10,7 @@ import asyncio
 import logging
 import socket
 import uuid as _uuid
+from collections.abc import Callable
 from os import getpid
 
 import httpx
@@ -140,8 +141,12 @@ async def _run_one_range(
     client: httpx.AsyncClient,
     settings: Settings,
     limit_remaining: int | None,
-) -> int:
-    """Process *claimed* range; mark complete or failed. Returns entries written."""
+) -> tuple[int, str]:
+    """Process *claimed* range; mark complete or failed.
+
+    Returns:
+        ``(entries_written, log_url)`` — count and the URL of the parent log.
+    """
     metrics = LogMetricsAccumulator()
     try:
         async with session_factory() as session:
@@ -161,13 +166,13 @@ async def _run_one_range(
             async with session.begin():
                 await mark_range_complete(session, claimed.id)
 
-        return count
+        return count, log_url
     except FetchError as exc:
         _logger.error("fetch error backfill range=%s: %s", claimed.id, exc)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_failed(session, claimed.id, str(exc))
-        return 0
+        return 0, ""
 
 
 async def run_backfill(
@@ -178,6 +183,7 @@ async def run_backfill(
     limit: int | None = None,
     days: int | None = None,
     log_id: _uuid.UUID | None = None,
+    on_batch: Callable[[str, int, int], None] | None = None,
 ) -> None:
     """Main backfill worker loop.
 
@@ -192,6 +198,9 @@ async def run_backfill(
         limit:           Stop after this many total entries.
         days:            Override ct_backfill_days for range seeding.
         log_id:          Restrict to a single CT log UUID.
+        on_batch:        Optional callback(log_url, batch_count, total_count)
+                         called after each non-empty range. Use for progress
+                         reporting; omit for silent/daemon operation.
     """
     worker = _worker_id()
     _logger.info("backfill worker starting worker_id=%s", worker)
@@ -239,9 +248,12 @@ async def run_backfill(
                 await asyncio.sleep(_SLEEP_NO_RANGES_SECONDS)
                 continue
 
-            total_processed += await _run_one_range(
+            batch_count, log_url = await _run_one_range(
                 claimed, session_factory, client, settings, limit_remaining
             )
+            total_processed += batch_count
+            if batch_count > 0 and on_batch is not None:
+                on_batch(log_url, batch_count, total_processed)
 
             if once:
                 return
