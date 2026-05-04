@@ -78,6 +78,23 @@ class TestStatsRepository:
         rows = await repo.per_log_stats()
         assert len(rows) >= 1
 
+    async def test_db_storage_returns_total_size(
+        self, session_with_data: AsyncSession
+    ) -> None:
+        repo = StatsRepository(session_with_data)
+        result = await repo.db_storage()
+        assert result["total"]["total_size_bytes"] > 0
+        assert isinstance(result["total"]["total_size_pretty"], str)
+
+    async def test_db_storage_tables_include_known_tables(
+        self, session_with_data: AsyncSession
+    ) -> None:
+        repo = StatsRepository(session_with_data)
+        result = await repo.db_storage()
+        table_names = {row["table_name"] for row in result["tables"]}
+        assert "hostnames" in table_names
+        assert "certificates" in table_names
+
     async def test_backfill_complete_pct_all_complete(
         self, session_with_data: AsyncSession
     ) -> None:

@@ -9,8 +9,16 @@ from unittest.mock import AsyncMock
 from httpx import ASGITransport, AsyncClient
 
 from certsapi.app import create_app
-from certsapi.stats.models import LogStatsItem, StatsResponse
+from certsapi.stats.models import LogStatsItem, StorageStats, StatsResponse
 from certsapi.stats.router import _get_stats_service
+
+
+def _make_storage() -> StorageStats:
+    return StorageStats(
+        total_size_bytes=1024 * 1024,
+        total_size_pretty="1 MB",
+        tables=[],
+    )
 
 
 def _make_stats(**kwargs: object) -> StatsResponse:
@@ -18,6 +26,7 @@ def _make_stats(**kwargs: object) -> StatsResponse:
         "total_hostnames": 0,
         "total_certificates": 0,
         "total_logs": 0,
+        "storage": _make_storage(),
         "logs": [],
     }
     defaults.update(kwargs)
@@ -44,7 +53,13 @@ class TestStatsRouter:
         async with _client_with_service(svc) as client:
             resp = await client.get("/v1/stats")
         body = resp.json()
-        for key in ("total_hostnames", "total_certificates", "total_logs", "logs"):
+        for key in (
+            "total_hostnames",
+            "total_certificates",
+            "total_logs",
+            "storage",
+            "logs",
+        ):
             assert key in body
 
     async def test_logs_array_present_when_empty(self) -> None:

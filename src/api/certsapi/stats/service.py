@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from sqlalchemy.engine import RowMapping
 
-from certsapi.stats.models import LogStatsItem, StatsResponse
+from certsapi.stats.models import (
+    LogStatsItem,
+    StorageStats,
+    StatsResponse,
+    TableStorageItem,
+)
 from certsapi.stats.repository import StatsRepository
 
 
@@ -27,29 +30,35 @@ def _row_to_log_item(row: RowMapping) -> LogStatsItem:
 
 
 class StatsService:
-    """Runs all stats queries concurrently and assembles the StatsResponse."""
+    """Runs all stats queries sequentially and assembles the StatsResponse."""
 
     def __init__(self, repository: StatsRepository) -> None:
         self._repository = repository
 
     async def get_stats(self) -> StatsResponse:
         """Return aggregated ingestion statistics."""
-        (total_h, total_c, total_l), per_log = await asyncio.gather(
-            self._counts(),
-            self._repository.per_log_stats(),
+        total_h = await self._repository.total_hostnames()
+        total_c = await self._repository.total_certificates()
+        total_l = await self._repository.total_logs()
+        per_log = await self._repository.per_log_stats()
+        storage_data = await self._repository.db_storage()
+        storage = StorageStats(
+            total_size_bytes=storage_data["total"]["total_size_bytes"],
+            total_size_pretty=storage_data["total"]["total_size_pretty"],
+            tables=[
+                TableStorageItem(
+                    table_name=row["table_name"],
+                    row_estimate=int(row["row_estimate"]),
+                    size_bytes=int(row["size_bytes"]),
+                    size_pretty=row["size_pretty"],
+                )
+                for row in storage_data["tables"]
+            ],
         )
         return StatsResponse(
             total_hostnames=total_h,
             total_certificates=total_c,
             total_logs=total_l,
+            storage=storage,
             logs=[_row_to_log_item(row) for row in per_log],
         )
-
-    async def _counts(self) -> tuple[int, int, int]:
-        """Fetch all three scalar counts concurrently."""
-        results = await asyncio.gather(
-            self._repository.total_hostnames(),
-            self._repository.total_certificates(),
-            self._repository.total_logs(),
-        )
-        return results[0], results[1], results[2]

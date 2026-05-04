@@ -7,7 +7,7 @@ from ctpool.models.hostname import Hostname
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +36,28 @@ class StatsRepository:
             select(func.count()).select_from(CtLogSource)
         )
         return int(result.scalar_one())
+
+    async def db_storage(self) -> RowMapping:
+        """Return total DB size and per-table sizes using pg_* system functions."""
+        stmt = text("""
+            SELECT
+                current_database() AS db_name,
+                pg_database_size(current_database()) AS total_size_bytes,
+                pg_size_pretty(pg_database_size(current_database())) AS total_size_pretty
+        """)
+        total_row = (await self._session.execute(stmt)).mappings().one()
+
+        table_stmt = text("""
+            SELECT
+                relname AS table_name,
+                n_live_tup AS row_estimate,
+                pg_total_relation_size(relid) AS size_bytes,
+                pg_size_pretty(pg_total_relation_size(relid)) AS size_pretty
+            FROM pg_stat_user_tables
+            ORDER BY size_bytes DESC
+        """)
+        table_rows = list((await self._session.execute(table_stmt)).mappings().all())
+        return {"total": total_row, "tables": table_rows}  # type: ignore[return-value]
 
     async def per_log_stats(self) -> list[RowMapping]:
         """Return per-log aggregated stats: tail position, backfill pct, sync time."""
