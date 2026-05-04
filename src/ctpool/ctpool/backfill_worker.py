@@ -169,6 +169,8 @@ async def _run_one_range(
                     metrics,
                     limit_remaining,
                 )
+                if count > 0:
+                    await metrics.persist_snapshot(session, claimed.log_source_id)
 
         async with session_factory() as session:
             async with session.begin():

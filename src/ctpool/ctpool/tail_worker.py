@@ -139,7 +139,7 @@ async def _tail_one_log(
     async with session_factory() as session:
         async with session.begin():
             try:
-                return await _process_log_batch(
+                count, is_empty = await _process_log_batch(
                     log,
                     session,
                     client,
@@ -148,6 +148,9 @@ async def _tail_one_log(
                     limit_remaining,
                     init_from_end=init_from_end,
                 )
+                if count > 0:
+                    await metrics.persist_snapshot(session, log.id)
+                return count, is_empty
             except FetchError as exc:
                 _logger.error("fetch error tail log=%s: %s", log.id, exc)
                 return 0, False

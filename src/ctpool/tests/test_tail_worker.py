@@ -591,3 +591,95 @@ async def test_reset_tail_cursors_skips_log_on_fetch_error() -> None:
         await reset_tail_cursors(factory, settings)  # must not raise
 
     assert reset_calls == []  # no reset because STH failed
+
+
+# ---------------------------------------------------------------------------
+# persist_snapshot wiring
+# ---------------------------------------------------------------------------
+
+
+async def test_tail_worker_calls_persist_snapshot_on_success() -> None:
+    """persist_snapshot is called exactly once when entries are processed."""
+    log = _make_log()
+    settings = _make_settings()
+    snapshot_calls: list[object] = []
+
+    async def mock_ensure(
+        session: object, lid: object, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
+        return _make_cursor(log.id, next_index=0), False
+
+    async def mock_persist(
+        self: object, session: object, log_source_id: object
+    ) -> None:
+        snapshot_calls.append(log_source_id)
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.tail_worker.fetch_sth",
+            AsyncMock(return_value=_make_sth(10)),
+        ),
+        patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(1)),
+        ),
+        patch(
+            "ctpool.tail_worker.parse_leaf_entry",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "ctpool.tail_worker.build_normalized_entry",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.tail_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
+        patch(
+            "ctpool.tail_worker.LogMetricsAccumulator.persist_snapshot",
+            mock_persist,
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        await run_tail(_make_session_factory([log], {}), settings, once=True)
+
+    assert len(snapshot_calls) == 1
+    assert snapshot_calls[0] == log.id
+
+
+async def test_tail_worker_does_not_call_persist_snapshot_on_fetch_error() -> None:
+    """persist_snapshot is NOT called when a FetchError is raised."""
+    log = _make_log()
+    settings = _make_settings()
+    snapshot_calls: list[object] = []
+
+    async def mock_persist(
+        self: object, session: object, log_source_id: object
+    ) -> None:
+        snapshot_calls.append(log_source_id)
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.tail_worker.fetch_sth",
+            AsyncMock(side_effect=FetchError("network error")),
+        ),
+        patch(
+            "ctpool.tail_worker.LogMetricsAccumulator.persist_snapshot",
+            mock_persist,
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        await run_tail(_make_session_factory([log], {}), settings, once=True)
+
+    assert snapshot_calls == []

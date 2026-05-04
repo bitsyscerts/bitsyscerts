@@ -389,3 +389,122 @@ async def test_backfill_worker_seeds_ranges_from_sth() -> None:
 
     assert len(range_calls) == 1
     assert range_calls[0] == (0, 99)  # (start_index, tree_size - 1)
+
+
+# ---------------------------------------------------------------------------
+# persist_snapshot wiring
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
+    """persist_snapshot is called once after a successful non-empty batch."""
+    log = _make_log()
+    claimed = _make_range(log.id)
+    settings = _make_settings()
+    snapshot_calls: list[object] = []
+
+    async def mock_persist(
+        self: object, session: object, log_source_id: object
+    ) -> None:
+        snapshot_calls.append(log_source_id)
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_sth",
+            AsyncMock(return_value=_make_sth(0)),
+        ),
+        patch(
+            "ctpool.backfill_worker.create_backfill_ranges",
+            AsyncMock(return_value=0),
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(return_value=claimed),
+        ),
+        patch(
+            "ctpool.backfill_worker._resolve_log_url",
+            AsyncMock(return_value="https://ct.example.com/log/"),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(1)),
+        ),
+        patch(
+            "ctpool.backfill_worker.parse_leaf_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch("ctpool.backfill_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
+        patch(
+            "ctpool.backfill_worker.LogMetricsAccumulator.persist_snapshot",
+            mock_persist,
+        ),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        await run_backfill(_make_session_factory(), settings, once=True)
+
+    assert len(snapshot_calls) == 1
+    assert snapshot_calls[0] == log.id
+
+
+async def test_backfill_worker_does_not_call_persist_snapshot_on_fetch_error() -> None:
+    """persist_snapshot is NOT called when a FetchError aborts the batch."""
+    log = _make_log()
+    claimed = _make_range(log.id)
+    settings = _make_settings()
+    snapshot_calls: list[object] = []
+
+    async def mock_persist(
+        self: object, session: object, log_source_id: object
+    ) -> None:
+        snapshot_calls.append(log_source_id)
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_sth",
+            AsyncMock(return_value=_make_sth(0)),
+        ),
+        patch(
+            "ctpool.backfill_worker.create_backfill_ranges",
+            AsyncMock(return_value=0),
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(return_value=claimed),
+        ),
+        patch(
+            "ctpool.backfill_worker._resolve_log_url",
+            AsyncMock(return_value="https://ct.example.com/log/"),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(side_effect=FetchError("timeout")),
+        ),
+        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
+        patch(
+            "ctpool.backfill_worker.LogMetricsAccumulator.persist_snapshot",
+            mock_persist,
+        ),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        await run_backfill(_make_session_factory(), settings, once=True)
+
+    assert snapshot_calls == []
