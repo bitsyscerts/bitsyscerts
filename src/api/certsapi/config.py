@@ -1,0 +1,35 @@
+"""Application configuration loaded from environment variables via pydantic-settings."""
+
+from __future__ import annotations
+
+import functools
+
+from pydantic import PostgresDsn
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Validated application settings sourced from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+
+    # Database — required; no default
+    database_url: PostgresDsn
+
+    # Application metadata
+    app_name: str = "BitsyCerts API"
+    app_version: str = "0.1.0"
+
+    # Pagination defaults
+    default_page_limit: int = 50
+    max_page_limit: int = 200
+
+
+@functools.lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """Return the cached singleton Settings instance."""
+    return Settings()  # type: ignore[call-arg]
