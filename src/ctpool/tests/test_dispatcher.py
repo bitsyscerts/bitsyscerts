@@ -19,6 +19,7 @@ from ctpool.dispatcher import (
     ensure_tail_cursor,
     get_eligible_backfill_logs,
     get_eligible_tail_logs,
+    has_backfill_ranges,
     mark_range_complete,
     mark_range_failed,
     reset_tail_cursor,
@@ -185,6 +186,38 @@ async def test_advance_tail_cursor_updates_next_index(
 
 
 # ---------------------------------------------------------------------------
+# has_backfill_ranges
+# ---------------------------------------------------------------------------
+
+
+async def test_has_backfill_ranges_false_when_empty(
+    db_session: AsyncSession,
+) -> None:
+    """has_backfill_ranges returns False when no ranges exist for the log."""
+    source = _make_source(url="https://hasranges0.example.com/", log_id="aGFzMA==")
+    db_session.add(source)
+    await db_session.flush()
+
+    assert await has_backfill_ranges(db_session, source.id) is False
+
+
+async def test_has_backfill_ranges_true_after_seeding(
+    db_session: AsyncSession,
+) -> None:
+    """has_backfill_ranges returns True once ranges have been created."""
+    source = _make_source(url="https://hasranges1.example.com/", log_id="aGFzMQ==")
+    db_session.add(source)
+    await db_session.flush()
+
+    await create_backfill_ranges(
+        db_session, source, start_index=0, end_index=9999, chunk_size=10_000
+    )
+    await db_session.flush()
+
+    assert await has_backfill_ranges(db_session, source.id) is True
+
+
+# ---------------------------------------------------------------------------
 # create_backfill_ranges
 # ---------------------------------------------------------------------------
 
@@ -250,6 +283,33 @@ async def test_create_backfill_ranges_idempotent(
     )
     rows = result.scalars().all()
     assert len(rows) == 1
+
+
+async def test_create_backfill_ranges_bulk_insert_exceeds_batch_size(
+    db_session: AsyncSession,
+) -> None:
+    """Ranges exceeding _insert_batch are split across multiple bulk INSERTs."""
+    source = _make_source(url="https://ranges4.example.com/", log_id="cmFuZ2U0")
+    db_session.add(source)
+    await db_session.flush()
+
+    # 600 chunks of 1 entry each; default _insert_batch=500 → 2 INSERT statements
+    count = await create_backfill_ranges(
+        db_session,
+        source,
+        start_index=0,
+        end_index=599,
+        chunk_size=1,
+        _insert_batch=500,
+    )
+    await db_session.flush()
+
+    assert count == 600
+    result = await db_session.execute(
+        select(CtLogBackfillRange).where(CtLogBackfillRange.log_source_id == source.id)
+    )
+    rows = result.scalars().all()
+    assert len(rows) == 600
 
 
 # ---------------------------------------------------------------------------

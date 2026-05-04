@@ -26,6 +26,13 @@ class Settings(BaseSettings):
 
     # Ingestion behavior
     ct_backfill_days: int = 180
+    """Days of CT log history to seed on first encounter.
+
+    The backfill worker estimates a pivot index from the log's STH timestamp
+    and ``first_seen_at``, then seeds only ranges covering the most recent
+    ``ct_backfill_days`` days.  Set to ``0`` to seed the full log history
+    from index 0 (may be billions of entries for large logs).
+    """
     ct_tail_interval_seconds: int = 300
     ct_default_batch_size: int = 256
     ct_max_batch_size: int = 1024

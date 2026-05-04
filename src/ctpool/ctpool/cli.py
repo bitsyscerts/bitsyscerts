@@ -39,8 +39,18 @@ def _make_progress_callback(
     return _on_batch
 
 
+def _make_status_callback(console: Console) -> Callable[[str], None]:
+    """Return a callback that prints one-line status messages to *console*."""
+
+    def _on_status(msg: str) -> None:
+        console.print(f"[dim]{msg}[/dim]")
+
+    return _on_status
+
+
 app = typer.Typer(name="ctpool", no_args_is_help=True, add_completion=False)
 _console = Console()
+_PROGRESS_BATCH_SIZE: int = 64
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +186,20 @@ def tail(
     settings = get_settings()
     engine = create_engine(settings)
     factory = create_session_factory(engine)
-    on_batch = _make_progress_callback(_console) if progress else None
+    if progress:
+        _console.print(
+            "[yellow]⚠️  NOTICE: Processing is slowed significantly with "
+            "--progress. Use only for interactive use.[/yellow]"
+        )
+        on_batch: Callable[[str, int, int], None] | None = _make_progress_callback(
+            _console
+        )
+        on_status: Callable[[str], None] | None = _make_status_callback(_console)
+        batch_size = _PROGRESS_BATCH_SIZE
+    else:
+        on_batch = None
+        on_status = None
+        batch_size = settings.ct_default_batch_size
     asyncio.run(
         run_tail(
             factory,
@@ -185,7 +208,9 @@ def tail(
             limit=limit,
             log_id=log_id,
             on_batch=on_batch,
+            on_status=on_status,
             init_from_end=init_from_end,
+            batch_size=batch_size,
         )
     )
 
@@ -253,7 +278,20 @@ def backfill(
     settings = get_settings()
     engine = create_engine(settings)
     factory = create_session_factory(engine)
-    on_batch = _make_progress_callback(_console) if progress else None
+    if progress:
+        _console.print(
+            "[yellow]⚠️  NOTICE: Processing is slowed significantly with "
+            "--progress. Use only for interactive use.[/yellow]"
+        )
+        on_batch: Callable[[str, int, int], None] | None = _make_progress_callback(
+            _console
+        )
+        on_status: Callable[[str], None] | None = _make_status_callback(_console)
+        batch_size = _PROGRESS_BATCH_SIZE
+    else:
+        on_batch = None
+        on_status = None
+        batch_size = settings.ct_default_batch_size
     asyncio.run(
         run_backfill(
             factory,
@@ -263,6 +301,8 @@ def backfill(
             days=days,
             log_id=log_id,
             on_batch=on_batch,
+            on_status=on_status,
+            batch_size=batch_size,
         )
     )
 

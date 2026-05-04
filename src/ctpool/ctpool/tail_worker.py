@@ -48,7 +48,7 @@ async def _process_log_batch(
     log: CtLogSource,
     session: AsyncSession,
     client: httpx.AsyncClient,
-    settings: Settings,
+    batch_size: int,
     metrics: LogMetricsAccumulator,
     limit_remaining: int | None,
     *,
@@ -83,7 +83,7 @@ async def _process_log_batch(
     if start >= tree_size:
         return 0, True
 
-    batch = settings.ct_default_batch_size
+    batch = batch_size
     if limit_remaining is not None:
         batch = min(batch, limit_remaining)
     end = min(start + batch - 1, tree_size - 1)
@@ -124,10 +124,10 @@ async def _process_log_batch(
 async def _tail_one_log(
     log: CtLogSource,
     session_factory: async_sessionmaker[AsyncSession],
-    settings: Settings,
     client: httpx.AsyncClient,
     metrics: LogMetricsAccumulator,
     *,
+    batch_size: int,
     limit_remaining: int | None,
     init_from_end: int = 0,
 ) -> tuple[int, bool]:
@@ -143,7 +143,7 @@ async def _tail_one_log(
                     log,
                     session,
                     client,
-                    settings,
+                    batch_size,
                     metrics,
                     limit_remaining,
                     init_from_end=init_from_end,
@@ -164,7 +164,9 @@ async def run_tail(
     limit: int | None = None,
     log_id: _uuid.UUID | None = None,
     on_batch: Callable[[str, int, int], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
     init_from_end: int = 0,
+    batch_size: int | None = None,
 ) -> None:
     """Main tail worker loop.
 
@@ -188,6 +190,7 @@ async def run_tail(
     """
     _logger.info("tail worker starting worker_id=%s", _worker_id())
     total_processed = 0
+    _batch = batch_size or settings.ct_default_batch_size
     client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
 
     async with client:
@@ -200,6 +203,8 @@ async def run_tail(
                 _logger.warning(
                     "disk low — pausing tail for %ds", _SLEEP_DISK_LOW_SECONDS
                 )
+                if on_status is not None:
+                    on_status(f"Disk low — pausing {_SLEEP_DISK_LOW_SECONDS} s")
                 await asyncio.sleep(_SLEEP_DISK_LOW_SECONDS)
                 if once:
                     break
@@ -223,9 +228,9 @@ async def run_tail(
                 processed, is_empty = await _tail_one_log(
                     log,
                     session_factory,
-                    settings,
                     client,
                     metrics,
+                    batch_size=_batch,
                     limit_remaining=limit_remaining,
                     init_from_end=init_from_end,
                 )
@@ -243,6 +248,11 @@ async def run_tail(
                     "tail: no new entries — sleeping %ds",
                     settings.ct_tail_interval_seconds,
                 )
+                if on_status is not None:
+                    on_status(
+                        f"All logs at tree edge — sleeping"
+                        f" {settings.ct_tail_interval_seconds} s"
+                    )
                 await asyncio.sleep(settings.ct_tail_interval_seconds)
 
 

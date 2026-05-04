@@ -1,7 +1,11 @@
 """CT log backfill worker: claim and process historical index ranges.
 
 Exports:
-    run_backfill — Backfill loop entry point; one session per range claim.
+    estimate_log_age_days — Pure helper: estimate a log's age in days from STH
+                            timestamp and first_seen_at.
+    compute_pivot_index   — Pure helper: calculate the start index for a
+                            days-bounded backfill window.
+    run_backfill          — Backfill loop entry point; one session per range claim.
 """
 
 from __future__ import annotations
@@ -11,6 +15,7 @@ import logging
 import socket
 import uuid as _uuid
 from collections.abc import Callable
+from datetime import datetime
 from os import getpid
 
 import httpx
@@ -22,6 +27,7 @@ from ctpool.dispatcher import (
     claim_backfill_range,
     create_backfill_ranges,
     get_eligible_backfill_logs,
+    has_backfill_ranges,
     mark_range_complete,
     mark_range_failed,
 )
@@ -38,6 +44,59 @@ _logger = logging.getLogger(__name__)
 
 _SLEEP_NO_RANGES_SECONDS = 30
 _SLEEP_DISK_LOW_SECONDS = 60
+
+# Milliseconds-per-day constant used by the pivot estimation.
+_MS_PER_DAY: float = 86_400_000.0
+
+
+def estimate_log_age_days(
+    sth_timestamp_ms: int,
+    first_seen_at: datetime | None,
+) -> float:
+    """Return a CT log's approximate age in days.
+
+    Uses the STH millisecond timestamp as *now* and ``first_seen_at`` as the
+    log creation proxy.  Returns ``0.0`` if the result would be negative or
+    ``first_seen_at`` is ``None``.
+
+    Args:
+        sth_timestamp_ms: Milliseconds since epoch from the log's signed tree head.
+        first_seen_at:    When this log was first observed (from ``CtLogSource``).
+                          ``None`` is treated as unknown → returns ``0.0``.
+
+    Returns:
+        Age in days as a float, minimum ``0.0``.
+    """
+    if first_seen_at is None:
+        return 0.0
+    first_seen_ms = first_seen_at.timestamp() * 1000.0
+    age_ms = sth_timestamp_ms - first_seen_ms
+    return max(0.0, age_ms / _MS_PER_DAY)
+
+
+def compute_pivot_index(
+    tree_size: int,
+    days: int,
+    log_age_days: float,
+) -> int:
+    """Return the start index for a days-bounded backfill window.
+
+    Estimates the index corresponding to ``days`` ago by assuming uniform
+    certificate issuance over the log's lifetime.  Returns ``0`` when the
+    window covers the full history or the age estimate is not usable.
+
+    Args:
+        tree_size:    Current tree size (number of entries in the log).
+        days:         How far back to backfill (0 means full history).
+        log_age_days: Estimated total age of the log in days.
+
+    Returns:
+        First index to include; always in ``[0, tree_size)``.
+    """
+    if tree_size == 0 or days <= 0 or log_age_days <= 0 or days >= log_age_days:
+        return 0
+    fraction_to_skip = 1.0 - (days / log_age_days)
+    return max(0, min(int(tree_size * fraction_to_skip), tree_size - 1))
 
 
 def _worker_id() -> str:
@@ -64,30 +123,52 @@ async def _seed_ranges_for_log(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     client: httpx.AsyncClient,
-    days: int | None,
+    days: int,
+    on_status: Callable[[str], None] | None = None,
 ) -> None:
     """Probe a log's STH and create backfill ranges if none exist yet.
 
-    ``days`` is accepted for future use (estimating start offset); currently
-    the full tree is seeded starting from index 0.
+    When *days* is greater than zero, only ranges covering the most recent
+    *days* days of history are seeded (pivot estimated from tree uniformity).
+    Pass ``days=0`` to seed the full history from index 0.
     """
     try:
+        async with session_factory() as session:
+            if await has_backfill_ranges(session, log.id):
+                return
+
+        if on_status is not None:
+            on_status(f"Seeding {log.description} — probing tree size…")
         sth = await fetch_sth(log.url, client)
     except FetchError as exc:
         _logger.error("backfill seed: STH probe failed log=%s: %s", log.id, exc)
+        if on_status is not None:
+            on_status(f"  Seed failed for {log.description}: {exc}")
         return
 
     tree_size: int = sth.tree_size
     if tree_size == 0:
         return
 
+    log_age_days = estimate_log_age_days(sth.timestamp, log.first_seen_at)
+    pivot = compute_pivot_index(tree_size, days, log_age_days)
+
     async with session_factory() as session:
         async with session.begin():
-            count = await create_backfill_ranges(session, log, 0, tree_size - 1)
+            count = await create_backfill_ranges(session, log, pivot, tree_size - 1)
 
     if count:
+        if on_status is not None:
+            on_status(
+                f"  └ seeded {count:,} ranges"
+                f" ({tree_size - pivot:,} entries) for {log.description}"
+            )
         _logger.info(
-            "backfill seeded %d ranges log=%s tree_size=%d", count, log.id, tree_size
+            "backfill seeded %d ranges log=%s tree_size=%d pivot=%d",
+            count,
+            log.id,
+            tree_size,
+            pivot,
         )
 
 
@@ -96,7 +177,7 @@ async def _process_range_batch(
     log_url: str,
     session: AsyncSession,
     client: httpx.AsyncClient,
-    settings: Settings,
+    batch_size: int,
     metrics: LogMetricsAccumulator,
     limit_remaining: int | None,
 ) -> int:
@@ -105,7 +186,7 @@ async def _process_range_batch(
     Returns the number of entries successfully written.
     """
     start = claimed.next_index
-    batch = settings.ct_default_batch_size
+    batch = batch_size
     if limit_remaining is not None:
         batch = min(batch, limit_remaining)
     end = min(start + batch - 1, claimed.end_index)
@@ -147,7 +228,7 @@ async def _run_one_range(
     claimed: CtLogBackfillRange,
     session_factory: async_sessionmaker[AsyncSession],
     client: httpx.AsyncClient,
-    settings: Settings,
+    batch_size: int,
     limit_remaining: int | None,
 ) -> tuple[int, str]:
     """Process *claimed* range; mark complete or failed.
@@ -165,7 +246,7 @@ async def _run_one_range(
                     log_url,
                     session,
                     client,
-                    settings,
+                    batch_size,
                     metrics,
                     limit_remaining,
                 )
@@ -194,6 +275,8 @@ async def run_backfill(
     days: int | None = None,
     log_id: _uuid.UUID | None = None,
     on_batch: Callable[[str, int, int], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    batch_size: int | None = None,
 ) -> None:
     """Main backfill worker loop.
 
@@ -215,6 +298,8 @@ async def run_backfill(
     worker = _worker_id()
     _logger.info("backfill worker starting worker_id=%s", worker)
     total_processed = 0
+    _batch = batch_size or settings.ct_default_batch_size
+    _days: int = days if days is not None else settings.ct_backfill_days
     client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
 
     async with client:
@@ -223,7 +308,9 @@ async def run_backfill(
         if log_id is not None:
             logs = [lg for lg in logs if lg.id == log_id]
         for log in logs:
-            await _seed_ranges_for_log(log, session_factory, settings, client, days)
+            await _seed_ranges_for_log(
+                log, session_factory, settings, client, _days, on_status
+            )
 
         while True:
             if is_disk_critical(settings.ct_critical_free_disk_gb):
@@ -234,6 +321,8 @@ async def run_backfill(
                 _logger.warning(
                     "disk low — pausing backfill for %ds", _SLEEP_DISK_LOW_SECONDS
                 )
+                if on_status is not None:
+                    on_status(f"Disk low — pausing {_SLEEP_DISK_LOW_SECONDS} s")
                 await asyncio.sleep(_SLEEP_DISK_LOW_SECONDS)
                 if once:
                     break
@@ -253,14 +342,25 @@ async def run_backfill(
                     "backfill: no pending ranges — sleeping %ds",
                     _SLEEP_NO_RANGES_SECONDS,
                 )
+                if on_status is not None:
+                    on_status(
+                        f"No pending ranges — sleeping {_SLEEP_NO_RANGES_SECONDS} s"
+                    )
                 if once:
                     return
                 await asyncio.sleep(_SLEEP_NO_RANGES_SECONDS)
                 continue
 
+            if on_status is not None:
+                on_status(
+                    f"Fetching [{claimed.start_index:,}–{claimed.end_index:,}]"
+                    f" ({claimed.end_index - claimed.start_index + 1:,} entries)…"
+                )
             batch_count, log_url = await _run_one_range(
-                claimed, session_factory, client, settings, limit_remaining
+                claimed, session_factory, client, _batch, limit_remaining
             )
+            if batch_count == 0 and on_status is not None:
+                on_status("  └ fetch error — range marked failed")
             total_processed += batch_count
             if batch_count > 0 and on_batch is not None:
                 on_batch(log_url, batch_count, total_processed)

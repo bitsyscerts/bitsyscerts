@@ -169,6 +169,9 @@ async def test_backfill_worker_marks_range_complete_on_success() -> None:
         patch("ctpool.backfill_worker.mark_range_complete", mock_mark_complete),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+        ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
 
@@ -213,6 +216,9 @@ async def test_backfill_worker_marks_range_failed_on_fetch_error() -> None:
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_failed", mock_mark_failed),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+        ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
 
@@ -241,6 +247,9 @@ async def test_backfill_worker_pauses_when_disk_is_low() -> None:
         ),
         patch("ctpool.backfill_worker.asyncio.sleep", mock_sleep),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+        ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
 
@@ -265,6 +274,9 @@ async def test_backfill_worker_halts_when_disk_is_critical() -> None:
         ),
         patch("ctpool.backfill_worker.claim_backfill_range", AsyncMock()) as mock_claim,
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+        ),
     ):
         await run_backfill(_make_session_factory(), settings)
 
@@ -315,59 +327,57 @@ async def test_backfill_worker_exits_at_entry_limit() -> None:
         patch("ctpool.backfill_worker.write_normalized_entry", mock_write),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+        ),
     ):
         await run_backfill(_make_session_factory(), settings, limit=1)
 
     assert len(written) == 1
 
 
-async def test_backfill_worker_filter_restricts_to_single_log_id() -> None:
-    """log_id restricts seed and claim to the matching log only."""
-    log_a = _make_log(log_id="YQ==")
-    log_b = _make_log(log_id="Yg==")
+# ---------------------------------------------------------------------------
+# on_status callback
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_worker_on_status_fires_when_no_pending_ranges() -> None:
+    """on_status is called when there are no pending ranges to claim."""
+    log = _make_log()
     settings = _make_settings()
-    seeded_ids: list[uuid.UUID] = []
-
-    async def mock_sth(url: str, client: object) -> SignedTreeHead:
-        return _make_sth(0)
-
-    async def mock_seed_ranges(
-        session: object, log: CtLogSource, start: int, end: int
-    ) -> int:
-        seeded_ids.append(log.id)
-        return 0
+    status_messages: list[str] = []
 
     with (
         patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
         patch("ctpool.backfill_worker.is_disk_low", return_value=False),
         patch(
             "ctpool.backfill_worker.get_eligible_backfill_logs",
-            AsyncMock(return_value=[log_a, log_b]),
+            AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", mock_sth),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_seed_ranges),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=True)
+        ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
     ):
         await run_backfill(
-            _make_session_factory(), settings, once=True, log_id=log_a.id
+            _make_session_factory(),
+            settings,
+            once=True,
+            on_status=status_messages.append,
         )
 
-    assert all(lid == log_a.id for lid in seeded_ids)
-    assert log_b.id not in seeded_ids
+    assert any("No pending ranges" in m for m in status_messages)
 
 
-async def test_backfill_worker_seeds_ranges_from_sth() -> None:
-    """On startup, create_backfill_ranges is called with tree_size - 1 as end."""
+async def test_backfill_worker_on_status_fires_before_fetching_range() -> None:
+    """on_status is called with range bounds before processing each range."""
     log = _make_log()
+    claimed = _make_range(log.id, start=0, end=63)
     settings = _make_settings()
-    range_calls: list[tuple[int, int]] = []
-
-    async def mock_create(session: object, lg: object, start: int, end: int) -> int:
-        range_calls.append((start, end))
-        return 1
+    status_messages: list[str] = []
 
     with (
         patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
@@ -377,51 +387,7 @@ async def test_backfill_worker_seeds_ranges_from_sth() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(100))
-        ),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_create),
-        patch(
-            "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
-        ),
-        patch("ctpool.backfill_worker.httpx.AsyncClient"),
-    ):
-        await run_backfill(_make_session_factory(), settings, once=True)
-
-    assert len(range_calls) == 1
-    assert range_calls[0] == (0, 99)  # (start_index, tree_size - 1)
-
-
-# ---------------------------------------------------------------------------
-# persist_snapshot wiring
-# ---------------------------------------------------------------------------
-
-
-async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
-    """persist_snapshot is called once after a successful non-empty batch."""
-    log = _make_log()
-    claimed = _make_range(log.id)
-    settings = _make_settings()
-    snapshot_calls: list[object] = []
-
-    async def mock_persist(
-        self: object, session: object, log_source_id: object
-    ) -> None:
-        snapshot_calls.append(log_source_id)
-
-    with (
-        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
-        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
-        patch(
-            "ctpool.backfill_worker.get_eligible_backfill_logs",
-            AsyncMock(return_value=[log]),
-        ),
-        patch(
-            "ctpool.backfill_worker.fetch_sth",
-            AsyncMock(return_value=_make_sth(0)),
-        ),
-        patch(
-            "ctpool.backfill_worker.create_backfill_ranges",
-            AsyncMock(return_value=0),
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=True)
         ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range",
@@ -446,65 +412,13 @@ async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
         patch("ctpool.backfill_worker.write_normalized_entry", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
-        patch(
-            "ctpool.backfill_worker.LogMetricsAccumulator.persist_snapshot",
-            mock_persist,
-        ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
     ):
-        await run_backfill(_make_session_factory(), settings, once=True)
+        await run_backfill(
+            _make_session_factory(),
+            settings,
+            once=True,
+            on_status=status_messages.append,
+        )
 
-    assert len(snapshot_calls) == 1
-    assert snapshot_calls[0] == log.id
-
-
-async def test_backfill_worker_does_not_call_persist_snapshot_on_fetch_error() -> None:
-    """persist_snapshot is NOT called when a FetchError aborts the batch."""
-    log = _make_log()
-    claimed = _make_range(log.id)
-    settings = _make_settings()
-    snapshot_calls: list[object] = []
-
-    async def mock_persist(
-        self: object, session: object, log_source_id: object
-    ) -> None:
-        snapshot_calls.append(log_source_id)
-
-    with (
-        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
-        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
-        patch(
-            "ctpool.backfill_worker.get_eligible_backfill_logs",
-            AsyncMock(return_value=[log]),
-        ),
-        patch(
-            "ctpool.backfill_worker.fetch_sth",
-            AsyncMock(return_value=_make_sth(0)),
-        ),
-        patch(
-            "ctpool.backfill_worker.create_backfill_ranges",
-            AsyncMock(return_value=0),
-        ),
-        patch(
-            "ctpool.backfill_worker.claim_backfill_range",
-            AsyncMock(return_value=claimed),
-        ),
-        patch(
-            "ctpool.backfill_worker._resolve_log_url",
-            AsyncMock(return_value="https://ct.example.com/log/"),
-        ),
-        patch(
-            "ctpool.backfill_worker.fetch_entries",
-            AsyncMock(side_effect=FetchError("timeout")),
-        ),
-        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
-        patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
-        patch(
-            "ctpool.backfill_worker.LogMetricsAccumulator.persist_snapshot",
-            mock_persist,
-        ),
-        patch("ctpool.backfill_worker.httpx.AsyncClient"),
-    ):
-        await run_backfill(_make_session_factory(), settings, once=True)
-
-    assert snapshot_calls == []
+    assert any("Fetching" in m and "0" in m and "63" in m for m in status_messages)

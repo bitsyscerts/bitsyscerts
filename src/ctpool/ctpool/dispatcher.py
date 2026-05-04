@@ -7,6 +7,7 @@ Exports:
                                  supplies init_index; returns (cursor, was_created)).
     advance_tail_cursor        — Advance the cursor's next_index.
     reset_tail_cursor          — Overwrite next_index and return the old value.
+    has_backfill_ranges        — Return True if any ranges already exist for a log.
     create_backfill_ranges     — Partition an index range into work chunks.
     claim_backfill_range       — Atomically claim one pending range (SKIP LOCKED).
     mark_range_complete        — Mark a range as complete.
@@ -18,7 +19,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -147,54 +148,83 @@ async def advance_tail_cursor(
     )
 
 
+async def has_backfill_ranges(
+    session: AsyncSession,
+    log_source_id: uuid.UUID,
+) -> bool:
+    """Return True if any backfill ranges exist for *log_source_id*.
+
+    Used to skip re-seeding on restarts without making an HTTP call.
+
+    Args:
+        session:       Active async database session.
+        log_source_id: UUID of the CT log.
+
+    Returns:
+        ``True`` when at least one range row exists for this log.
+    """
+    result = await session.execute(
+        select(exists().where(CtLogBackfillRange.log_source_id == log_source_id))
+    )
+    return bool(result.scalar())
+
+
 async def create_backfill_ranges(
     session: AsyncSession,
     log_source: CtLogSource,
     start_index: int,
     end_index: int,
     chunk_size: int = 10_000,
+    _insert_batch: int = 500,
 ) -> int:
     """Partition ``[start_index, end_index]`` into pending backfill work chunks.
 
-    Chunks are of at most *chunk_size* entries.  Each chunk is inserted with
-    ``ON CONFLICT DO NOTHING`` so re-running is idempotent (ranges are keyed on
-    ``(log_source_id, start_index, end_index)`` via the model's unique
-    constraint).
+    Chunks are of at most *chunk_size* entries.  Rows are inserted in bulk
+    batches of ``_insert_batch`` chunks per SQL statement so seeding a large
+    log (100M+ entries) takes seconds rather than minutes.  Each insert uses
+    ``ON CONFLICT DO NOTHING`` so re-running is idempotent.
 
     Args:
-        session:     Active async database session.
-        log_source:  The CT log being partitioned.
-        start_index: First log index (inclusive).
-        end_index:   Last log index (inclusive).
-        chunk_size:  Maximum entries per chunk.
+        session:       Active async database session.
+        log_source:    The CT log being partitioned.
+        start_index:   First log index (inclusive).
+        end_index:     Last log index (inclusive).
+        chunk_size:    Maximum entries per chunk (default 10,000).
+        _insert_batch: Number of chunk rows per bulk INSERT (default 500).
 
     Returns:
         Number of range rows inserted.
     """
-    # We use explicit chunking and INSERT … ON CONFLICT DO NOTHING
-    # so this function is safe to call multiple times.
-    # WARNING: loop size can be large for big backfills;
-    # batching into bulk inserts is left as a future optimisation.
-    created = 0
+    # Build the full list of (start, end) pairs first, then bulk-insert.
+    pairs: list[tuple[int, int]] = []
     current = start_index
     while current <= end_index:
         chunk_end = min(current + chunk_size - 1, end_index)
+        pairs.append((current, chunk_end))
+        current = chunk_end + 1
+
+    created = 0
+    for i in range(0, len(pairs), _insert_batch):
+        batch = pairs[i : i + _insert_batch]
+        values = [
+            {
+                "log_source_id": log_source.id,
+                "start_index": s,
+                "end_index": e,
+                "next_index": s,
+                "status": "pending",
+            }
+            for s, e in batch
+        ]
         stmt = (
             pg_insert(CtLogBackfillRange)
-            .values(
-                log_source_id=log_source.id,
-                start_index=current,
-                end_index=chunk_end,
-                next_index=current,
-                status="pending",
-            )
+            .values(values)
             .on_conflict_do_nothing(
                 index_elements=["log_source_id", "start_index", "end_index"],
             )
         )
         await session.execute(stmt)
-        created += 1
-        current = chunk_end + 1
+        created += len(batch)
     return created
 
 
@@ -217,6 +247,7 @@ async def claim_backfill_range(
     query = (
         select(CtLogBackfillRange)
         .where(CtLogBackfillRange.status == "pending")
+        .order_by(CtLogBackfillRange.start_index.desc())
         .with_for_update(skip_locked=True)
         .limit(1)
     )
