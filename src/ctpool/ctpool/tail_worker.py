@@ -1,7 +1,8 @@
 """CT log tail worker: continuously tail new entries from all eligible logs.
 
 Exports:
-    run_tail — Tail loop entry point; one session per batch.
+    run_tail           — Tail loop entry point; one session per batch.
+    reset_tail_cursors — Reset all tail cursors to the current tree edge.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from ctpool.dispatcher import (
     advance_tail_cursor,
     ensure_tail_cursor,
     get_eligible_tail_logs,
+    reset_tail_cursor,
 )
 from ctpool.exceptions import FetchError, ParseError
 from ctpool.fetcher import fetch_entries, fetch_sth
@@ -49,6 +51,8 @@ async def _process_log_batch(
     settings: Settings,
     metrics: LogMetricsAccumulator,
     limit_remaining: int | None,
+    *,
+    init_from_end: int = 0,
 ) -> tuple[int, bool]:
     """Fetch and write one batch of entries for *log*.
 
@@ -56,11 +60,24 @@ async def _process_log_batch(
         ``(entries_processed, is_empty)`` — count written and whether the
         response had zero entries (caller should sleep before retrying).
     """
-    # This function is ~45 lines — justified by sequential async steps that
+    # This function is ~55 lines — justified by sequential async steps that
     # form an atomic unit of work and cannot be split without inverting control.
-    cursor = await ensure_tail_cursor(session, log.id)
     sth = await fetch_sth(log.url, client)
     tree_size: int = sth.tree_size
+
+    init_index = max(0, tree_size - init_from_end)
+    cursor, was_created = await ensure_tail_cursor(
+        session, log.id, init_index=init_index
+    )
+    if was_created:
+        mode = "recent sample" if init_from_end else "current edge"
+        _logger.info(
+            "Initialized tail cursor for %s at %s: tree_size=%d, tail_next_index=%d",
+            log.description,
+            mode,
+            tree_size,
+            init_index,
+        )
 
     start = cursor.next_index
     if start >= tree_size:
@@ -86,6 +103,14 @@ async def _process_log_batch(
         except ParseError as exc:
             _logger.warning("parse error log=%s index=%d: %s", log.id, start + i, exc)
             metrics.record_parse_error()
+        except Exception as exc:  # pragma: no cover
+            _logger.warning(
+                "unexpected cert error log=%s index=%d: %s",
+                log.id,
+                start + i,
+                exc,
+            )
+            metrics.record_parse_error()
 
     metrics.record_entries_fetched(len(entries))
     metrics.record_entries_parsed(count)
@@ -104,6 +129,7 @@ async def _tail_one_log(
     metrics: LogMetricsAccumulator,
     *,
     limit_remaining: int | None,
+    init_from_end: int = 0,
 ) -> tuple[int, bool]:
     """Run one tail batch for *log* in its own session/transaction.
 
@@ -114,7 +140,13 @@ async def _tail_one_log(
         async with session.begin():
             try:
                 return await _process_log_batch(
-                    log, session, client, settings, metrics, limit_remaining
+                    log,
+                    session,
+                    client,
+                    settings,
+                    metrics,
+                    limit_remaining,
+                    init_from_end=init_from_end,
                 )
             except FetchError as exc:
                 _logger.error("fetch error tail log=%s: %s", log.id, exc)
@@ -129,12 +161,15 @@ async def run_tail(
     limit: int | None = None,
     log_id: _uuid.UUID | None = None,
     on_batch: Callable[[str, int, int], None] | None = None,
+    init_from_end: int = 0,
 ) -> None:
     """Main tail worker loop.
 
     Continuously fetches new entries from eligible CT logs starting at their
-    tail cursor. Pauses when disk is low; stops when ``limit`` entries have
-    been processed or ``once=True``.
+    tail cursor.  On first run (no cursor exists), the cursor is initialized
+    to the current tree edge so only newly appended entries are fetched.
+    Pass ``init_from_end=N`` to initialize the cursor N entries before the
+    edge instead (for development sampling).
 
     Args:
         session_factory: Factory for creating database sessions.
@@ -145,6 +180,8 @@ async def run_tail(
         on_batch:        Optional callback(log_url, batch_count, total_count)
                          called after each non-empty batch. Use for progress
                          reporting; omit for silent/daemon operation.
+        init_from_end:   When creating a new cursor, start this many entries
+                         before the current tree edge (default 0 = edge).
     """
     _logger.info("tail worker starting worker_id=%s", _worker_id())
     total_processed = 0
@@ -187,6 +224,7 @@ async def run_tail(
                     client,
                     metrics,
                     limit_remaining=limit_remaining,
+                    init_from_end=init_from_end,
                 )
                 total_processed += processed
                 if processed > 0 and on_batch is not None:
@@ -203,3 +241,55 @@ async def run_tail(
                     settings.ct_tail_interval_seconds,
                 )
                 await asyncio.sleep(settings.ct_tail_interval_seconds)
+
+
+async def reset_tail_cursors(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    log_id: _uuid.UUID | None = None,
+) -> None:
+    """Reset tail cursors to the current tree edge for all eligible logs.
+
+    Probes each eligible log's STH, then overwrites its tail cursor's
+    ``next_index`` to the live ``tree_size``.  Old and new values are
+    logged at INFO level for auditability.
+
+    # This function is ~35 lines — justified by the per-log HTTP probe +
+    # DB reset that form an indivisible audit unit; splitting would lose
+    # per-log error isolation.
+
+    Args:
+        session_factory: Factory for creating database sessions.
+        settings:        Validated application settings.
+        log_id:          If set, restrict to a single log UUID.
+    """
+    client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    async with client:
+        async with session_factory() as session:
+            logs = await get_eligible_tail_logs(session)
+
+        if log_id is not None:
+            logs = [lg for lg in logs if lg.id == log_id]
+
+        for log in logs:
+            try:
+                sth = await fetch_sth(log.url, client)
+                tree_size = sth.tree_size
+            except FetchError as exc:
+                _logger.error("reset: STH probe failed log=%s: %s", log.id, exc)
+                continue
+
+            try:
+                async with session_factory() as session:
+                    async with session.begin():
+                        old_index = await reset_tail_cursor(session, log.id, tree_size)
+                _logger.info(
+                    "Reset tail cursor for %s: old_tail_next_index=%d, "
+                    "new_tail_next_index=%d",
+                    log.description,
+                    old_index,
+                    tree_size,
+                )
+            except ValueError:
+                _logger.warning("No cursor to reset for log=%s; skipping", log.id)

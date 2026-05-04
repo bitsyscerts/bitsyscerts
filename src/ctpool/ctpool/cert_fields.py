@@ -7,6 +7,7 @@ Exports:
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import UTC, datetime
 
 from cryptography import x509
@@ -15,6 +16,8 @@ from cryptography.x509.oid import ExtensionOID
 
 from ctpool.exceptions import ParseError
 from ctpool.pipeline_schemas import ParsedCertificate
+
+_logger = logging.getLogger(__name__)
 
 # OID for the CT poison extension (RFC 6962 §3.1) — marks precertificates
 _CT_POISON_OID = "1.3.6.1.4.1.11129.2.4.3"
@@ -171,6 +174,9 @@ def _has_ct_poison(cert: x509.Certificate) -> bool:
         return True
     except x509.ExtensionNotFound:
         return False
+    except ValueError:
+        _logger.debug("asn1 error checking CT poison extension; treating as absent")
+        return False
 
 
 def _extract_san_dns_names(cert: x509.Certificate) -> list[str]:
@@ -184,6 +190,9 @@ def _extract_san_dns_names(cert: x509.Certificate) -> list[str]:
             return []
         return [name.lower() for name in san_value.get_values_for_type(x509.DNSName)]
     except x509.ExtensionNotFound:
+        return []
+    except ValueError:
+        _logger.debug("asn1 error reading SAN extension; returning empty list")
         return []
 
 

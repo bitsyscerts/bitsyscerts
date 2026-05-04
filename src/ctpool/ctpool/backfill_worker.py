@@ -128,6 +128,14 @@ async def _process_range_batch(
                 exc,
             )
             metrics.record_parse_error()
+        except Exception as exc:  # pragma: no cover
+            _logger.warning(
+                "unexpected cert error backfill range=%s index=%d: %s",
+                claimed.id,
+                start + i,
+                exc,
+            )
+            metrics.record_parse_error()
 
     metrics.record_entries_fetched(len(response.entries))
     metrics.record_entries_parsed(count)

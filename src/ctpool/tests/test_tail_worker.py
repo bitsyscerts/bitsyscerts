@@ -119,7 +119,7 @@ async def test_tail_worker_exits_after_one_iteration_with_once_flag() -> None:
         ),
         patch(
             "ctpool.tail_worker.ensure_tail_cursor",
-            AsyncMock(return_value=_make_cursor(log.id, 0)),
+            AsyncMock(return_value=(_make_cursor(log.id, 0), False)),
         ),
         patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(5))),
         patch(
@@ -196,7 +196,7 @@ async def test_tail_worker_stops_at_entry_limit() -> None:
         ),
         patch(
             "ctpool.tail_worker.ensure_tail_cursor",
-            AsyncMock(return_value=_make_cursor(log.id, 0)),
+            AsyncMock(return_value=(_make_cursor(log.id, 0), False)),
         ),
         patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(100))),
         patch(
@@ -237,7 +237,7 @@ async def test_tail_worker_sleeps_on_empty_response() -> None:
         ),
         patch(
             "ctpool.tail_worker.ensure_tail_cursor",
-            AsyncMock(return_value=_make_cursor(log.id, 0)),
+            AsyncMock(return_value=(_make_cursor(log.id, 0), False)),
         ),
         patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
         patch(
@@ -269,7 +269,7 @@ async def test_tail_worker_logs_error_and_continues_on_fetch_failure() -> None:
         ),
         patch(
             "ctpool.tail_worker.ensure_tail_cursor",
-            AsyncMock(return_value=_make_cursor(log.id, 0)),
+            AsyncMock(return_value=(_make_cursor(log.id, 0), False)),
         ),
         patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
         patch(
@@ -290,9 +290,11 @@ async def test_tail_worker_filter_restricts_to_single_log_id() -> None:
     settings = _make_settings()
     processed_ids: list[uuid.UUID] = []
 
-    async def mock_ensure_cursor(session: object, lid: uuid.UUID) -> CtLogTailCursor:
+    async def mock_ensure_cursor(
+        session: object, lid: uuid.UUID, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
         processed_ids.append(lid)
-        return _make_cursor(lid, 0)
+        return _make_cursor(lid, 0), False
 
     with (
         patch("ctpool.tail_worker.is_disk_critical", return_value=False),
@@ -325,7 +327,7 @@ async def test_tail_worker_skips_log_when_cursor_at_tree_size() -> None:
         ),
         patch(
             "ctpool.tail_worker.ensure_tail_cursor",
-            AsyncMock(return_value=_make_cursor(log.id, next_index=10)),
+            AsyncMock(return_value=(_make_cursor(log.id, next_index=10), False)),
         ),
         patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
         patch("ctpool.tail_worker.fetch_entries", AsyncMock()) as mock_fetch,
@@ -356,7 +358,7 @@ async def test_tail_worker_calls_on_batch_callback_with_correct_args() -> None:
         ),
         patch(
             "ctpool.tail_worker.ensure_tail_cursor",
-            AsyncMock(return_value=_make_cursor(log.id, 0)),
+            AsyncMock(return_value=(_make_cursor(log.id, 0), False)),
         ),
         patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(2))),
         patch(
@@ -377,3 +379,215 @@ async def test_tail_worker_calls_on_batch_callback_with_correct_args() -> None:
     assert url == log.url
     assert count == 2
     assert total == 2
+
+
+# ---------------------------------------------------------------------------
+# New cursor initialization semantics
+# ---------------------------------------------------------------------------
+
+
+async def test_tail_initializes_cursor_at_tree_edge_when_no_cursor_exists() -> None:
+    """With no existing cursor and init_from_end=0, ensure_tail_cursor is called
+    with init_index equal to the current tree_size (the edge).
+    """
+    log = _make_log()
+    settings = _make_settings()
+    tree_size = 1_000_000
+    captured_init_index: list[int] = []
+
+    async def mock_ensure(
+        session: object, lid: object, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
+        captured_init_index.append(init_index)
+        # Simulate freshly created cursor at edge → no entries to fetch
+        return _make_cursor(log.id, next_index=tree_size), True
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.fetch_sth",
+            AsyncMock(return_value=_make_sth(tree_size)),
+        ),
+        patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True)
+
+    assert captured_init_index == [tree_size]
+
+
+async def test_tail_init_from_end_sets_cursor_to_tree_size_minus_offset() -> None:
+    """With init_from_end=100 and tree_size=500, init_index should be 400."""
+    log = _make_log()
+    settings = _make_settings()
+    captured_init_index: list[int] = []
+
+    async def mock_ensure(
+        session: object, lid: object, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
+        captured_init_index.append(init_index)
+        return _make_cursor(log.id, next_index=init_index), True
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(500))),
+        patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(0)),
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True, init_from_end=100)
+
+    assert captured_init_index == [400]
+
+
+async def test_tail_init_from_end_clamps_at_zero() -> None:
+    """When init_from_end exceeds tree_size, init_index clamps to 0."""
+    log = _make_log()
+    settings = _make_settings()
+    captured_init_index: list[int] = []
+
+    async def mock_ensure(
+        session: object, lid: object, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
+        captured_init_index.append(init_index)
+        return _make_cursor(log.id, next_index=0), True
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
+        patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(0)),
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True, init_from_end=9_999)
+
+    assert captured_init_index == [0]
+
+
+async def test_tail_logs_info_when_cursor_newly_created() -> None:
+    """run_tail logs an INFO message containing 'Initialized' when was_created=True."""
+    import io
+    import logging as _logging
+
+    log = _make_log()
+    settings = _make_settings()
+
+    async def mock_ensure(
+        session: object, lid: object, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
+        return _make_cursor(log.id, next_index=init_index), True  # newly created
+
+    stream = io.StringIO()
+    handler = _logging.StreamHandler(stream)
+    handler.setLevel(_logging.INFO)
+    logger = _logging.getLogger("ctpool.tail_worker")
+    old_level = logger.level
+    logger.setLevel(_logging.INFO)
+    logger.addHandler(handler)
+    try:
+        with (
+            patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+            patch("ctpool.tail_worker.is_disk_low", return_value=False),
+            patch(
+                "ctpool.tail_worker.get_eligible_tail_logs",
+                AsyncMock(return_value=[log]),
+            ),
+            patch(
+                "ctpool.tail_worker.fetch_sth",
+                AsyncMock(return_value=_make_sth(1000)),
+            ),
+            patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure),
+            patch("ctpool.tail_worker.httpx.AsyncClient"),
+        ):
+            factory = _make_session_factory([log], {})
+            await run_tail(factory, settings, once=True)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+
+    assert "Initialized" in stream.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# reset_tail_cursors
+# ---------------------------------------------------------------------------
+
+
+async def test_reset_tail_cursors_calls_reset_for_each_eligible_log() -> None:
+    """reset_tail_cursors fetches STH for each log and resets the cursor."""
+    from ctpool.tail_worker import reset_tail_cursors
+
+    log = _make_log()
+    settings = _make_settings()
+    reset_calls: list[tuple[object, int]] = []
+
+    async def mock_reset(session: object, log_id: object, new_index: int) -> int:
+        reset_calls.append((log_id, new_index))
+        return 448  # old value
+
+    with (
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.fetch_sth",
+            AsyncMock(return_value=_make_sth(999_999)),
+        ),
+        patch("ctpool.tail_worker.reset_tail_cursor", mock_reset),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await reset_tail_cursors(factory, settings)
+
+    assert len(reset_calls) == 1
+    _, new_index = reset_calls[0]
+    assert new_index == 999_999
+
+
+async def test_reset_tail_cursors_skips_log_on_fetch_error() -> None:
+    """reset_tail_cursors skips logs whose STH probe raises FetchError."""
+    from ctpool.tail_worker import reset_tail_cursors
+
+    log = _make_log()
+    settings = _make_settings()
+    reset_calls: list[object] = []
+
+    with (
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.fetch_sth",
+            AsyncMock(side_effect=FetchError("probe failed")),
+        ),
+        patch(
+            "ctpool.tail_worker.reset_tail_cursor",
+            AsyncMock(side_effect=lambda *a, **k: reset_calls.append(a)),
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await reset_tail_cursors(factory, settings)  # must not raise
+
+    assert reset_calls == []  # no reset because STH failed

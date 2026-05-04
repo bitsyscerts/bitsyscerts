@@ -21,9 +21,11 @@ from ctpool.dispatcher import (
     get_eligible_tail_logs,
     mark_range_complete,
     mark_range_failed,
+    reset_tail_cursor,
 )
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
+from ctpool.models.log_tail_cursor import CtLogTailCursor
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -130,28 +132,33 @@ async def test_get_eligible_backfill_logs_returns_eligible(
 async def test_ensure_tail_cursor_creates_when_absent(
     db_session: AsyncSession,
 ) -> None:
-    """ensure_tail_cursor inserts a cursor with next_index=0 when none exists."""
+    """ensure_tail_cursor inserts a cursor with the supplied init_index."""
     source = _make_source(url="https://cursor1.example.com/", log_id="Y3Vy")
     db_session.add(source)
     await db_session.flush()
 
-    cursor = await ensure_tail_cursor(db_session, source.id)
+    cursor, was_created = await ensure_tail_cursor(
+        db_session, source.id, init_index=999
+    )
 
+    assert was_created is True
     assert cursor.log_source_id == source.id
-    assert cursor.next_index == 0
+    assert cursor.next_index == 999
 
 
 async def test_ensure_tail_cursor_returns_existing(
     db_session: AsyncSession,
 ) -> None:
-    """ensure_tail_cursor returns the existing row if already present."""
+    """ensure_tail_cursor returns the existing row with was_created=False."""
     source = _make_source(url="https://cursor2.example.com/", log_id="Y3Vy2")
     db_session.add(source)
     await db_session.flush()
 
-    c1 = await ensure_tail_cursor(db_session, source.id)
-    c2 = await ensure_tail_cursor(db_session, source.id)
+    c1, created1 = await ensure_tail_cursor(db_session, source.id, init_index=0)
+    c2, created2 = await ensure_tail_cursor(db_session, source.id, init_index=0)
     assert c1.id == c2.id
+    assert created1 is True
+    assert created2 is False
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +174,7 @@ async def test_advance_tail_cursor_updates_next_index(
     db_session.add(source)
     await db_session.flush()
 
-    cursor = await ensure_tail_cursor(db_session, source.id)
+    cursor, _ = await ensure_tail_cursor(db_session, source.id, init_index=0)
     assert cursor.next_index == 0
 
     await advance_tail_cursor(db_session, source.id, 500)
@@ -352,3 +359,47 @@ async def test_mark_range_failed_sets_status(
     await db_session.refresh(claimed)
     assert claimed.status == "failed"
     assert "timeout error" in (claimed.claimed_by or "")
+
+
+# ---------------------------------------------------------------------------
+# reset_tail_cursor
+# ---------------------------------------------------------------------------
+
+
+async def test_reset_tail_cursor_returns_old_value(
+    db_session: AsyncSession,
+) -> None:
+    """reset_tail_cursor overwrites next_index and returns the previous value."""
+    source = _make_source(url="https://reset1.example.com/", log_id="cmVzZXQ=")
+    db_session.add(source)
+    await db_session.flush()
+
+    await ensure_tail_cursor(db_session, source.id, init_index=500)
+    await db_session.flush()
+
+    old = await reset_tail_cursor(db_session, source.id, 1_000_000)
+    await db_session.flush()
+
+    assert old == 500
+
+    result = await db_session.execute(
+        select(CtLogTailCursor).where(CtLogTailCursor.log_source_id == source.id)
+    )
+    cursor = result.scalars().first()
+    assert cursor is not None
+    assert cursor.next_index == 1_000_000
+
+
+async def test_reset_tail_cursor_raises_when_no_cursor(
+    db_session: AsyncSession,
+) -> None:
+    """reset_tail_cursor raises ValueError when no cursor row exists."""
+    import pytest
+
+    source = _make_source(url="https://reset2.example.com/", log_id="cmVzZXQy")
+    db_session.add(source)
+    await db_session.flush()
+
+    # No cursor created — reset should fail loudly.
+    with pytest.raises(ValueError, match="No tail cursor found"):
+        await reset_tail_cursor(db_session, source.id, 999)

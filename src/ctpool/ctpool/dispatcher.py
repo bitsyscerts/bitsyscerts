@@ -3,8 +3,10 @@
 Exports:
     get_eligible_tail_logs     — Query logs eligible for tail ingestion.
     get_eligible_backfill_logs — Query logs eligible for backfill.
-    ensure_tail_cursor         — Get-or-create a tail cursor for a log.
+    ensure_tail_cursor         — Get-or-create a tail cursor for a log (caller
+                                 supplies init_index; returns (cursor, was_created)).
     advance_tail_cursor        — Advance the cursor's next_index.
+    reset_tail_cursor          — Overwrite next_index and return the old value.
     create_backfill_ranges     — Partition an index range into work chunks.
     claim_backfill_range       — Atomically claim one pending range (SKIP LOCKED).
     mark_range_complete        — Mark a range as complete.
@@ -58,26 +60,31 @@ async def get_eligible_backfill_logs(session: AsyncSession) -> list[CtLogSource]
 async def ensure_tail_cursor(
     session: AsyncSession,
     log_source_id: uuid.UUID,
-) -> CtLogTailCursor:
+    *,
+    init_index: int,
+) -> tuple[CtLogTailCursor, bool]:
     """Return the tail cursor for *log_source_id*, creating it if absent.
 
     Args:
         session:       Active async database session.
         log_source_id: UUID of the CT log.
+        init_index:    ``next_index`` value to use when inserting a new cursor.
+                       Ignored when a cursor already exists.
 
     Returns:
-        Existing or newly-created :class:`CtLogTailCursor`.
+        ``(cursor, was_created)`` — the cursor and ``True`` when newly inserted,
+        ``False`` when the row already existed.
     """
     stmt = (
         pg_insert(CtLogTailCursor)
-        .values(log_source_id=log_source_id, next_index=0)
+        .values(log_source_id=log_source_id, next_index=init_index)
         .on_conflict_do_nothing(index_elements=["log_source_id"])
         .returning(CtLogTailCursor)
     )
     result = await session.execute(stmt)
     row = result.scalars().first()
     if row is not None:
-        return row
+        return row, True
 
     # Row already existed — fetch it.
     existing = await session.execute(
@@ -85,7 +92,40 @@ async def ensure_tail_cursor(
     )
     cursor = existing.scalars().first()
     assert cursor is not None  # noqa: S101  — guaranteed by FK / prior insert
-    return cursor
+    return cursor, False
+
+
+async def reset_tail_cursor(
+    session: AsyncSession,
+    log_source_id: uuid.UUID,
+    new_index: int,
+) -> int:
+    """Overwrite the tail cursor's ``next_index`` and return the previous value.
+
+    Args:
+        session:       Active async database session.
+        log_source_id: UUID of the CT log.
+        new_index:     Replacement value for ``next_index``.
+
+    Returns:
+        The old ``next_index`` value before the reset.
+
+    Raises:
+        ValueError: If no tail cursor row exists for *log_source_id*.
+    """
+    existing = await session.execute(
+        select(CtLogTailCursor).where(CtLogTailCursor.log_source_id == log_source_id)
+    )
+    cursor = existing.scalars().first()
+    if cursor is None:
+        raise ValueError(f"No tail cursor found for log_source_id={log_source_id}")
+    old_index: int = cursor.next_index
+    await session.execute(
+        update(CtLogTailCursor)
+        .where(CtLogTailCursor.log_source_id == log_source_id)
+        .values(next_index=new_index, updated_at=datetime.now(UTC))
+    )
+    return old_index
 
 
 async def advance_tail_cursor(

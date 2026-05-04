@@ -250,3 +250,52 @@ def test_backfill_progress_flag_is_accepted() -> None:
 
     assert result.exit_code == 0
     mock_run.assert_called_once()
+
+
+def test_tail_init_from_end_flag_is_accepted() -> None:
+    """tail --init-from-end N is accepted and forwarded to run_tail."""
+    with (
+        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli.create_engine", return_value=MagicMock()),
+        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
+        patch("ctpool.cli.asyncio.run") as mock_run,
+    ):
+        mock_run.return_value = None
+        result = _runner.invoke(app, ["tail", "--once", "--init-from-end", "10000"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+    # A successful zero exit confirms --init-from-end was parsed correctly.
+
+
+# ---------------------------------------------------------------------------
+# reset-tail-cursors
+# ---------------------------------------------------------------------------
+
+
+def test_reset_tail_cursors_requires_to_current_flag() -> None:
+    """reset-tail-cursors without --to-current exits non-zero."""
+    with (
+        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli.create_engine", return_value=MagicMock()),
+        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
+    ):
+        result = _runner.invoke(app, ["reset-tail-cursors"])
+
+    assert result.exit_code != 0
+    assert "to-current" in result.output.lower() or "Error" in result.output
+
+
+def test_reset_tail_cursors_with_to_current_calls_worker() -> None:
+    """reset-tail-cursors --to-current invokes reset_tail_cursors and exits zero."""
+    with (
+        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli.create_engine", return_value=MagicMock()),
+        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
+        patch("ctpool.cli.asyncio.run") as mock_run,
+    ):
+        mock_run.return_value = None
+        result = _runner.invoke(app, ["reset-tail-cursors", "--to-current"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()

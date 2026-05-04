@@ -1,13 +1,14 @@
 """Typer CLI for ctpool.
 
 Commands:
-    db-init       — Run Alembic migrations to head.
-    db-status     — Show current schema revision and DB connectivity.
-    sync-logs     — Fetch CT log list, upsert sources, probe each log.
-    tail          — Run the tail worker loop.
-    backfill      — Run the backfill worker loop.
-    stats         — Display per-log ingestion statistics.
-    logs-follow   — Stream application log output to the terminal.
+    db-init              — Run Alembic migrations to head.
+    db-status            — Show current schema revision and DB connectivity.
+    sync-logs            — Fetch CT log list, upsert sources, probe each log.
+    tail                 — Run the tail worker loop.
+    backfill             — Run the backfill worker loop.
+    stats                — Display per-log ingestion statistics.
+    logs-follow          — Stream application log output to the terminal.
+    reset-tail-cursors   — Reset tail cursors to the current tree edge.
 """
 
 from __future__ import annotations
@@ -157,6 +158,17 @@ def tail(
     progress: Annotated[
         bool, typer.Option("--progress", help="Print a line per batch.")
     ] = False,
+    init_from_end: Annotated[
+        int,
+        typer.Option(
+            "--init-from-end",
+            help=(
+                "On first run (no cursor), start this many entries before the "
+                "current tree edge. Default 0 means start at the edge and "
+                "process only new entries. Use e.g. 10000 for a recent sample."
+            ),
+        ),
+    ] = 0,
 ) -> None:
     """Tail new CT log entries continuously."""
     from ctpool.tail_worker import run_tail
@@ -173,8 +185,43 @@ def tail(
             limit=limit,
             log_id=log_id,
             on_batch=on_batch,
+            init_from_end=init_from_end,
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# reset-tail-cursors
+# ---------------------------------------------------------------------------
+
+
+@app.command("reset-tail-cursors")
+def reset_tail_cursors_cmd(
+    to_current: Annotated[
+        bool,
+        typer.Option(
+            "--to-current",
+            help="Required: confirm that cursors should be reset to the current edge.",
+        ),
+    ] = False,
+    log_id: Annotated[
+        uuid.UUID | None,
+        typer.Option("--log-id", help="Restrict to one log UUID."),
+    ] = None,
+) -> None:
+    """Reset tail cursors to the current tree edge (requires --to-current)."""
+    if not to_current:
+        _console.print(
+            "[red]Error:[/red] Pass --to-current to confirm the reset. "
+            "This will move all tail cursors to the live tree edge."
+        )
+        raise typer.Exit(code=1)
+    from ctpool.tail_worker import reset_tail_cursors
+
+    settings = get_settings()
+    engine = create_engine(settings)
+    factory = create_session_factory(engine)
+    asyncio.run(reset_tail_cursors(factory, settings, log_id=log_id))
 
 
 # ---------------------------------------------------------------------------

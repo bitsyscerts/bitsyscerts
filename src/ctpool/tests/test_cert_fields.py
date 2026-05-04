@@ -249,3 +249,42 @@ def test_raw_tbs_without_precert_flag_raises_parse_error() -> None:
     tbs_der = _make_tbs_certificate_der()
     with pytest.raises(ParseError, match="Cannot parse DER"):
         extract_certificate_fields(tbs_der, is_precertificate=False)
+
+
+# ---------------------------------------------------------------------------
+# Malformed extension handling (ValueError from cryptography library)
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_extensions_degrade_gracefully() -> None:
+    """When extension parsing raises ValueError (e.g. unexpected ASN.1 tag in
+    the wild), extract_certificate_fields stores the cert with safe defaults:
+    is_precertificate=False and san_dns_names=[].
+    """
+    from unittest.mock import patch
+
+    der = _make_ec_cert(cn="bad-ext.example.com", sans=["bad-ext.example.com"])
+    with patch(
+        "cryptography.x509.extensions.Extensions.get_extension_for_oid",
+        side_effect=ValueError("unexpected asn1 tag"),
+    ):
+        result = extract_certificate_fields(der, is_precertificate=False)
+    assert result.is_precertificate is False
+    assert result.san_dns_names == []
+
+
+def test_malformed_extensions_precert_flag_still_set_from_entry_type() -> None:
+    """is_precertificate stays True (from entry-type flag) even when extension
+    parsing raises ValueError — the short-circuit means _has_ct_poison is never
+    called when is_precertificate is already True.
+    """
+    from unittest.mock import patch
+
+    der = _make_ec_cert(cn="bad-ext-pre.example.com")
+    with patch(
+        "cryptography.x509.extensions.Extensions.get_extension_for_oid",
+        side_effect=ValueError("unexpected asn1 tag"),
+    ):
+        result = extract_certificate_fields(der, is_precertificate=True)
+    assert result.is_precertificate is True
+    assert result.san_dns_names == []
