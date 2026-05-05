@@ -10,6 +10,8 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
 from ctpool.exceptions import FetchError
@@ -166,7 +168,7 @@ async def test_tail_worker_pauses_when_disk_is_low() -> None:
 
 
 async def test_tail_worker_halts_when_disk_is_critical() -> None:
-    """Disk critical → exits the loop immediately."""
+    """Disk critical → raises SystemExit(1) immediately."""
     log = _make_log()
     settings = _make_settings()
 
@@ -174,9 +176,12 @@ async def test_tail_worker_halts_when_disk_is_critical() -> None:
         patch("ctpool.tail_worker.is_disk_critical", return_value=True),
         patch("ctpool.tail_worker.is_disk_low", return_value=False),
         patch("ctpool.tail_worker.httpx.AsyncClient"),
+        pytest.raises(SystemExit) as exc_info,
     ):
         factory = _make_session_factory([log], {})
         await run_tail(factory, settings)  # no once=True — must exit via critical
+
+    assert exc_info.value.code == 1
 
 
 async def test_tail_worker_stops_at_entry_limit() -> None:

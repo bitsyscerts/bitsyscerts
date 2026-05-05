@@ -10,6 +10,8 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from ctpool.backfill_worker import run_backfill
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
@@ -257,7 +259,7 @@ async def test_backfill_worker_pauses_when_disk_is_low() -> None:
 
 
 async def test_backfill_worker_halts_when_disk_is_critical() -> None:
-    """Disk critical → exits immediately without claiming a range."""
+    """Disk critical → raises SystemExit(1) without claiming a range."""
     log = _make_log()
     settings = _make_settings()
 
@@ -277,9 +279,11 @@ async def test_backfill_worker_halts_when_disk_is_critical() -> None:
         patch(
             "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
         ),
+        pytest.raises(SystemExit) as exc_info,
     ):
         await run_backfill(_make_session_factory(), settings)
 
+    assert exc_info.value.code == 1
     mock_claim.assert_not_called()
 
 
