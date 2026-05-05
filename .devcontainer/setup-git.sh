@@ -98,3 +98,18 @@ else
 fi
 
 echo -e "${GREEN}[+] Git configuration complete${RESET}"
+
+# --- Optional: GitHub CLI (gh) config ---
+# Mount source is ~/.config (read-only) at /tmp/host-config.
+# Link gh config into the container only if the user has it on their host.
+HOST_GH_CONFIG="/tmp/host-config/gh"
+CONTAINER_GH_CONFIG="$HOME/.config/gh"
+
+if [[ -d "$HOST_GH_CONFIG" ]]; then
+    mkdir -p "$HOME/.config"
+    ln -sfn "$HOST_GH_CONFIG" "$CONTAINER_GH_CONFIG"
+    echo -e "${GREEN}[+] GitHub CLI (gh) config linked from host${RESET}"
+else
+    echo -e "${YELLOW}[!] No gh config found on host - GitHub CLI will not be authenticated${RESET}"
+    echo -e "${GRAY}    Run 'gh auth login' on your host then rebuild the container${RESET}"
+fi
