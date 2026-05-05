@@ -313,11 +313,15 @@ async def run_backfill(
             )
 
         while True:
-            if is_disk_critical(settings.ct_critical_free_disk_gb):
+            if is_disk_critical(
+                settings.ct_critical_free_disk_gb, settings.ct_disk_check_path
+            ):
                 _logger.critical("disk critical — halting backfill worker")
-                break
+                # Exit non-zero so Docker applies restart backoff instead of
+                # immediately relaunching and looping on the same condition.
+                raise SystemExit(1)
 
-            if is_disk_low(settings.ct_min_free_disk_gb):
+            if is_disk_low(settings.ct_min_free_disk_gb, settings.ct_disk_check_path):
                 _logger.warning(
                     "disk low — pausing backfill for %ds", _SLEEP_DISK_LOW_SECONDS
                 )

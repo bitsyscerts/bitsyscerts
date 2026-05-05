@@ -80,6 +80,83 @@ The following are explicit non-goals for the default BitsysCerts product:
 
 ---
 
+## Self-hosting: getting started
+
+BitsysCerts is deployed as a set of Docker images pulled from GHCR. You do not need the
+source repository on your server.
+
+### Requirements
+
+- Ubuntu 22.04+ (or any Linux with Docker Engine 25+ and the Compose plugin)
+- `docker compose version` must succeed — install with `apt install docker-compose-plugin`
+- Ports 80 (or your chosen `FRONTEND_PORT`) open to your network
+
+### First-time setup
+
+**1. Download the three runtime files into a directory of your choice:**
+
+```sh
+mkdir bitsyscerts && cd bitsyscerts
+
+BASE=https://raw.githubusercontent.com/bitsyscerts/bitsyscerts/main/src
+curl -sSfO "${BASE}/docker-compose.yml"
+curl -sSfO "${BASE}/.env.example"
+curl -sSfO "${BASE}/server-deploy.sh"
+chmod +x server-deploy.sh
+```
+
+**2. Configure your environment:**
+
+```sh
+cp .env.example .env
+$EDITOR .env          # set POSTGRES_PASSWORD, DATABASE_URL, IMAGE_TAG, etc.
+```
+
+Minimum required values in `.env`:
+
+| Variable | Description |
+|---|---|
+| `POSTGRES_PASSWORD` | Password for the bundled PostgreSQL service |
+| `DATABASE_URL` | Must match `POSTGRES_PASSWORD` — use `postgres` as the host |
+| `IMAGE_TAG` | Tag to pull from GHCR, e.g. `latest` or `26.504.913` |
+
+**3. Deploy:**
+
+```sh
+./server-deploy.sh
+```
+
+This script:
+1. Pulls all images from GHCR
+2. Starts PostgreSQL and waits until it is healthy
+3. Runs `alembic upgrade head` to initialise / migrate the schema
+4. Runs `ctpool sync-logs` to fetch the current CT log list
+5. Brings up the full stack (API, frontend, backfill worker, tail worker)
+
+### Re-deploying / updating
+
+```sh
+# Update IMAGE_TAG in .env if pinning a specific version, then:
+./server-deploy.sh --skip-migrate
+```
+
+Pass `--skip-sync-logs` as well if you only changed application config and the CT log list
+is already current.
+
+### Pinning to a specific version
+
+Set `IMAGE_TAG` in `.env` to a specific version tag from GHCR, e.g.:
+
+```sh
+IMAGE_TAG=26.504.913        # production build from main
+IMAGE_TAG=26.504.913-staging-abc1234   # a specific branch build
+```
+
+`latest` always points to the most recent `main` build. Branch builds produce a
+`latest-<branch>` tag (e.g. `latest-staging`) for convenience.
+
+---
+
 ## Repository layout
 
 ```

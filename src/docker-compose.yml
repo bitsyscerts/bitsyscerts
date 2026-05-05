@@ -60,7 +60,7 @@ services:
   # ── CT log backfill worker ──────────────────────────────────────────────────
   backfill:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
-    restart: unless-stopped
+    restart: on-failure
     command: ["ctpool", "backfill"]
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
@@ -70,7 +70,12 @@ services:
       CT_HTTP_TIMEOUT_SECONDS: "${CT_HTTP_TIMEOUT_SECONDS:-30}"
       CT_MIN_FREE_DISK_GB: "${CT_MIN_FREE_DISK_GB:-50}"
       CT_CRITICAL_FREE_DISK_GB: "${CT_CRITICAL_FREE_DISK_GB:-20}"
+      CT_DISK_CHECK_PATH: "/data/pgcheck"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      # Read-only mount of the postgres data volume so the disk guard measures
+      # the actual storage used by PostgreSQL, not the container overlay layer.
+      - postgres_data:/data/pgcheck:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,7 +85,7 @@ services:
   # ── CT log tail worker ──────────────────────────────────────────────────────
   tail:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
-    restart: unless-stopped
+    restart: on-failure
     command: ["ctpool", "tail"]
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
@@ -90,7 +95,12 @@ services:
       CT_HTTP_TIMEOUT_SECONDS: "${CT_HTTP_TIMEOUT_SECONDS:-30}"
       CT_MIN_FREE_DISK_GB: "${CT_MIN_FREE_DISK_GB:-50}"
       CT_CRITICAL_FREE_DISK_GB: "${CT_CRITICAL_FREE_DISK_GB:-20}"
+      CT_DISK_CHECK_PATH: "/data/pgcheck"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    volumes:
+      # Read-only mount of the postgres data volume so the disk guard measures
+      # the actual storage used by PostgreSQL, not the container overlay layer.
+      - postgres_data:/data/pgcheck:ro
     depends_on:
       postgres:
         condition: service_healthy

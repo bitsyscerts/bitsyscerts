@@ -40,6 +40,14 @@ class Settings(BaseSettings):
     # Disk safety thresholds (GiB)
     ct_min_free_disk_gb: int = 50
     ct_critical_free_disk_gb: int = 20
+    ct_disk_check_path: str = "/data/pgcheck"
+    """Filesystem path used for free-disk checks.
+
+    Must resolve to the volume where PostgreSQL data lives.  In the Docker
+    Compose stack the postgres_data named volume is mounted read-only at this
+    path inside each worker container.  Override when using an external DB or
+    a non-standard mount point.
+    """
 
     # HTTP behavior
     ct_http_timeout_seconds: int = 30

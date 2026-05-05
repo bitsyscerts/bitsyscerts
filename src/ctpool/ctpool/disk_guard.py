@@ -32,20 +32,22 @@ def get_free_disk_gb(path: str = "/") -> float:
     return usage.free / (1024**3)
 
 
-def is_disk_low(min_free_gb: int) -> bool:
+def is_disk_low(min_free_gb: int, path: str = "/") -> bool:
     """Return True when free disk space is below *min_free_gb*.
 
     Args:
         min_free_gb: Low-water threshold in GiB (from Settings.ct_min_free_disk_gb).
+        path: Filesystem path to check (from Settings.ct_disk_check_path).
     """
-    return get_free_disk_gb() < min_free_gb
+    return get_free_disk_gb(path) < min_free_gb
 
 
-def is_disk_critical(critical_free_gb: int) -> bool:
+def is_disk_critical(critical_free_gb: int, path: str = "/") -> bool:
     """Return True when free disk space is below *critical_free_gb*.
 
     Args:
         critical_free_gb: Critical threshold in GiB
             (from Settings.ct_critical_free_disk_gb).
+        path: Filesystem path to check (from Settings.ct_disk_check_path).
     """
-    return get_free_disk_gb() < critical_free_gb
+    return get_free_disk_gb(path) < critical_free_gb
