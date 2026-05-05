@@ -453,7 +453,10 @@ $RECYCLE.BIN/
 
 # PostgreSQL data directory (bind-mounted into the Dev Container at
 # /var/lib/postgresql; files are owned by UID 999 on the host — normal).
-data/
+# Ignore contents but not the directory itself — data/postgres/.gitkeep
+# ensures the directory exists after a fresh clone so Docker bind-mounts work.
+data/postgres/*
+!data/postgres/.gitkeep
 
 # Python
 __pycache__/

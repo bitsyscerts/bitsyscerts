@@ -100,7 +100,9 @@
   "mounts": [
     "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached",
     "source=${localEnv:HOME}/.gitconfig,target=/tmp/host-gitconfig,type=bind,consistency=cached,readonly",
-    "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached",
+    // Mount the parent ~/.config read-only so setup-git.sh can detect and link gh config if present.
+    // ~/.config always exists on any Linux/macOS host so this mount never fails.
+    "source=${localEnv:HOME}/.config,target=/tmp/host-config,type=bind,consistency=cached,readonly",
     // Persist PostgreSQL data on the host workstation under ./data/postgres (git-ignored).
     // Files will be owned by UID 999 (the postgres system user) on the host — this is expected.
     "source=${localWorkspaceFolder}/data/postgres,target=/var/lib/postgresql,type=bind,consistency=delegated"

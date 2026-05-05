@@ -1,0 +1,7 @@
+# Ignore everything in data/ except this file and the postgres placeholder.
+# The data/postgres directory is bind-mounted into the Dev Container at
+# /var/lib/postgresql and contains PostgreSQL cluster files owned by UID 999.
+*
+!.gitignore
+!postgres/
+!postgres/.gitkeep
