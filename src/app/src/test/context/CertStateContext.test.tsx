@@ -37,25 +37,13 @@ describe("CertStateContext", () => {
     expect(result.current.submittedFp).toBe(fp);
   });
 
-  it("throws when used outside of CertStateProvider", async () => {
+  it("throws when used outside of CertStateProvider", () => {
     const consoleSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
-    const suppressWindowError = (e: ErrorEvent) => {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-    };
-    window.addEventListener("error", suppressWindowError, { capture: true });
-
     expect(() => {
       renderHook(() => useCertStateContext());
     }).toThrow("useCertStateContext must be used inside CertStateProvider");
-
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-
-    window.removeEventListener("error", suppressWindowError, { capture: true });
     consoleSpy.mockRestore();
   });
 });

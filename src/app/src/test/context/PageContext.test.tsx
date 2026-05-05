@@ -32,16 +32,10 @@ describe("PageContext", () => {
     }).not.toThrow();
   });
 
-  it("throws when used outside PageProvider", async () => {
+  it("throws when used outside PageProvider", () => {
     const consoleSpy = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
-    const suppressWindowError = (e: ErrorEvent) => {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-    };
-    window.addEventListener("error", suppressWindowError, { capture: true });
-
     expect(() => {
       renderHook(() => usePageContext(), {
         wrapper: ({ children }: { children: ReactNode }) => (
@@ -49,12 +43,6 @@ describe("PageContext", () => {
         ),
       });
     }).toThrow("usePageContext must be used inside PageProvider");
-
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-
-    window.removeEventListener("error", suppressWindowError, { capture: true });
     consoleSpy.mockRestore();
   });
 });
