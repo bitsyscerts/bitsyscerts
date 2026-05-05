@@ -19,8 +19,8 @@ def _build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="Start the HTTP server")
     serve.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Bind host (default: 0.0.0.0)",  # noqa: S104
+        default="0.0.0.0",  # noqa: S104
+        help="Bind host (default: 0.0.0.0)",
     )
     serve.add_argument(
         "--port", type=int, default=8000, help="Bind port (default: 8000)"

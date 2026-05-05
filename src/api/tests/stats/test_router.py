@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 from httpx import ASGITransport, AsyncClient
 
 from certsapi.app import create_app
-from certsapi.stats.models import LogStatsItem, StorageStats, StatsResponse
+from certsapi.stats.models import LogStatsItem, StatsResponse, StorageStats
 from certsapi.stats.router import _get_stats_service
 
 

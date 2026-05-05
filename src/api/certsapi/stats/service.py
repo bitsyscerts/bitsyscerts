@@ -6,8 +6,8 @@ from sqlalchemy.engine import RowMapping
 
 from certsapi.stats.models import (
     LogStatsItem,
-    StorageStats,
     StatsResponse,
+    StorageStats,
     TableStorageItem,
 )
 from certsapi.stats.repository import StatsRepository

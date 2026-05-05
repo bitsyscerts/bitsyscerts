@@ -43,7 +43,9 @@ class StatsRepository:
             SELECT
                 current_database() AS db_name,
                 pg_database_size(current_database()) AS total_size_bytes,
-                pg_size_pretty(pg_database_size(current_database())) AS total_size_pretty
+                pg_size_pretty(
+                    pg_database_size(current_database())
+                ) AS total_size_pretty
         """)
         total_row = (await self._session.execute(stmt)).mappings().one()
 
