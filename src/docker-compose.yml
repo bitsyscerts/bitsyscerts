@@ -34,7 +34,7 @@ services:
 
   # ── API ─────────────────────────────────────────────────────────────────────
   api:
-    image: "ghcr.io/bitsyscerts/bitsyscerts-python:${IMAGE_TAG:-latest}"
+    image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     command: ["certsapi", "serve", "--workers", "2"]
     environment:
@@ -48,7 +48,7 @@ services:
 
   # ── Frontend ────────────────────────────────────────────────────────────────
   frontend:
-    image: "ghcr.io/bitsyscerts/bitsyscerts-frontend:${IMAGE_TAG:-latest}"
+    image: "ghcr.io/bitsyscerts/bitsyscerts-app:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-80}:80"
@@ -59,7 +59,7 @@ services:
 
   # ── CT log backfill worker ──────────────────────────────────────────────────
   backfill:
-    image: "ghcr.io/bitsyscerts/bitsyscerts-python:${IMAGE_TAG:-latest}"
+    image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     command: ["ctpool", "backfill"]
     environment:
@@ -79,7 +79,7 @@ services:
 
   # ── CT log tail worker ──────────────────────────────────────────────────────
   tail:
-    image: "ghcr.io/bitsyscerts/bitsyscerts-python:${IMAGE_TAG:-latest}"
+    image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     command: ["ctpool", "tail"]
     environment:
