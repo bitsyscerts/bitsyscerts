@@ -94,7 +94,9 @@ function StatsContent() {
                   label="Watch"
                   size="xs"
                   checked={watching}
-                  onChange={(e) => setWatching(e.currentTarget.checked)}
+                  onChange={(e) => {
+                    setWatching(e.currentTarget.checked);
+                  }}
                 />
               </Tooltip>
             </Group>

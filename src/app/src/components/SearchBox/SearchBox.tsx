@@ -44,7 +44,9 @@ export function SearchBox({
   return (
     <TextInput
       value={value}
-      onChange={(e) => onChange(e.currentTarget.value)}
+      onChange={(e) => {
+        onChange(e.currentTarget.value);
+      }}
       onKeyDown={handleKeyDown}
       placeholder={placeholder}
       disabled={disabled}

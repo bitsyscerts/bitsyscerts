@@ -14,7 +14,9 @@ export function LimitInput({ value, onChange }: LimitInputProps) {
       label="Limit"
       description="Results per page"
       value={value}
-      onChange={(v) => onChange(Number(v))}
+      onChange={(v) => {
+        onChange(Number(v));
+      }}
       min={1}
       max={200}
       size="sm"

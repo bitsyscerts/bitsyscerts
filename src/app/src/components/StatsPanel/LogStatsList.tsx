@@ -46,7 +46,7 @@ export function LogStatsList({ logs }: LogStatsListProps) {
                 Backfill: {formatPct(log.backfill_complete_pct)}
               </Text>
               <Progress
-                value={log.backfill_complete_pct ?? 0}
+                value={log.backfill_complete_pct}
                 size="xs"
                 radius="xl"
                 color="brand"

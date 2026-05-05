@@ -17,7 +17,9 @@ export function DepthInput({ value, onChange, visible }: DepthInputProps) {
       label="Depth"
       description="Sub-label depth limit"
       value={value ?? ""}
-      onChange={(v) => onChange(v === "" ? null : Number(v))}
+      onChange={(v) => {
+        onChange(v === "" ? null : Number(v));
+      }}
       min={0}
       size="sm"
       placeholder="No limit"

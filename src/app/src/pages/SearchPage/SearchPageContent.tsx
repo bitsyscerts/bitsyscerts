@@ -77,7 +77,9 @@ export function HostsContent() {
               color="brand"
               size="input-md"
               radius="md"
-              onClick={() => setOptionsOpen((o) => !o)}
+              onClick={() => {
+                setOptionsOpen((o) => !o);
+              }}
               aria-label={
                 optionsOpen ? "Hide search filters" : "Show search filters"
               }

@@ -37,7 +37,7 @@ export function PageProvider({ children }: PageProviderProps) {
   const activePage = locationToPage(location.pathname);
 
   function setActivePage(page: ActivePage) {
-    navigate(PAGE_ROUTES[page]);
+    void navigate(PAGE_ROUTES[page]);
   }
 
   return (

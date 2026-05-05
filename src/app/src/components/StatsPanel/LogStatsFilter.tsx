@@ -46,8 +46,8 @@ export function LogStatsFilter({
 
   const countLabel =
     filteredCount < totalCount
-      ? `${filteredCount} / ${totalCount}`
-      : `${totalCount}`;
+      ? `${String(filteredCount)} / ${String(totalCount)}`
+      : String(totalCount);
 
   return (
     <Box>
@@ -56,12 +56,16 @@ export function LogStatsFilter({
           placeholder="Filter logs…"
           leftSection={<IconSearch size={14} />}
           value={query}
-          onChange={(e) => onQueryChange(e.currentTarget.value)}
+          onChange={(e) => {
+            onQueryChange(e.currentTarget.value);
+          }}
           size="xs"
           style={{ flex: 1 }}
         />
         <UnstyledButton
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => {
+            setOpen((o) => !o);
+          }}
           style={{ display: "flex", alignItems: "center", gap: 4 }}
         >
           <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>

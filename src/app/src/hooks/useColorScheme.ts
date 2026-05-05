@@ -14,7 +14,7 @@ export function useColorScheme() {
 
   function cycleScheme() {
     const next = CYCLE[(CYCLE.indexOf(colorScheme) + 1) % CYCLE.length];
-    setColorScheme(next!);
+    setColorScheme(next);
   }
 
   return { colorScheme, cycleScheme };

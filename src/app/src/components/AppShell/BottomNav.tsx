@@ -40,7 +40,9 @@ export function BottomNav() {
           return (
             <UnstyledButton
               key={value}
-              onClick={() => setActivePage(value)}
+              onClick={() => {
+                setActivePage(value);
+              }}
               style={{ flex: 1 }}
               aria-label={label}
               aria-current={active ? "page" : undefined}

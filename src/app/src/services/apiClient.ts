@@ -40,7 +40,7 @@ export async function apiFetch<T>(
   if (!response.ok) {
     throw new ApiError(
       response.status,
-      `API error ${response.status}: ${response.statusText}`,
+      `API error ${String(response.status)}: ${response.statusText}`,
     );
   }
 

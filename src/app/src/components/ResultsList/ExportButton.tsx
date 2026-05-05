@@ -52,13 +52,17 @@ export function ExportButton({ items }: ExportButtonProps) {
         <Menu.Label>Download as</Menu.Label>
         <Menu.Item
           leftSection={<IconJson size={14} />}
-          onClick={() => exportToJSON(items)}
+          onClick={() => {
+            exportToJSON(items);
+          }}
         >
           JSON
         </Menu.Item>
         <Menu.Item
           leftSection={<IconFileTypeCsv size={14} />}
-          onClick={() => exportToCSV(items)}
+          onClick={() => {
+            exportToCSV(items);
+          }}
         >
           CSV
         </Menu.Item>

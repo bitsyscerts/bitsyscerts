@@ -19,7 +19,9 @@ export function SortSelect({ value, onChange }: SortSelectProps) {
       label="Sort"
       data={DATA}
       value={value}
-      onChange={(v) => onChange(v as SortField)}
+      onChange={(v) => {
+        onChange(v as SortField);
+      }}
       size="sm"
       allowDeselect={false}
       aria-label="Sort order"

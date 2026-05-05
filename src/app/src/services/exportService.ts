@@ -36,8 +36,9 @@ export function exportToJSON(items: HostnameResult[]): void {
 
 function rowsToCSV(rows: ExportRow[]): string {
   if (rows.length === 0) return "";
-  const headers = Object.keys(rows[0]!);
-  const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const headers = Object.keys(rows[0]);
+  const escape = (v: string | number | boolean | null) =>
+    `"${String(v ?? "").replace(/"/g, '""')}"`;
   const lines = [
     headers.map(escape).join(","),
     ...rows.map((row) => headers.map((h) => escape(row[h])).join(",")),
@@ -59,7 +60,7 @@ export async function exportToXLSX(items: HostnameResult[]): Promise<void> {
   const rows = items.map(flattenHostnameResult);
 
   if (rows.length > 0) {
-    sheet.columns = Object.keys(rows[0]!).map((key) => ({
+    sheet.columns = Object.keys(rows[0]).map((key) => ({
       header: key,
       key,
       width: 24,

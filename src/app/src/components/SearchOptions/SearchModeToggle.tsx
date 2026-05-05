@@ -19,7 +19,9 @@ export function SearchModeToggle({ value, onChange }: SearchModeToggleProps) {
   return (
     <SegmentedControl
       value={value}
-      onChange={(v) => onChange(v as SearchMode)}
+      onChange={(v) => {
+        onChange(v as SearchMode);
+      }}
       data={DATA}
       size="sm"
       radius="md"

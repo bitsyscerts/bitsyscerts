@@ -28,7 +28,12 @@ export function HostnameResultRow({
   const expired = isCertExpired(item.latest_cert_not_after);
 
   return (
-    <UnstyledButton w="100%" onClick={() => onClick(item)}>
+    <UnstyledButton
+      w="100%"
+      onClick={() => {
+        onClick(item);
+      }}
+    >
       <Paper
         p="sm"
         radius="md"

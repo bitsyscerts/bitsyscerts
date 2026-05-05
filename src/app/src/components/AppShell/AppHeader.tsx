@@ -36,7 +36,9 @@ export function AppHeader() {
           <Box visibleFrom="sm" style={{ flex: 1 }}>
             <Tabs
               value={activePage}
-              onChange={(v) => setActivePage(v as ActivePage)}
+              onChange={(v) => {
+                setActivePage(v as ActivePage);
+              }}
               variant="pills"
             >
               <Tabs.List justify="center" style={{ flexWrap: "nowrap" }}>

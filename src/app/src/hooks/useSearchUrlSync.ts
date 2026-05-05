@@ -49,7 +49,6 @@ export function useSearchUrlSync(search: SearchState) {
   const didInit = useRef(false);
 
   // Mount-only: restore state from URL, or re-write URL from state.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (didInit.current) return;
     didInit.current = true;
@@ -75,7 +74,7 @@ export function useSearchUrlSync(search: SearchState) {
       // User navigated away and back — restore URL from in-memory state.
       setSearchParams(toUrlParams(s), { replace: true });
     }
-  }, []); // intentionally empty: runs once on mount using captured refs
+  }, [setSearchParams]); // setSearchParams is stable; guard prevents re-init
 
   // State → URL: fire when submitted query or options change.
   const { submittedQuery, options } = search;

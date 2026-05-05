@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# pre-commit — lint only the areas that have staged changes.
+#
+# Install once with:  git config core.hooksPath .github/hooks
+# (or run src/install-hooks.sh)
+#
+# Checks run:
+#   src/app/**        → ESLint (npm run lint)
+#   src/api/**        → ruff check + format --check
+#   src/ctpool/**     → ruff check + format --check
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+STAGED="$(git diff --cached --name-only)"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+log()  { printf '\033[1;36m[pre-commit]\033[0m %s\n' "$*"; }
+fail() { printf '\033[1;31m[pre-commit] FAILED:\033[0m %s\n' "$*" >&2; }
+
+has_changes() { echo "$STAGED" | grep -qE "$1"; }
+
+EXIT=0
+
+# ── Frontend (src/app) ───────────────────────────────────────────────────────
+if has_changes '^src/app/'; then
+  log "Linting frontend (ESLint)…"
+  if (cd "$REPO_ROOT/src/app" && npm run lint --silent); then
+    log "Frontend lint passed."
+  else
+    fail "Frontend lint failed. Run 'npm run lint' in src/app to see details."
+    EXIT=1
+  fi
+fi
+
+# ── API (src/api) ─────────────────────────────────────────────────────────────
+if has_changes '^src/api/'; then
+  log "Linting certsapi (ruff)…"
+  if (cd "$REPO_ROOT/src/api" && \
+      ruff check certsapi/ tests/ && \
+      ruff format --check certsapi/ tests/); then
+    log "certsapi lint passed."
+  else
+    fail "certsapi lint failed. Run 'ruff check certsapi/ tests/' in src/api."
+    EXIT=1
+  fi
+fi
+
+# ── CT Pool (src/ctpool) ──────────────────────────────────────────────────────
+if has_changes '^src/ctpool/'; then
+  log "Linting ctpool (ruff)…"
+  if (cd "$REPO_ROOT/src/ctpool" && \
+      ruff check ctpool/ tests/ && \
+      ruff format --check ctpool/ tests/); then
+    log "ctpool lint passed."
+  else
+    fail "ctpool lint failed. Run 'ruff check ctpool/ tests/' in src/ctpool."
+    EXIT=1
+  fi
+fi
+
+exit "$EXIT"

@@ -16,7 +16,9 @@ export function IncludeCertsToggle({
   return (
     <Switch
       checked={value}
-      onChange={(e) => onChange(e.currentTarget.checked)}
+      onChange={(e) => {
+        onChange(e.currentTarget.checked);
+      }}
       label="Include certs"
       description="Embed latest cert in results"
       size="sm"

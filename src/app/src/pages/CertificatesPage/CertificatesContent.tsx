@@ -71,7 +71,9 @@ export function CertificatesContent() {
           <TextInput
             flex={1}
             value={input}
-            onChange={(e) => setInput(e.currentTarget.value)}
+            onChange={(e) => {
+              setInput(e.currentTarget.value);
+            }}
             onKeyDown={handleKeyDown}
             placeholder="e.g. 3a4b5c… (64 hex characters)"
             error={isInvalid ? "Must be exactly 64 hex characters" : undefined}

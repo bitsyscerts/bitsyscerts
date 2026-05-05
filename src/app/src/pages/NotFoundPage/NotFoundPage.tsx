@@ -33,8 +33,9 @@ export function NotFoundPage() {
             Page not found
           </Title>
           <Text c="dimmed" ta="center" maw={320}>
-            This route doesn't exist. If you bookmarked it, it may have moved or
-            never existed.
+            {
+              "This route doesn't exist. If you bookmarked it, it may have moved or never existed."
+            }
           </Text>
         </Stack>
 
@@ -42,7 +43,9 @@ export function NotFoundPage() {
           leftSection={<IconArrowLeft size={16} />}
           variant="light"
           color="brand"
-          onClick={() => navigate("/hosts")}
+          onClick={() => {
+            void navigate("/hosts");
+          }}
         >
           Back to Hosts
         </Button>

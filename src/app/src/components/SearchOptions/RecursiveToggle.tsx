@@ -13,7 +13,9 @@ export function RecursiveToggle({ value, onChange }: RecursiveToggleProps) {
   return (
     <Switch
       checked={value}
-      onChange={(e) => onChange(e.currentTarget.checked)}
+      onChange={(e) => {
+        onChange(e.currentTarget.checked);
+      }}
       label="Recursive"
       description="Search by registrable domain"
       size="sm"
