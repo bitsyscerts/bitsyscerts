@@ -195,3 +195,31 @@ class TestHostnameRepositorySearch:
         second = await repo.search(_domain("example.com"), params, cursor)
         first_ids = {r.id for r in first}
         assert all(r.id not in first_ids for r in second)
+
+
+class TestHostnameRepositoryCountEstimate:
+    async def test_returns_integer(self, session_with_hostnames: AsyncSession) -> None:
+        repo = HostnameRepository(session_with_hostnames)
+        params = _params(q="example.com", recursive=True)
+        result = await repo.count_estimate(_domain("example.com"), params)
+        assert isinstance(result, int)
+
+    async def test_exact_count_matches_seeded_rows(
+        self, session_with_hostnames: AsyncSession
+    ) -> None:
+        """Bounded COUNT must return the exact row count for small datasets."""
+        repo = HostnameRepository(session_with_hostnames)
+        params = _params(q="example.com", recursive=True)
+        result = await repo.count_estimate(_domain("example.com"), params)
+        # Fixture seeds api.example.com and www.example.com
+        assert result == 2
+
+    async def test_empty_match_returns_zero(
+        self, session_with_hostnames: AsyncSession
+    ) -> None:
+        repo = HostnameRepository(session_with_hostnames)
+        params = _params(q="no-such-domain.example.net", recursive=True)
+        result = await repo.count_estimate(
+            _domain("no-such-domain.example.net"), params
+        )
+        assert result == 0

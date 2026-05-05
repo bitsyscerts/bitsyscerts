@@ -46,6 +46,7 @@ def _build_response(
     rows: list[HostnameResult],
     sort: SortField,
     limit: int,
+    total_estimate: int | None = None,
 ) -> HostnameListResponse:
     """Slice rows to limit, compute next_cursor, and build the list response."""
     has_next = len(rows) > limit
@@ -55,6 +56,7 @@ def _build_response(
         items=items,
         next_cursor=next_cursor,
         total_returned=len(items),
+        total_estimate=total_estimate,
     )
 
 
@@ -69,4 +71,9 @@ class HostnameService:
         parsed = parse_query(params.q)
         cursor = _validate_cursor(params.cursor, params.sort) if params.cursor else None
         rows = await self._repository.search(parsed, params, cursor)
-        return _build_response(rows, params.sort, params.limit)
+        estimate = (
+            await self._repository.count_estimate(parsed, params)
+            if cursor is None
+            else None
+        )
+        return _build_response(rows, params.sort, params.limit, estimate)

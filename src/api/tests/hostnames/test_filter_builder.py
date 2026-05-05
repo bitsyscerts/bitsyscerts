@@ -2,8 +2,20 @@
 
 from __future__ import annotations
 
+from sqlalchemy.dialects import postgresql
+
 from certsapi.hostnames.filter_builder import build_where_clause
 from certsapi.hostnames.query_parser import ParsedQuery, QueryStrategy
+
+
+def _literal(clause: object) -> str:
+    """Render a SQLAlchemy clause with literal bind values substituted in."""
+    return str(
+        clause.compile(  # type: ignore[union-attr]
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
 
 
 def _exact(value: str) -> ParsedQuery:
@@ -33,23 +45,33 @@ class TestExactStrategy:
         assert "=" in str(conds[0])
         assert "LIKE" not in str(conds[0])
 
-    def test_recursive_no_depth_returns_registrable_domain_condition(self) -> None:
+    def test_recursive_no_depth_returns_hostname_like_condition(self) -> None:
         conds = build_where_clause(_exact("example.com"), True, None)
-        # registrable_domain equality + hostname != value (exclude root)
-        assert len(conds) == 2
-        assert any("registrable_domain" in str(c) for c in conds)
+        # Single LIKE condition covers all subdomains at any depth
+        assert len(conds) == 1
+        assert "LIKE" in str(conds[0])
+        assert "hostname" in str(conds[0])
 
     def test_recursive_no_depth_excludes_root_domain(self) -> None:
         conds = build_where_clause(_exact("example.com"), True, None)
         sql_strs = [str(c) for c in conds]
-        # The != condition uses != operator; LIKE is NOT present without a depth
-        assert any("!=" in s for s in sql_strs)
-        assert not any("LIKE" in s for s in sql_strs)
+        # LIKE '%.domain' requires at least one label prefix, so root is excluded
+        assert any("LIKE" in s for s in sql_strs)
+        assert not any("!=" in s for s in sql_strs)
+
+    def test_recursive_no_depth_matches_subdomain_as_query(self) -> None:
+        # Regression: querying a non-eTLD+1 subdomain recursively must return results.
+        # e.g. 'cae.cisco.com' recursive should produce a hostname LIKE condition,
+        # not a registrable_domain equality which would never match.
+        conds = build_where_clause(_exact("cae.cisco.com"), True, None)
+        assert len(conds) == 1
+        assert "LIKE" in str(conds[0])
+        assert "hostname" in str(conds[0])
 
     def test_recursive_with_depth_adds_like_conditions(self) -> None:
         conds = build_where_clause(_exact("example.com"), True, 1)
-        # registrable_domain + LIKE + NOT LIKE (depth LIKE already excludes root)
-        assert len(conds) == 3
+        # depth conditions only: LIKE + NOT LIKE (no registrable_domain condition)
+        assert len(conds) == 2
 
     def test_depth_without_recursive_is_ignored(self) -> None:
         conds = build_where_clause(_exact("api.example.com"), False, 2)
@@ -66,6 +88,26 @@ class TestExactStrategy:
         sql_strs = [str(c) for c in conds]
         assert any("LIKE" in s and "NOT" not in s for s in sql_strs)
         assert any("NOT LIKE" in s for s in sql_strs)
+
+    def test_depth_means_at_most_not_exactly(self) -> None:
+        # depth=2 must match 1-label-deep hosts too, not only 2-label-deep ones.
+        # The LIKE anchor must be '%.domain', not '%.%.domain'.
+        conds = build_where_clause(_exact("example.com"), True, 2)
+        like_sql = next(
+            _literal(c)
+            for c in conds
+            if "NOT" not in _literal(c) and "LIKE" in _literal(c)
+        )
+        # Single % wildcard before domain → PG literal renders it as '%%'
+        assert like_sql.count("%%") == 1
+
+    def test_depth_ceiling_grows_with_value(self) -> None:
+        # The NOT LIKE pattern must have (depth+1) wildcards to cap at depth labels.
+        # PG literal rendering doubles each %, so count '%%' groups.
+        for d in (1, 2, 5):
+            conds = build_where_clause(_exact("example.com"), True, d)
+            not_like_sql = next(_literal(c) for c in conds if "NOT LIKE" in _literal(c))
+            assert not_like_sql.count("%%") == d + 1
 
 
 class TestWildcardStrategy:
@@ -87,7 +129,8 @@ class TestWildcardStrategy:
         wildcard_conds = build_where_clause(_wildcard("example.com"), True, None)
         exact_conds = build_where_clause(_exact("example.com"), True, None)
         assert len(wildcard_conds) == len(exact_conds)
-        assert all("LIKE" not in str(c) for c in wildcard_conds)
+        # Both produce a LIKE suffix match on hostname
+        assert any("LIKE" in str(c) for c in wildcard_conds)
 
     def test_wildcard_with_recursive_and_depth_uses_depth_conditions(self) -> None:
         wildcard_conds = build_where_clause(_wildcard("example.com"), True, 2)

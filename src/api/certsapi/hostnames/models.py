@@ -28,8 +28,13 @@ class HostnameSearchParams(BaseModel):
     )
     depth: int | None = Field(
         default=None,
-        ge=0,
-        description="Sub-label depth limit (only meaningful when recursive=True)",
+        ge=1,
+        description=(
+            "Maximum number of DNS labels above the queried domain to return. "
+            "depth=1 returns only direct children (e.g. foo.example.com); "
+            "depth=2 returns children and grandchildren; and so on. "
+            "Only meaningful when recursive=True."
+        ),
     )
     sort: SortField = Field(
         default=SortField.not_before_desc,
@@ -87,3 +92,11 @@ class HostnameListResponse(BaseModel):
     items: list[HostnameResult]
     next_cursor: str | None
     total_returned: int
+    total_estimate: int | None = Field(
+        default=None,
+        description=(
+            "Exact row count for the full result set, capped at 10,001. "
+            "Values ≤ 10,000 are exact; 10,001 means 'more than 10,000 rows match'. "
+            "Only present on the first page (no cursor)."
+        ),
+    )

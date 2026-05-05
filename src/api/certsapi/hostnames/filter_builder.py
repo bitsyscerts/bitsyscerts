@@ -38,30 +38,28 @@ def _exact_or_domain_conditions(
     recursive: bool,
     depth: int | None,
 ) -> list[ColumnElement[bool]]:
-    """Exact hostname match, or registrable-domain search when recursive=True."""
+    """Exact hostname match, or subdomain search when recursive=True.
+
+    Uses a hostname LIKE suffix match so that any subdomain depth works as the
+    query value — not just eTLD+1 registrable domains.  The leading '.' in the
+    LIKE pattern implicitly excludes the root domain itself.
+    """
     if not recursive:
         return [Hostname.hostname == value]
-    conditions: list[ColumnElement[bool]] = [
-        Hostname.registrable_domain == value,
-    ]
     if depth is not None:
-        # depth LIKE patterns already exclude the root via the leading label
-        conditions.extend(_depth_conditions(value, depth))
-    else:
-        # Exclude the root domain itself — recursive means subdomains only
-        conditions.append(Hostname.hostname != value)
-    return conditions
+        return _depth_conditions(value, depth)
+    return [Hostname.hostname.like(f"%.{value}")]
 
 
 def _depth_conditions(domain: str, depth: int) -> list[ColumnElement[bool]]:
-    """Restrict to exactly *depth* DNS labels above *domain*.
+    """Restrict to at most *depth* DNS labels above *domain*.
 
     depth=1: LIKE '%.domain' AND NOT LIKE '%.%.domain'
-    depth=2: LIKE '%.%.domain' AND NOT LIKE '%.%.%.domain'
+    depth=2: LIKE '%.domain' AND NOT LIKE '%.%.%.domain'
+    depth=5: LIKE '%.domain' AND NOT LIKE '%.%.%.%.%.%.domain'
     """
-    prefix_exact = ".".join(["%"] * depth)
     prefix_deeper = ".".join(["%"] * (depth + 1))
     return [
-        Hostname.hostname.like(f"{prefix_exact}.{domain}"),
+        Hostname.hostname.like(f"%.{domain}"),
         ~Hostname.hostname.like(f"{prefix_deeper}.{domain}"),
     ]

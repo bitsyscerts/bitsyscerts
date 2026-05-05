@@ -9,7 +9,7 @@ from typing import Any
 from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
 from ctpool.models.hostname import Hostname
-from sqlalchemy import ColumnElement, asc, desc, select, tuple_
+from sqlalchemy import ColumnElement, asc, desc, func, literal_column, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
@@ -96,6 +96,30 @@ class HostnameRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    _ESTIMATE_CAP: int = 10_000
+
+    async def count_estimate(
+        self,
+        parsed: ParsedQuery,
+        params: HostnameSearchParams,
+    ) -> int:
+        """Return a bounded exact row count for this query.
+
+        Counts up to _ESTIMATE_CAP rows exactly, then returns _ESTIMATE_CAP + 1
+        to signal "more than _ESTIMATE_CAP". Accurate regardless of table
+        statistics freshness; fast because the inner query stops scanning early.
+        """
+        where = build_where_clause(parsed, params.recursive, params.depth)
+        inner = (
+            select(literal_column("1"))
+            .select_from(Hostname)
+            .where(*where)
+            .limit(self._ESTIMATE_CAP + 1)
+        )
+        stmt = select(func.count()).select_from(inner.subquery())
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
 
     async def search(
         self,

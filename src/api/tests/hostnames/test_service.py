@@ -46,6 +46,7 @@ class TestHostnameServiceSearch:
     async def test_happy_path_returns_list_response(self) -> None:
         repo = AsyncMock()
         repo.search.return_value = [_make_result()]
+        repo.count_estimate.return_value = 1
         service = HostnameService(repo)
 
         result = await service.search(_params())
@@ -65,6 +66,7 @@ class TestHostnameServiceSearch:
         rows = [_make_result(f"h{i}.example.com") for i in range(limit + 1)]
         repo = AsyncMock()
         repo.search.return_value = rows
+        repo.count_estimate.return_value = 3
         service = HostnameService(repo)
 
         result = await service.search(_params(limit=limit))
@@ -75,6 +77,7 @@ class TestHostnameServiceSearch:
     async def test_no_cursor_when_rows_at_or_below_limit(self) -> None:
         repo = AsyncMock()
         repo.search.return_value = [_make_result()]
+        repo.count_estimate.return_value = 1
         service = HostnameService(repo)
 
         result = await service.search(_params(limit=50))
@@ -118,8 +121,39 @@ class TestHostnameServiceSearch:
         )
         repo = AsyncMock()
         repo.search.return_value = [row, row]  # limit+1 rows but null timestamps
+        repo.count_estimate.return_value = 2
         service = HostnameService(repo)
 
         result = await service.search(_params(limit=limit))
 
         assert result.next_cursor is None
+
+    async def test_total_estimate_present_on_first_page(self) -> None:
+        repo = AsyncMock()
+        repo.search.return_value = [_make_result()]
+        repo.count_estimate.return_value = 42_000
+        service = HostnameService(repo)
+
+        result = await service.search(_params())
+
+        assert result.total_estimate == 42_000
+        repo.count_estimate.assert_awaited_once()
+
+    async def test_total_estimate_absent_on_subsequent_pages(self) -> None:
+        from certsapi.hostnames.cursor import PageCursor, encode_cursor
+
+        cursor = encode_cursor(
+            PageCursor(
+                sort="not_before_desc",
+                timestamp_ms=1_700_000_000_000,
+                id_uuid=str(uuid.uuid4()),
+            )
+        )
+        repo = AsyncMock()
+        repo.search.return_value = [_make_result()]
+        service = HostnameService(repo)
+
+        result = await service.search(_params(cursor=cursor))
+
+        assert result.total_estimate is None
+        repo.count_estimate.assert_not_awaited()
