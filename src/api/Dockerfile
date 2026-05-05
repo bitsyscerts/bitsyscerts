@@ -1,3 +1,7 @@
+# Build-time version injected by CI (see .github/scripts/gen-version.sh).
+# Docker tags forbid '+', so the Docker variant uses '-' as separator.
+ARG BUILD_VERSION=0.0.0+dev
+
 # ── Stage 1: build wheels for both packages ──────────────────────────────────
 FROM python:3.12-slim AS builder
 
@@ -36,6 +40,14 @@ COPY src/ctpool/alembic.ini /app/alembic.ini
 COPY src/ctpool/migrations   /app/migrations
 
 USER appuser
+
+# Propagate the build version into the runtime environment so that
+# certsapi.__version__ and ctpool.__version__ can read it.
+ARG BUILD_VERSION
+ENV BUILD_VERSION="${BUILD_VERSION}"
+
+LABEL org.opencontainers.image.title="bitsyscerts-api" \
+      org.opencontainers.image.version="${BUILD_VERSION}"
 
 # Default: run the API server.  Override CMD in compose for ctpool workers.
 CMD ["certsapi", "serve", "--workers", "2"]

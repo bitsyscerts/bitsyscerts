@@ -3,6 +3,10 @@
 Exports: Settings, CtPoolError hierarchy, core pipeline helpers, Tier 4/5/6 workers.
 """
 
+import os
+
+__version__: str = os.environ.get("BUILD_VERSION", "0.0.0+dev")
+
 from ctpool.backfill_worker import run_backfill
 from ctpool.cert_writer import (
     upsert_certificate,

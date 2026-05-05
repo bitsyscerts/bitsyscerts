@@ -2,7 +2,7 @@ name: CI / CD
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
     branches: [main]
 
@@ -13,12 +13,38 @@ concurrency:
 env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
-  PYTHON_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-python
-  FRONTEND_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-frontend
+  API_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-api
+  APP_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-app
 
-# ── Jobs ─────────────────────────────────────────────────────────────────────
+# ── Jobs ──────────────────────────────────────────────────────────────────────
 jobs:
-  # ── Python: certsapi tests ─────────────────────────────────────────────────
+
+  # ── Version generation ──────────────────────────────────────────────────────
+  # Single source of truth: .github/scripts/gen-version.sh
+  # Format: yy.mdd.hhmm (main) | yy.mdd.hhmm+branch.sha (PEP 440, non-main)
+  #         yy.mdd.hhmm-branch-sha (Docker, non-main)
+  version:
+    name: "Generate version"
+    runs-on: ubuntu-latest
+    outputs:
+      version_core:   ${{ steps.gen.outputs.version_core }}
+      version_pep440: ${{ steps.gen.outputs.version_pep440 }}
+      version_docker: ${{ steps.gen.outputs.version_docker }}
+      branch_safe:    ${{ steps.gen.outputs.branch_safe }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate version strings
+        id: gen
+        run: |
+          source .github/scripts/gen-version.sh
+          BRANCH_SAFE="${GITHUB_REF_NAME//\//-}"
+          echo "version_core=$VERSION_CORE"     >> "$GITHUB_OUTPUT"
+          echo "version_pep440=$VERSION_PEP440" >> "$GITHUB_OUTPUT"
+          echo "version_docker=$VERSION_DOCKER" >> "$GITHUB_OUTPUT"
+          echo "branch_safe=$BRANCH_SAFE"       >> "$GITHUB_OUTPUT"
+
+  # ── Python: certsapi tests ──────────────────────────────────────────────────
   test-api:
     name: "Test · certsapi"
     runs-on: ubuntu-latest
@@ -66,7 +92,7 @@ jobs:
       - name: Run tests (lint + coverage)
         run: pytest
 
-  # ── Python: ctpool tests ───────────────────────────────────────────────────
+  # ── Python: ctpool tests ────────────────────────────────────────────────────
   test-ctpool:
     name: "Test · ctpool"
     runs-on: ubuntu-latest
@@ -107,7 +133,7 @@ jobs:
       - name: Run tests (lint + coverage)
         run: pytest
 
-  # ── Frontend: React/TypeScript tests ──────────────────────────────────────
+  # ── Frontend: React/TypeScript tests ───────────────────────────────────────
   test-app:
     name: "Test · frontend"
     runs-on: ubuntu-latest
@@ -131,12 +157,16 @@ jobs:
       - name: Run tests (lint + coverage)
         run: npm run test
 
-  # ── Build & push: Python image ─────────────────────────────────────────────
-  build-push-python:
-    name: "Build & push · Python image"
+  # ── Build & push: API image (certsapi + ctpool) ─────────────────────────────
+  # This single image serves both the REST API and the ctpool ingest workers.
+  # Override CMD in docker-compose to run a ctpool worker instead of the API.
+  build-push-api:
+    name: "Build & push · API image"
     runs-on: ubuntu-latest
-    needs: [test-api, test-ctpool]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [version, test-api, test-ctpool]
+    # Build on every push (any branch); skip pull_request events to avoid
+    # double builds on same-repo PRs.
+    if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
@@ -155,10 +185,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.PYTHON_IMAGE }}
+          images: ${{ env.API_IMAGE }}
+          # main     → <version>  +  latest
+          # non-main → <version>  +  latest-<branch>
           tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ needs.version.outputs.version_docker }}
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=latest-${{ needs.version.outputs.branch_safe }},enable=${{ github.ref_name != 'main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -171,15 +204,17 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ needs.version.outputs.version_docker }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── Build & push: Frontend image ──────────────────────────────────────────
-  build-push-frontend:
-    name: "Build & push · frontend image"
+  # ── Build & push: App image (React / Nginx) ─────────────────────────────────
+  build-push-app:
+    name: "Build & push · App image"
     runs-on: ubuntu-latest
-    needs: [test-app]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [version, test-app]
+    if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
@@ -198,10 +233,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.FRONTEND_IMAGE }}
+          images: ${{ env.APP_IMAGE }}
           tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ needs.version.outputs.version_docker }}
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=latest-${{ needs.version.outputs.branch_safe }},enable=${{ github.ref_name != 'main' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -214,5 +250,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_VERSION=${{ needs.version.outputs.version_docker }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
