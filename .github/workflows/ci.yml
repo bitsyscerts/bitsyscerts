@@ -1,6 +1,7 @@
 name: CI / CD
 
 on:
+  workflow_dispatch:
   push:
     branches: ["**"]
   pull_request:
@@ -18,7 +19,6 @@ env:
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
 jobs:
-
   # ── Version generation ──────────────────────────────────────────────────────
   # Single source of truth: .github/scripts/gen-version.sh
   # Format: yy.mdd.hhmm (main) | yy.mdd.hhmm+branch.sha (PEP 440, non-main)
@@ -27,10 +27,10 @@ jobs:
     name: "Generate version"
     runs-on: ubuntu-latest
     outputs:
-      version_core:   ${{ steps.gen.outputs.version_core }}
+      version_core: ${{ steps.gen.outputs.version_core }}
       version_pep440: ${{ steps.gen.outputs.version_pep440 }}
       version_docker: ${{ steps.gen.outputs.version_docker }}
-      branch_safe:    ${{ steps.gen.outputs.branch_safe }}
+      branch_safe: ${{ steps.gen.outputs.branch_safe }}
     steps:
       - uses: actions/checkout@v4
 
