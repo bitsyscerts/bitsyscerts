@@ -1,4 +1,4 @@
-import { useMantineColorScheme } from "@mantine/core";
+import { useComputedColorScheme } from "@mantine/core";
 import { Group, Text, Image } from "@mantine/core";
 import logoLight from "@/assets/icon_forlight.png";
 import logoDark from "@/assets/icon_fordark.png";
@@ -8,7 +8,7 @@ import logoDark from "@/assets/icon_fordark.png";
  * Drop icon_forlight.png and icon_fordark.png into src/assets/ to activate.
  */
 export function Logo() {
-  const { colorScheme } = useMantineColorScheme();
+  const colorScheme = useComputedColorScheme("light");
   const isDark = colorScheme === "dark";
   const src = isDark ? logoDark : logoLight;
 
