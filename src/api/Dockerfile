@@ -39,6 +39,11 @@ RUN pip install --no-cache-dir --no-index --find-links /wheels ctpool certsapi \
 COPY src/ctpool/alembic.ini /app/alembic.ini
 COPY src/ctpool/migrations   /app/migrations
 
+# Create the tldextract cache directory before dropping privileges so that
+# appuser (created with --no-create-home) has a writable cache location.
+RUN mkdir -p /app/.tldextract-cache \
+    && chown appuser /app/.tldextract-cache
+
 USER appuser
 
 # Propagate the build version into the runtime environment so that

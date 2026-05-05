@@ -14,6 +14,11 @@ import tldextract
 
 from ctpool.pipeline_schemas import NormalizedEntry, ParsedCertificate
 
+# Use an explicit cache directory that exists and is writable inside the
+# container.  The default (~/.cache) is unavailable because appuser is created
+# with --no-create-home.
+_tld = tldextract.TLDExtract(cache_dir="/app/.tldextract-cache")
+
 
 def normalize_hostnames(san_dns_names: list[str]) -> list[str]:
     """Normalize and deduplicate SAN DNS names.
@@ -55,7 +60,7 @@ def extract_registrable_domain(hostname: str) -> str:
         if extraction fails.
     """
     clean = hostname.lstrip("*").lstrip(".")
-    extracted = tldextract.extract(clean)
+    extracted = _tld(clean)
     if extracted.domain and extracted.suffix:
         return f"{extracted.domain}.{extracted.suffix}"
     return clean

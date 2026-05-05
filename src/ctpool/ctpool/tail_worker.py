@@ -98,7 +98,12 @@ async def _process_log_batch(
         try:
             parsed = parse_leaf_entry(raw_entry.leaf_input)
             normalized = build_normalized_entry(parsed, log.id, start + i)
-            await write_normalized_entry(session, normalized)
+            # Use a savepoint per entry so that a DB write failure rolls back
+            # only that entry and leaves the outer transaction alive.  Without
+            # this, PostgreSQL marks the whole transaction as aborted and the
+            # subsequent cursor advance also fails.
+            async with session.begin_nested():
+                await write_normalized_entry(session, normalized)
             count += 1
         except ParseError as exc:
             _logger.warning("parse error log=%s index=%d: %s", log.id, start + i, exc)

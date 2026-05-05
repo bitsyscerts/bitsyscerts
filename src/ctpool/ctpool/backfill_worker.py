@@ -199,7 +199,12 @@ async def _process_range_batch(
             normalized = build_normalized_entry(
                 parsed, claimed.log_source_id, start + i
             )
-            await write_normalized_entry(session, normalized)
+            # Use a savepoint per entry so that a DB write failure rolls back
+            # only that entry and leaves the outer transaction alive.  Without
+            # this, PostgreSQL marks the whole transaction as aborted and the
+            # subsequent metrics INSERT also fails.
+            async with session.begin_nested():
+                await write_normalized_entry(session, normalized)
             count += 1
         except ParseError as exc:
             _logger.warning(
