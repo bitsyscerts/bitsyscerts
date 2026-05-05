@@ -11,6 +11,7 @@ The following are the ONLY files and directories permitted at the repository roo
 
 - `README.md`
 - `AGENTS.md`
+- `INITIAL_PLAN.md`
 - `.github/`
 - `.gitignore`
 - `LICENSE`
@@ -123,6 +124,68 @@ checklist, which is always active for all files under `src/`.
 
 See [testing.instructions.md](.github/instructions/testing.instructions.md) for the full
 standard.
+
+---
+
+## Scope and Retention Guardrails
+
+BitsysCerts is a **current, query-oriented** CT intelligence service — not a full historical
+mirror of the public CT ecosystem. Every contributor (human or AI) must apply these guardrails
+when designing schemas, writing ingestion code, building API endpoints, or modifying retention
+logic. Violating them is a **defect**.
+
+### What BitsysCerts is
+
+Describe BitsysCerts in documentation and comments as:
+
+> A self-hostable Certificate Transparency intelligence service for current hostname discovery,
+> certificate metadata lookup, and OSINT pivot support.
+
+Do **not** describe BitsysCerts as a complete CT mirror, a full replacement for every
+historical `crt.sh` use case, a complete archive of all public certificates, or a permanent
+copy of all CT log data.
+
+### Default retention mode: `current-osint`
+
+The default retention mode is `current-osint`. All code must be written to honour this default.
+
+| Guardrail | Requirement |
+|---|---|
+| No unbounded tables by accident | Every table that grows from CT ingestion MUST have a documented retention policy |
+| No raw-data retention by default | Full raw certificates, chains, and raw CT responses MUST be optional and time-bounded |
+| Separate current state from observations | Durable hostname state and bounded certificate observations MUST be separate |
+| Deduplicate aggressively | Use certificate fingerprint, hostname, registered domain, and log source to reduce redundancy |
+| Make retention configurable | Retention windows MUST be configurable via environment variables or deployment config |
+| Expose storage metrics | The application MUST expose row-count / storage metrics by table |
+| Fail retention jobs safely | Retention job failures MUST surface through logs and health/status endpoints |
+| Document profile impact | Each retention profile MUST clearly state expected storage implications |
+
+### Retention profiles
+
+| Profile | Default? | Storage class | Notes |
+|---|---|---|---|
+| `current-osint` | **Yes** | GB-class | Fresh OSINT and hostname discovery; bounded rolling windows |
+| `research` | No | GB–TB-class | Longer lookback; richer metadata; still not a full archive |
+| `archive` | **Never** | TB-class or multi-TB | Full CT archival; must require explicit opt-in configuration |
+
+The `archive` profile MUST never be activated by default. Code that enables archive-mode
+behavior without explicit configuration is a defect.
+
+### Non-goals (enforced)
+
+Do not implement the following without an explicit architectural decision record:
+
+- Mirroring every CT log forever.
+- Retaining every certificate ever observed.
+- Retaining every duplicate CT log entry.
+- Storing full public key material by default.
+- Reconstructing the full historical certificate state of the internet.
+- Becoming a general-purpose internet archive.
+
+### Integration boundary rule
+
+BitsysCerts provides CT intelligence. It does not absorb BitsysTools or BitsysTrace
+functionality. Any feature that belongs in a consumer project MUST be rejected.
 
 ---
 

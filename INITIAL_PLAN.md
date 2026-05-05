@@ -35,12 +35,17 @@
 
 ## 1. Project Summary
 
-**BitsysCerts** is a self-hostable Certificate Transparency (CT) ingestion, indexing, and
-certificate intelligence service. The immediate goal is a working ingestion system that runs
-from a VS Code Dev Container CLI, accumulates CT log data into PostgreSQL, and resumes safely
-after interruption.
+**BitsysCerts** is a self-hostable Certificate Transparency (CT) intelligence service for
+current hostname discovery, certificate metadata lookup, and OSINT pivot support.
 
-The ingestion package is named **`ctpool`** and is installed as a CLI tool (`ctpool`).
+It is **not** a full historical mirror of the public CT ecosystem. Its default operating
+model is to retain the latest useful CT signal — not every historical raw certificate,
+duplicate log entry, or full certificate chain forever. The project must avoid scope creep
+toward becoming a second copy of the internet.
+
+The ingestion package is named **`ctpool`** and is installed as a CLI tool (`ctpool`). The
+immediate goal is a working ingestion system that runs from a VS Code Dev Container CLI,
+accumulates CT log data into PostgreSQL, and resumes safely after interruption.
 
 ### What CT data is (and is not)
 
@@ -48,6 +53,81 @@ The ingestion package is named **`ctpool`** and is installed as a CLI tool (`ctp
   public CT log. This is all that ingestion records.
 - **Not** authoritative DNS. **Not** proof of current hostname liveness.
 - **Not** live TLS posture. DNS and TLS enrichment are future work, separate from CT ingestion.
+
+### Product purpose — practical questions BitsysCerts answers
+
+- **Hostname discovery:** What hostnames and subdomains have recently appeared for a domain?
+- **Current exposure:** What names appear to be active or recently issued?
+- **Certificate metadata:** What issuer, validity period, SAN relationships, and fingerprints
+  are associated with observed names?
+- **Pivot support:** What hostnames, registered domains, fingerprints, and SAN relationships
+  can be used by BitsysTools and BitsysTrace?
+- **Fresh signal:** What new CT observations have appeared recently?
+
+BitsysCerts does not aim to preserve the full certificate history of every hostname on the
+internet.
+
+### Scope and default retention mode
+
+The default retention mode is **`current-osint`**, optimised for current OSINT,
+reconnaissance, and hostname discovery.
+
+**Data kept long-term (durable hostname state):**
+
+```
+fqdn                     registered_domain      first_seen_at
+last_seen_at             most_recent_not_before most_recent_not_after
+latest_cert_fingerprint  latest_issuer          latest_source_log
+observation_count        status_hint            created_at / updated_at
+```
+
+**Data retained for a bounded rolling window (defaults):**
+
+| Data class | Default window |
+|---|---|
+| Recent certificate observations | 12 months |
+| Hostname-certificate relationships | 12 months |
+| SAN co-occurrence relationships | 12 months |
+| Raw CT entry metadata | 30 – 180 days |
+| Parsed raw certificate payload | 30 – 180 days (optional) |
+| Duplicate log sightings | 30 – 180 days |
+
+**Not retained by default:**
+
+- Full raw certificate DER or certificate chains.
+- Public key material.
+- Every historical certificate instance for every hostname.
+- Unbounded per-log raw response payloads.
+
+Support for any of the above must be gated behind an explicit non-default retention profile.
+
+### Retention profiles
+
+| Profile | Purpose | Default? |
+|---|---|---|
+| `current-osint` | Fresh hostname discovery, current certificate metadata, OSINT pivots, bounded storage | **Yes** |
+| `research` | Longer lookback, richer metadata retention, deeper relationship analysis | No |
+| `archive` | Full CT archival. TB-class or multi-TB storage. Must never be the default | No |
+
+### Integration boundaries
+
+```
+BitsysCerts  →  CT ingestion, normalisation, indexing, querying, reference UI
+BitsysTools  →  consumes BitsysCerts CT intelligence for public diagnostics
+BitsysTrace  →  consumes BitsysCerts CT intelligence for pivot workflows
+```
+
+BitsysCerts does not absorb BitsysTools or BitsysTrace functionality.
+
+### Non-goals
+
+- Mirroring every CT log forever.
+- Retaining every certificate ever observed.
+- Retaining every duplicate CT log entry.
+- Reconstructing the full historical certificate state of the internet.
+- Storing full public key material by default.
+- Becoming a general-purpose internet archive.
+- Replacing every historical feature of `crt.sh`.
 
 ### Primary use cases enabled by ingestion
 
