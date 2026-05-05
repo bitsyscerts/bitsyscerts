@@ -1,0 +1,105 @@
+# BitsyCerts — production compose stack
+#
+# Run from the repository root:
+#   docker compose -f src/docker-compose.yml <command>
+#
+# Before first use, copy src/.env.example to src/.env and fill in the values.
+# Then deploy with:  ./src/deploy.sh
+#
+# Services:
+#   postgres   — PostgreSQL 17 (omit if using an external managed DB)
+#   api        — certsapi HTTP server (internal, port 8000)
+#   frontend   — Nginx serving the React SPA; proxies /v1/* → api (port 80)
+#   backfill   — ctpool backfill worker (long-running)
+#   tail       — ctpool tail worker    (long-running)
+
+services:
+  # ── Database ────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bitsyscerts
+      POSTGRES_USER: bitsyscerts
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bitsyscerts"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  # ── API ─────────────────────────────────────────────────────────────────────
+  api:
+    image: "ghcr.io/bitsyscerts/bitsyscerts-python:${IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    command: ["certsapi", "serve", "--workers", "2"]
+    environment:
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+  frontend:
+    image: "ghcr.io/bitsyscerts/bitsyscerts-frontend:${IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    depends_on:
+      - api
+    networks:
+      - internal
+
+  # ── CT log backfill worker ──────────────────────────────────────────────────
+  backfill:
+    image: "ghcr.io/bitsyscerts/bitsyscerts-python:${IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    command: ["ctpool", "backfill"]
+    environment:
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      CT_BACKFILL_DAYS: "${CT_BACKFILL_DAYS:-180}"
+      CT_DEFAULT_BATCH_SIZE: "${CT_DEFAULT_BATCH_SIZE:-256}"
+      CT_MAX_BATCH_SIZE: "${CT_MAX_BATCH_SIZE:-1024}"
+      CT_HTTP_TIMEOUT_SECONDS: "${CT_HTTP_TIMEOUT_SECONDS:-30}"
+      CT_MIN_FREE_DISK_GB: "${CT_MIN_FREE_DISK_GB:-50}"
+      CT_CRITICAL_FREE_DISK_GB: "${CT_CRITICAL_FREE_DISK_GB:-20}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  # ── CT log tail worker ──────────────────────────────────────────────────────
+  tail:
+    image: "ghcr.io/bitsyscerts/bitsyscerts-python:${IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    command: ["ctpool", "tail"]
+    environment:
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      CT_TAIL_INTERVAL_SECONDS: "${CT_TAIL_INTERVAL_SECONDS:-300}"
+      CT_DEFAULT_BATCH_SIZE: "${CT_DEFAULT_BATCH_SIZE:-256}"
+      CT_MAX_BATCH_SIZE: "${CT_MAX_BATCH_SIZE:-1024}"
+      CT_HTTP_TIMEOUT_SECONDS: "${CT_HTTP_TIMEOUT_SECONDS:-30}"
+      CT_MIN_FREE_DISK_GB: "${CT_MIN_FREE_DISK_GB:-50}"
+      CT_CRITICAL_FREE_DISK_GB: "${CT_CRITICAL_FREE_DISK_GB:-20}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  postgres_data:
+
+networks:
+  internal:
+    driver: bridge

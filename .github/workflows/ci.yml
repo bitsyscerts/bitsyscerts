@@ -1,0 +1,208 @@
+name: CI / CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
+  PYTHON_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-python
+  FRONTEND_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-frontend
+
+# ── Jobs ─────────────────────────────────────────────────────────────────────
+jobs:
+  # ── Python: certsapi tests ─────────────────────────────────────────────────
+  test-api:
+    name: "Test · certsapi"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/api
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: bitsyscerts_test
+          POSTGRES_USER: bitsyscerts
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bitsyscerts"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: "postgresql+psycopg://bitsyscerts:testpassword@localhost:5432/bitsyscerts_test"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ctpool (dependency)
+        run: pip install --no-cache-dir ../ctpool
+
+      - name: Install certsapi with dev dependencies
+        run: pip install --no-cache-dir -e ".[dev]"
+
+      - name: Run tests (lint + coverage)
+        run: pytest
+
+  # ── Python: ctpool tests ───────────────────────────────────────────────────
+  test-ctpool:
+    name: "Test · ctpool"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/ctpool
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: bitsyscerts_test
+          POSTGRES_USER: bitsyscerts
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bitsyscerts"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: "postgresql+psycopg://bitsyscerts:testpassword@localhost:5432/bitsyscerts_test"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install ctpool with dev dependencies
+        run: pip install --no-cache-dir -e ".[dev]"
+
+      - name: Run tests (lint + coverage)
+        run: pytest
+
+  # ── Frontend: React/TypeScript tests ──────────────────────────────────────
+  test-app:
+    name: "Test · frontend"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: src/app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests (lint + coverage)
+        run: npm run test
+
+  # ── Build & push: Python image ─────────────────────────────────────────────
+  build-push-python:
+    name: "Build & push · Python image"
+    runs-on: ubuntu-latest
+    needs: [test-api, test-ctpool]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.PYTHON_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Build & push: Frontend image ──────────────────────────────────────────
+  build-push-frontend:
+    name: "Build & push · frontend image"
+    runs-on: ubuntu-latest
+    needs: [test-app]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.FRONTEND_IMAGE }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/app/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
