@@ -53,11 +53,15 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install ctpool (dependency)
-        run: pip install --no-cache-dir ../ctpool
-
-      - name: Install certsapi with dev dependencies
-        run: pip install --no-cache-dir -e ".[dev]"
+      - name: Install ctpool and certsapi with dev dependencies
+        run: |
+          # Build ctpool wheel from the checked-out source
+          pip wheel --no-cache-dir --wheel-dir /tmp/wheels ../ctpool
+          # Strip the file:// URL specifier from the local dev dependency so pip
+          # can resolve ctpool from the wheel we just built (same technique as
+          # the production Dockerfile).
+          sed -i 's|ctpool @ file://[^"]*|ctpool|g' pyproject.toml
+          pip install --no-cache-dir --find-links /tmp/wheels -e ".[dev]"
 
       - name: Run tests (lint + coverage)
         run: pytest

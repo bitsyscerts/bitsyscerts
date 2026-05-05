@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "eslint src --ext .ts,.tsx --max-warnings 0",
-    "test": "eslint src --ext .ts,.tsx --max-warnings 0 && vitest run --coverage"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run lint && npm run typecheck && vitest run --coverage"
   },
   "dependencies": {
     "@mantine/core": "^7.17.0",

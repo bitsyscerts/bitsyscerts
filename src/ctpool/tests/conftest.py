@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -19,15 +20,18 @@ from sqlalchemy.ext.asyncio import (
 from ctpool.config import Settings
 from ctpool.models import Base, CtLogSource
 
+_DEFAULT_TEST_DB = "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
+
 
 @pytest.fixture()
 def test_settings() -> Settings:
-    """Settings pointing at the ctpool_test database."""
-    return Settings.model_validate(
-        {
-            "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
-        }
-    )
+    """Settings pointing at the integration-test database.
+
+    Reads DATABASE_URL from the environment so CI can supply its own
+    credentials without hard-coding them here.
+    """
+    db_url = os.environ.get("DATABASE_URL", _DEFAULT_TEST_DB)
+    return Settings.model_validate({"database_url": db_url})
 
 
 @pytest_asyncio.fixture()
