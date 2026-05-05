@@ -42,7 +42,9 @@ async def test_run_upgrade_head_passes_alembic_config(settings: Settings) -> Non
         await run_upgrade_head(settings)
 
     assert len(captured) == 1
-    assert "ctpool_test" in (captured[0].get_main_option("sqlalchemy.url") or "")
+    assert str(settings.database_url) == (
+        captured[0].get_main_option("sqlalchemy.url") or ""
+    )
 
 
 # ------------------------------------------------------------------
@@ -89,7 +91,7 @@ def test_make_alembic_cfg_sets_db_url(settings: Settings) -> None:
 
     cfg = _make_alembic_cfg(settings)
     url = cfg.get_main_option("sqlalchemy.url") or ""
-    assert "ctpool_test" in url
+    assert str(settings.database_url) == url
 
 
 def test_fetch_revision_sync_returns_none_when_no_table(

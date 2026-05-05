@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from ctpool.models import CtLogBackfillRange, CtLogTailCursor
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +50,7 @@ async def session_with_data(db_session: AsyncSession) -> AsyncSession:
     return db_session
 
 
+@pytest.mark.integration
 class TestStatsRepository:
     async def test_total_hostnames_reflects_seeded_count(
         self, session_with_data: AsyncSession

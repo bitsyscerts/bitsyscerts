@@ -24,9 +24,10 @@ def test_create_engine_returns_async_engine(settings: Settings) -> None:
 
 
 def test_create_engine_url_matches_settings(settings: Settings) -> None:
-    """The engine URL matches the database_url from settings."""
+    """The engine URL reflects the database_url from settings."""
     engine = create_engine(settings)
-    assert "ctpool_test" in str(engine.url)
+    # engine.url.database is the DB name; settings.database_url contains it too
+    assert engine.url.database in str(settings.database_url)
 
 
 def test_create_session_factory_returns_sessionmaker(settings: Settings) -> None:

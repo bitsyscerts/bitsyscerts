@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
   CertStateProvider,
@@ -37,9 +37,25 @@ describe("CertStateContext", () => {
     expect(result.current.submittedFp).toBe(fp);
   });
 
-  it("throws when used outside of CertStateProvider", () => {
+  it("throws when used outside of CertStateProvider", async () => {
+    const consoleSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const suppressWindowError = (e: ErrorEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    window.addEventListener("error", suppressWindowError, { capture: true });
+
     expect(() => {
       renderHook(() => useCertStateContext());
     }).toThrow("useCertStateContext must be used inside CertStateProvider");
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    window.removeEventListener("error", suppressWindowError, { capture: true });
+    consoleSpy.mockRestore();
   });
 });

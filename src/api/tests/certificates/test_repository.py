@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import pytest_asyncio
 from ctpool.models import CertificateHostname
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,7 @@ async def session_with_cert(db_session: AsyncSession) -> tuple[AsyncSession, str
     return db_session, cert.fingerprint_sha256
 
 
+@pytest.mark.integration
 class TestCertificateRepository:
     async def test_found_fingerprint_returns_response(
         self, session_with_cert: tuple[AsyncSession, str]

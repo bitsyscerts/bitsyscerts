@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import {
   ColorSchemeProvider,
@@ -47,9 +47,25 @@ describe("ColorSchemeContext", () => {
     expect(result.current.colorScheme).toBe("system");
   });
 
-  it("throws when used outside of ColorSchemeProvider", () => {
+  it("throws when used outside of ColorSchemeProvider", async () => {
+    const consoleSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const suppressWindowError = (e: ErrorEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    window.addEventListener("error", suppressWindowError, { capture: true });
+
     expect(() => {
       renderHook(() => useColorSchemeContext());
     }).toThrow();
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    window.removeEventListener("error", suppressWindowError, { capture: true });
+    consoleSpy.mockRestore();
   });
 });

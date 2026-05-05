@@ -1,11 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { PageProvider, usePageContext } from "@/context/PageContext";
 import type { ReactNode } from "react";
 
 function wrapper({ children }: { children: ReactNode }) {
-  return <MemoryRouter initialEntries={["/hosts"]}><PageProvider>{children}</PageProvider></MemoryRouter>;
+  return (
+    <MemoryRouter initialEntries={["/hosts"]}>
+      <PageProvider>{children}</PageProvider>
+    </MemoryRouter>
+  );
 }
 
 describe("PageContext", () => {
@@ -28,7 +32,16 @@ describe("PageContext", () => {
     }).not.toThrow();
   });
 
-  it("throws when used outside PageProvider", () => {
+  it("throws when used outside PageProvider", async () => {
+    const consoleSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const suppressWindowError = (e: ErrorEvent) => {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    };
+    window.addEventListener("error", suppressWindowError, { capture: true });
+
     expect(() => {
       renderHook(() => usePageContext(), {
         wrapper: ({ children }: { children: ReactNode }) => (
@@ -36,5 +49,12 @@ describe("PageContext", () => {
         ),
       });
     }).toThrow("usePageContext must be used inside PageProvider");
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    window.removeEventListener("error", suppressWindowError, { capture: true });
+    consoleSpy.mockRestore();
   });
 });

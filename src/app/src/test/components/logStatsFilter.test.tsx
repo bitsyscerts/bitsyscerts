@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import type { ReactNode } from "react";
 import { LogStatsFilter } from "@/components/StatsPanel/LogStatsFilter";
@@ -52,7 +52,7 @@ describe("LogStatsFilter", () => {
       wrapper,
     });
     const input = screen.getByPlaceholderText(/filter logs/i);
-    Object.defineProperty(input, "value", { value: "argon" });
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    fireEvent.change(input, { target: { value: "argon" } });
+    expect(onQueryChange).toHaveBeenCalledWith("argon");
   });
 });

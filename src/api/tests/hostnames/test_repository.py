@@ -53,6 +53,7 @@ def _domain(value: str) -> ParsedQuery:
     return ParsedQuery(strategy=QueryStrategy.exact, value=value)
 
 
+@pytest.mark.integration
 class TestHostnameRepositorySearch:
     async def test_exact_match_returns_matching_row(
         self, session_with_hostnames: AsyncSession
@@ -197,6 +198,7 @@ class TestHostnameRepositorySearch:
         assert all(r.id not in first_ids for r in second)
 
 
+@pytest.mark.integration
 class TestHostnameRepositoryCountEstimate:
     async def test_returns_integer(self, session_with_hostnames: AsyncSession) -> None:
         repo = HostnameRepository(session_with_hostnames)
