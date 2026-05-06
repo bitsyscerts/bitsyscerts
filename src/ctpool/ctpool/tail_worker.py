@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import socket
+import time
 import uuid as _uuid
 from collections.abc import Callable
 from os import getpid
@@ -24,13 +26,16 @@ from ctpool.dispatcher import (
     ensure_tail_cursor,
     get_eligible_tail_logs,
     reset_tail_cursor,
+    try_claim_tail_log,
 )
-from ctpool.exceptions import FetchError, ParseError
+from ctpool.exceptions import FetchError, ParseError, RateLimitError
 from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
 from ctpool.parser import parse_leaf_entry
+from ctpool.pipeline_schemas import NormalizedEntry
+from ctpool.retry import run_with_db_retry
 from ctpool.writer import write_normalized_entry
 
 _logger = logging.getLogger(__name__)
@@ -51,6 +56,7 @@ async def _process_log_batch(
     batch_size: int,
     metrics: LogMetricsAccumulator,
     limit_remaining: int | None,
+    settings: Settings,
     *,
     init_from_end: int = 0,
 ) -> tuple[int, bool]:
@@ -95,27 +101,52 @@ async def _process_log_batch(
 
     count = 0
     for i, raw_entry in enumerate(entries):
+        entry_index = start + i
         try:
             parsed = parse_leaf_entry(raw_entry.leaf_input)
-            normalized = build_normalized_entry(parsed, log.id, start + i)
-            # Use a savepoint per entry so that a DB write failure rolls back
-            # only that entry and leaves the outer transaction alive.  Without
-            # this, PostgreSQL marks the whole transaction as aborted and the
-            # subsequent cursor advance also fails.
-            async with session.begin_nested():
-                await write_normalized_entry(session, normalized)
+            normalized = build_normalized_entry(parsed, log.id, entry_index)
+
+            # Use per-entry savepoints + bounded deadlock retry so transient
+            # lock cycles do not fail the whole range batch.
+            async def _write_once(entry: NormalizedEntry = normalized) -> None:
+                async with session.begin_nested():
+                    await write_normalized_entry(session, entry)
+
+            def _on_retry(
+                attempt: int,
+                exc: BaseException,
+                delay: float,
+                *,
+                idx: int = entry_index,
+            ) -> None:
+                _logger.warning(
+                    "deadlock retry tail log=%s index=%d attempt=%d delay=%.3fs: %s",
+                    log.id,
+                    idx,
+                    attempt,
+                    delay,
+                    exc,
+                )
+
+            await run_with_db_retry(
+                _write_once,
+                max_retries=settings.ct_deadlock_max_retries,
+                base_backoff_seconds=settings.ct_deadlock_base_backoff_seconds,
+                max_backoff_seconds=settings.ct_deadlock_max_backoff_seconds,
+                on_retry=_on_retry,
+            )
             count += 1
         except ParseError as exc:
-            _logger.warning("parse error log=%s index=%d: %s", log.id, start + i, exc)
+            _logger.warning("parse error log=%s index=%d: %s", log.id, entry_index, exc)
             metrics.record_parse_error()
         except Exception as exc:  # pragma: no cover
             _logger.warning(
-                "unexpected cert error log=%s index=%d: %s",
+                "unexpected cert error log=%s index=%d type=%s detail=%r",
                 log.id,
-                start + i,
+                entry_index,
+                exc.__class__.__name__,
                 exc,
             )
-            metrics.record_parse_error()
 
     metrics.record_entries_fetched(len(entries))
     metrics.record_entries_parsed(count)
@@ -131,18 +162,21 @@ async def _tail_one_log(
     session_factory: async_sessionmaker[AsyncSession],
     client: httpx.AsyncClient,
     metrics: LogMetricsAccumulator,
+    settings: Settings,
     *,
     batch_size: int,
     limit_remaining: int | None,
     init_from_end: int = 0,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, bool]:
     """Run one tail batch for *log* in its own session/transaction.
 
     Returns:
-        ``(entries_processed, is_empty)``
+        ``(entries_processed, is_empty, was_rate_limited)``
     """
     async with session_factory() as session:
         async with session.begin():
+            if not await try_claim_tail_log(session, log.id):
+                return 0, True, False
             try:
                 count, is_empty = await _process_log_batch(
                     log,
@@ -151,14 +185,18 @@ async def _tail_one_log(
                     batch_size,
                     metrics,
                     limit_remaining,
+                    settings=settings,
                     init_from_end=init_from_end,
                 )
                 if count > 0:
                     await metrics.persist_snapshot(session, log.id)
-                return count, is_empty
+                return count, is_empty, False
+            except RateLimitError as exc:
+                _logger.warning("rate limited tail log=%s: %s", log.id, exc)
+                return 0, True, True
             except FetchError as exc:
                 _logger.error("fetch error tail log=%s: %s", log.id, exc)
-                return 0, False
+                return 0, False, False
 
 
 async def run_tail(
@@ -197,6 +235,8 @@ async def run_tail(
     total_processed = 0
     _batch = batch_size or settings.ct_default_batch_size
     client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    rate_limited_until: dict[_uuid.UUID, float] = {}
+    rate_limit_hits: dict[_uuid.UUID, int] = {}
 
     async with client:
         while True:
@@ -224,25 +264,51 @@ async def run_tail(
 
             if log_id is not None:
                 logs = [lg for lg in logs if lg.id == log_id]
+            random.shuffle(logs)
 
             any_empty = True
             for log in logs:
                 if limit is not None and total_processed >= limit:
                     return
 
+                now = time.monotonic()
+                if now < rate_limited_until.get(log.id, 0.0):
+                    continue
+
                 limit_remaining = (
                     (limit - total_processed) if limit is not None else None
                 )
                 metrics = LogMetricsAccumulator()
-                processed, is_empty = await _tail_one_log(
+                processed, is_empty, was_rate_limited = await _tail_one_log(
                     log,
                     session_factory,
                     client,
                     metrics,
+                    settings=settings,
                     batch_size=_batch,
                     limit_remaining=limit_remaining,
                     init_from_end=init_from_end,
                 )
+
+                if was_rate_limited:
+                    hit_count = rate_limit_hits.get(log.id, 0) + 1
+                    rate_limit_hits[log.id] = hit_count
+                    backoff_seconds = min(
+                        settings.ct_rate_limit_backoff_max_seconds,
+                        settings.ct_rate_limit_backoff_seconds * (2 ** (hit_count - 1)),
+                    )
+                    rate_limited_until[log.id] = now + float(backoff_seconds)
+                    if on_status is not None:
+                        on_status(
+                            "Rate limited for "
+                            f"{log.description} — pausing {backoff_seconds} s"
+                        )
+                    continue
+
+                if processed > 0:
+                    rate_limit_hits.pop(log.id, None)
+                    rate_limited_until.pop(log.id, None)
+
                 total_processed += processed
                 if processed > 0 and on_batch is not None:
                     on_batch(log.url, processed, total_processed)

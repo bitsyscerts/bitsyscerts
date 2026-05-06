@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,13 +72,26 @@ async def upsert_certificate(
                 "is_wildcard_present": is_wildcard_present,
                 "san_count": len(parsed.san_dns_names),
             },
+            where=or_(
+                Certificate.is_wildcard_present.is_distinct_from(is_wildcard_present),
+                Certificate.san_count != len(parsed.san_dns_names),
+            ),
         )
         .returning(Certificate.id)
     )
     result = await session.execute(stmt)
-    row = result.fetchone()
-    assert row is not None  # noqa: S101  — RETURNING always yields a row
-    return uuid.UUID(str(row[0]))
+    inserted_or_updated_id = result.scalar_one_or_none()
+    if inserted_or_updated_id is not None:
+        return uuid.UUID(str(inserted_or_updated_id))
+
+    # No row is returned when conflict occurred but DO UPDATE ... WHERE
+    # evaluated false (no-op update). Fetch the existing certificate id.
+    existing_result = await session.execute(
+        select(Certificate.id).where(
+            Certificate.fingerprint_sha256 == parsed.fingerprint_sha256
+        )
+    )
+    return uuid.UUID(str(existing_result.scalar_one()))
 
 
 async def upsert_hostname(
@@ -122,13 +136,29 @@ async def upsert_hostname(
                 "latest_cert_not_before": certificate.not_before,
                 "latest_cert_not_after": certificate.not_after,
             },
+            where=or_(
+                Hostname.latest_cert_fingerprint_sha256.is_distinct_from(
+                    certificate.fingerprint_sha256
+                ),
+                Hostname.latest_cert_not_before.is_distinct_from(
+                    certificate.not_before
+                ),
+                Hostname.latest_cert_not_after.is_distinct_from(certificate.not_after),
+            ),
         )
         .returning(Hostname.id)
     )
     result = await session.execute(stmt)
-    row = result.fetchone()
-    assert row is not None  # noqa: S101  — RETURNING always yields a row
-    return uuid.UUID(str(row[0]))
+    inserted_or_updated_id = result.scalar_one_or_none()
+    if inserted_or_updated_id is not None:
+        return uuid.UUID(str(inserted_or_updated_id))
+
+    # No row is returned when conflict occurred but DO UPDATE ... WHERE
+    # evaluated false (no-op update). Fetch the existing hostname id.
+    existing_result = await session.execute(
+        select(Hostname.id).where(Hostname.hostname == hostname)
+    )
+    return uuid.UUID(str(existing_result.scalar_one()))
 
 
 async def upsert_certificate_hostname(

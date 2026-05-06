@@ -32,9 +32,10 @@ const LOGS: LogStatsItem[] = [
 ];
 
 describe("useLogFilter", () => {
-  it("returns all logs when query is empty and no state filter", () => {
+  it("defaults to usable logs when query is empty", () => {
     const { result } = renderHook(() => useLogFilter(LOGS));
-    expect(result.current.filtered).toHaveLength(4);
+    expect(result.current.filtered).toHaveLength(1);
+    expect(result.current.filtered[0].log_state).toBe("usable");
   });
 
   it("filters by description (case-insensitive)", () => {
@@ -71,6 +72,41 @@ describe("useLogFilter", () => {
       result.current.setStateFilter([]);
     });
     expect(result.current.filtered).toHaveLength(4);
+  });
+
+  it("sorts logs from most-complete to least-complete", () => {
+    const sortableLogs: LogStatsItem[] = [
+      makeLog({
+        log_id: "a",
+        description: "A",
+        log_state: "usable",
+        backfill_complete_pct: 20,
+      }),
+      makeLog({
+        log_id: "b",
+        description: "B",
+        log_state: "usable",
+        backfill_complete_pct: 95,
+      }),
+      makeLog({
+        log_id: "c",
+        description: "C",
+        log_state: "readonly",
+        backfill_complete_pct: 50,
+      }),
+    ];
+
+    const { result } = renderHook(() => useLogFilter(sortableLogs));
+
+    act(() => {
+      result.current.setStateFilter([]);
+    });
+
+    expect(result.current.filtered.map((log) => log.log_id)).toEqual([
+      "b",
+      "c",
+      "a",
+    ]);
   });
 
   it("combines text query and state filter", () => {

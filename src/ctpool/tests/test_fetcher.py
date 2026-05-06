@@ -8,7 +8,7 @@ from pytest_httpx import HTTPXMock
 
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, SignedTreeHead
-from ctpool.exceptions import FetchError
+from ctpool.exceptions import FetchError, RateLimitError
 from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.http_client import build_httpx_client
 
@@ -53,13 +53,13 @@ async def test_fetch_sth_raises_fetch_error_on_4xx(
     test_settings: Settings,
     httpx_mock: HTTPXMock,
 ) -> None:
-    """fetch_sth raises FetchError on HTTP 429."""
+    """fetch_sth raises RateLimitError on HTTP 429."""
     httpx_mock.add_response(
         url=f"{_LOG_URL}/ct/v1/get-sth",
         status_code=429,
     )
     async with build_httpx_client(test_settings) as client:
-        with pytest.raises(FetchError, match="HTTP 429"):
+        with pytest.raises(RateLimitError, match="HTTP 429"):
             await fetch_sth(_LOG_URL, client)
 
 

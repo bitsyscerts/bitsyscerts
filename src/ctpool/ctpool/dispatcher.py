@@ -3,6 +3,7 @@
 Exports:
     get_eligible_tail_logs     — Query logs eligible for tail ingestion.
     get_eligible_backfill_logs — Query logs eligible for backfill.
+    try_claim_tail_log         — Acquire a transaction-scoped lease for one log.
     ensure_tail_cursor         — Get-or-create a tail cursor for a log (caller
                                  supplies init_index; returns (cursor, was_created)).
     advance_tail_cursor        — Advance the cursor's next_index.
@@ -12,20 +13,27 @@ Exports:
     claim_backfill_range       — Atomically claim one pending range (SKIP LOCKED).
     mark_range_complete        — Mark a range as complete.
     mark_range_failed          — Mark a range as failed with a reason.
+    mark_range_pending         — Return a claimed range back to pending.
 """
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
+
+
+def _advisory_key_for_uuid(value: uuid.UUID) -> int:
+    """Return a deterministic signed int64 advisory-lock key for *value*."""
+    return int.from_bytes(value.bytes[:8], byteorder="big", signed=True)
 
 
 async def get_eligible_tail_logs(session: AsyncSession) -> list[CtLogSource]:
@@ -148,6 +156,23 @@ async def advance_tail_cursor(
     )
 
 
+async def try_claim_tail_log(
+    session: AsyncSession,
+    log_source_id: uuid.UUID,
+) -> bool:
+    """Try to acquire a transaction-scoped advisory lock for one tail log.
+
+    Returns ``True`` when this transaction owns the lease and should process
+    the log, otherwise ``False``.
+    """
+    key = _advisory_key_for_uuid(log_source_id)
+    result = await session.execute(select(func.pg_try_advisory_xact_lock(key)))
+    claimed = result.scalar()
+    if inspect.isawaitable(claimed):
+        claimed = await claimed
+    return bool(claimed)
+
+
 async def has_backfill_ranges(
     session: AsyncSession,
     log_source_id: uuid.UUID,
@@ -166,7 +191,10 @@ async def has_backfill_ranges(
     result = await session.execute(
         select(exists().where(CtLogBackfillRange.log_source_id == log_source_id))
     )
-    return bool(result.scalar())
+    has_rows = result.scalar()
+    if inspect.isawaitable(has_rows):
+        has_rows = await has_rows
+    return bool(has_rows)
 
 
 async def create_backfill_ranges(
@@ -232,6 +260,7 @@ async def claim_backfill_range(
     session: AsyncSession,
     log_source_id: uuid.UUID | None,
     worker_id: str,
+    excluded_log_source_ids: set[uuid.UUID] | None = None,
 ) -> CtLogBackfillRange | None:
     """Atomically claim a pending backfill range via ``SELECT FOR UPDATE SKIP LOCKED``.
 
@@ -239,20 +268,46 @@ async def claim_backfill_range(
         session:       Active async database session (must be inside a transaction).
         log_source_id: Restrict to a specific log, or ``None`` for any log.
         worker_id:     Identifier string stored in ``claimed_by``.
+        excluded_log_source_ids: Optional set of logs to skip (e.g. per-log
+                                 rate-limit cooldown).
 
     Returns:
         The claimed :class:`CtLogBackfillRange`, or ``None`` if none are available.
     """
     now = datetime.now(UTC)
+    target_log_source_id = log_source_id
+
+    if target_log_source_id is None:
+        log_query = select(CtLogBackfillRange.log_source_id).where(
+            CtLogBackfillRange.status == "pending"
+        )
+        if excluded_log_source_ids:
+            log_query = log_query.where(
+                ~CtLogBackfillRange.log_source_id.in_(excluded_log_source_ids)
+            )
+        log_query = log_query.group_by(CtLogBackfillRange.log_source_id).order_by(
+            func.random()
+        )
+        log_query = log_query.limit(1)
+        target_log_source_id = (await session.execute(log_query)).scalar_one_or_none()
+        if target_log_source_id is None:
+            return None
+
+    if (
+        excluded_log_source_ids
+        and log_source_id is not None
+        and log_source_id in excluded_log_source_ids
+    ):
+        return None
+
     query = (
         select(CtLogBackfillRange)
         .where(CtLogBackfillRange.status == "pending")
+        .where(CtLogBackfillRange.log_source_id == target_log_source_id)
         .order_by(CtLogBackfillRange.start_index.desc())
         .with_for_update(skip_locked=True)
         .limit(1)
     )
-    if log_source_id is not None:
-        query = query.where(CtLogBackfillRange.log_source_id == log_source_id)
 
     result = await session.execute(query)
     row = result.scalars().first()
@@ -303,6 +358,24 @@ async def mark_range_failed(
         .values(
             status="failed",
             claimed_by=reason[:1024],
+            updated_at=now,
+        )
+    )
+
+
+async def mark_range_pending(
+    session: AsyncSession,
+    range_id: uuid.UUID,
+) -> None:
+    """Return a claimed/failed backfill range to pending state."""
+    now = datetime.now(UTC)
+    await session.execute(
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.id == range_id)
+        .values(
+            status="pending",
+            claimed_by=None,
+            claimed_at=None,
             updated_at=now,
         )
     )

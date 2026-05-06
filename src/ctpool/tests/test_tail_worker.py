@@ -99,11 +99,23 @@ def _make_session_factory(
     session.begin_nested = MagicMock()
     session.begin_nested.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin_nested.return_value.__aexit__ = AsyncMock(return_value=False)
+    execute_result = MagicMock()
+    execute_result.scalar.return_value = True
+    session.execute.return_value = execute_result
 
     factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
     return factory
+
+
+@pytest.fixture(autouse=True)
+def _mock_tail_log_claim() -> object:
+    """All tail-worker tests assume the log lease is available."""
+    with patch(
+        "ctpool.tail_worker.try_claim_tail_log", AsyncMock(return_value=True)
+    ) as claim_mock:
+        yield claim_mock
 
 
 # ---------------------------------------------------------------------------

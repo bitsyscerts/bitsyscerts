@@ -13,6 +13,10 @@ const STATE_COLOR: Record<string, string> = {
   pending: "yellow",
 };
 
+function backfillColor(percent: number): string {
+  return percent >= 100 ? "green" : "brand";
+}
+
 /**
  * Renders each CT log as a compact summary row: description, state badge,
  * tail position, backfill progress, and last sync time.
@@ -49,7 +53,7 @@ export function LogStatsList({ logs }: LogStatsListProps) {
                 value={log.backfill_complete_pct}
                 size="xs"
                 radius="xl"
-                color="brand"
+                color={backfillColor(log.backfill_complete_pct)}
               />
             </Stack>
           )}

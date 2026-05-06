@@ -10,7 +10,7 @@ from __future__ import annotations
 import httpx
 
 from ctpool.ct_api_schemas import CtEntriesResponse, SignedTreeHead
-from ctpool.exceptions import FetchError
+from ctpool.exceptions import FetchError, RateLimitError
 
 
 async def fetch_entries(
@@ -39,6 +39,10 @@ async def fetch_entries(
         response = await client.get(url, params=params)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise RateLimitError(
+                f"HTTP 429 fetching entries from {log_url} indices {start}-{end}"
+            ) from exc
         raise FetchError(
             f"HTTP {exc.response.status_code} fetching entries from {log_url} "
             f"indices {start}-{end}"
@@ -75,6 +79,8 @@ async def fetch_sth(
         response = await client.get(url)
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429:
+            raise RateLimitError(f"HTTP 429 fetching STH from {log_url}") from exc
         raise FetchError(
             f"HTTP {exc.response.status_code} fetching STH from {log_url}"
         ) from exc

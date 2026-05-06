@@ -16,13 +16,24 @@ function matchesQuery(log: LogStatsItem, q: string): boolean {
   });
 }
 
+function completionScore(log: LogStatsItem): number {
+  return log.backfill_complete_pct ?? -1;
+}
+
+function tailPositionScore(log: LogStatsItem): number {
+  return log.tail_position ?? -1;
+}
+
 /**
- * Client-side filter for CT log entries. Filters by free-text query (any
- * searchable field) and by an explicit list of log states.
+ * Client-side filter for CT log entries.
+ *
+ * - Defaults to only "usable" logs.
+ * - Filters by free-text query (any searchable field) and selected states.
+ * - Orders logs from most-complete to least-complete by backfill percentage.
  */
 export function useLogFilter(logs: LogStatsItem[]) {
   const [query, setQuery] = useState("");
-  const [stateFilter, setStateFilter] = useState<string[]>([]);
+  const [stateFilter, setStateFilter] = useState<string[]>(["usable"]);
 
   const filtered = useMemo(
     () =>
@@ -31,7 +42,16 @@ export function useLogFilter(logs: LogStatsItem[]) {
         const stateOk =
           stateFilter.length === 0 || stateFilter.includes(log.log_state);
         return queryOk && stateOk;
-      }),
+      })
+        .sort((a, b) => {
+          const completionDiff = completionScore(b) - completionScore(a);
+          if (completionDiff !== 0) return completionDiff;
+
+          const tailDiff = tailPositionScore(b) - tailPositionScore(a);
+          if (tailDiff !== 0) return tailDiff;
+
+          return a.description.localeCompare(b.description);
+        }),
     [logs, query, stateFilter],
   );
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -18,8 +20,10 @@ def test_loads_all_required_fields_from_env() -> None:
 
 def test_missing_database_url_raises_validation_error(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """Omitting DATABASE_URL raises a pydantic ValidationError immediately."""
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(ValidationError):
         Settings.model_validate({})

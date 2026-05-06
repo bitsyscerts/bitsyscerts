@@ -1,4 +1,4 @@
-"""Integration tests verifying claim_backfill_range ORDER BY start_index DESC.
+"""Integration tests verifying claim_backfill_range ordering semantics.
 
 Uses the real ``ctpool_test`` database via the ``db_session`` fixture.
 Every test rolls back automatically.
@@ -70,7 +70,7 @@ async def test_claim_backfill_range_returns_highest_start_index(
 async def test_claim_backfill_range_any_log_returns_highest_start_index(
     db_session: AsyncSession,
 ) -> None:
-    """With log_source_id=None, the highest start_index across all logs is claimed."""
+    """With log_source_id=None, any pending log can be claimed fairly."""
     source_a = _make_source(url="https://order2a.example.com/")
     source_b = _make_source(url="https://order2b.example.com/")
     # Each source needs a unique log_id_b64.
@@ -92,5 +92,8 @@ async def test_claim_backfill_range_any_log_returns_highest_start_index(
     claimed = await claim_backfill_range(db_session, None, "test-worker")
 
     assert claimed is not None
-    assert claimed.start_index == 50_000
-    assert claimed.log_source_id == source_b.id
+    assert claimed.log_source_id in {source_a.id, source_b.id}
+    if claimed.log_source_id == source_a.id:
+        assert claimed.start_index == 0
+    else:
+        assert claimed.start_index == 50_000

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import time
 import uuid as _uuid
 from collections.abc import Callable
 from datetime import datetime
@@ -30,14 +31,17 @@ from ctpool.dispatcher import (
     has_backfill_ranges,
     mark_range_complete,
     mark_range_failed,
+    mark_range_pending,
 )
-from ctpool.exceptions import FetchError, ParseError
+from ctpool.exceptions import FetchError, ParseError, RateLimitError
 from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
 from ctpool.parser import parse_leaf_entry
+from ctpool.pipeline_schemas import NormalizedEntry
+from ctpool.retry import run_with_db_retry
 from ctpool.writer import write_normalized_entry
 
 _logger = logging.getLogger(__name__)
@@ -180,6 +184,7 @@ async def _process_range_batch(
     batch_size: int,
     metrics: LogMetricsAccumulator,
     limit_remaining: int | None,
+    settings: Settings,
 ) -> int:
     """Fetch and write one batch of entries within *claimed*.
 
@@ -194,34 +199,60 @@ async def _process_range_batch(
     response = await fetch_entries(log_url, start, end, client)
     count = 0
     for i, raw_entry in enumerate(response.entries):
+        entry_index = start + i
         try:
             parsed = parse_leaf_entry(raw_entry.leaf_input)
             normalized = build_normalized_entry(
-                parsed, claimed.log_source_id, start + i
+                parsed, claimed.log_source_id, entry_index
             )
-            # Use a savepoint per entry so that a DB write failure rolls back
-            # only that entry and leaves the outer transaction alive.  Without
-            # this, PostgreSQL marks the whole transaction as aborted and the
-            # subsequent metrics INSERT also fails.
-            async with session.begin_nested():
-                await write_normalized_entry(session, normalized)
+
+            # Use per-entry savepoints + bounded deadlock retry so transient
+            # lock cycles do not fail the whole range batch.
+            async def _write_once(entry: NormalizedEntry = normalized) -> None:
+                async with session.begin_nested():
+                    await write_normalized_entry(session, entry)
+
+            def _on_retry(
+                attempt: int,
+                exc: BaseException,
+                delay: float,
+                *,
+                idx: int = entry_index,
+            ) -> None:
+                _logger.warning(
+                    "deadlock retry backfill range=%s index=%d attempt=%d "
+                    "delay=%.3fs: %s",
+                    claimed.id,
+                    idx,
+                    attempt,
+                    delay,
+                    exc,
+                )
+
+            await run_with_db_retry(
+                _write_once,
+                max_retries=settings.ct_deadlock_max_retries,
+                base_backoff_seconds=settings.ct_deadlock_base_backoff_seconds,
+                max_backoff_seconds=settings.ct_deadlock_max_backoff_seconds,
+                on_retry=_on_retry,
+            )
             count += 1
         except ParseError as exc:
             _logger.warning(
                 "parse error backfill range=%s index=%d: %s",
                 claimed.id,
-                start + i,
+                entry_index,
                 exc,
             )
             metrics.record_parse_error()
         except Exception as exc:  # pragma: no cover
             _logger.warning(
-                "unexpected cert error backfill range=%s index=%d: %s",
+                "unexpected cert error backfill range=%s index=%d type=%s detail=%r",
                 claimed.id,
-                start + i,
+                entry_index,
+                exc.__class__.__name__,
                 exc,
             )
-            metrics.record_parse_error()
 
     metrics.record_entries_fetched(len(response.entries))
     metrics.record_entries_parsed(count)
@@ -233,13 +264,14 @@ async def _run_one_range(
     claimed: CtLogBackfillRange,
     session_factory: async_sessionmaker[AsyncSession],
     client: httpx.AsyncClient,
+    settings: Settings,
     batch_size: int,
     limit_remaining: int | None,
-) -> tuple[int, str]:
+) -> tuple[int, str, bool]:
     """Process *claimed* range; mark complete or failed.
 
     Returns:
-        ``(entries_written, log_url)`` — count and the URL of the parent log.
+        ``(entries_written, log_url, was_rate_limited)``.
     """
     metrics = LogMetricsAccumulator()
     try:
@@ -254,6 +286,7 @@ async def _run_one_range(
                     batch_size,
                     metrics,
                     limit_remaining,
+                    settings,
                 )
                 if count > 0:
                     await metrics.persist_snapshot(session, claimed.log_source_id)
@@ -262,13 +295,19 @@ async def _run_one_range(
             async with session.begin():
                 await mark_range_complete(session, claimed.id)
 
-        return count, log_url
+        return count, log_url, False
+    except RateLimitError as exc:
+        _logger.warning("rate limited backfill range=%s: %s", claimed.id, exc)
+        async with session_factory() as session:
+            async with session.begin():
+                await mark_range_pending(session, claimed.id)
+        return 0, "", True
     except FetchError as exc:
         _logger.error("fetch error backfill range=%s: %s", claimed.id, exc)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_failed(session, claimed.id, str(exc))
-        return 0, ""
+        return 0, "", False
 
 
 async def run_backfill(
@@ -306,6 +345,8 @@ async def run_backfill(
     _batch = batch_size or settings.ct_default_batch_size
     _days: int = days if days is not None else settings.ct_backfill_days
     client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    rate_limited_until: dict[_uuid.UUID, float] = {}
+    rate_limit_hits: dict[_uuid.UUID, int] = {}
 
     async with client:
         async with session_factory() as session:
@@ -341,10 +382,19 @@ async def run_backfill(
                 return
 
             limit_remaining = (limit - total_processed) if limit is not None else None
+            now = time.monotonic()
+            excluded_log_ids = {
+                lid for lid, until in rate_limited_until.items() if now < until
+            }
 
             async with session_factory() as session:
                 async with session.begin():
-                    claimed = await claim_backfill_range(session, log_id, worker)
+                    claimed = await claim_backfill_range(
+                        session,
+                        log_id,
+                        worker,
+                        excluded_log_source_ids=excluded_log_ids,
+                    )
 
             if claimed is None:
                 _logger.debug(
@@ -365,11 +415,38 @@ async def run_backfill(
                     f"Fetching [{claimed.start_index:,}–{claimed.end_index:,}]"
                     f" ({claimed.end_index - claimed.start_index + 1:,} entries)…"
                 )
-            batch_count, log_url = await _run_one_range(
-                claimed, session_factory, client, _batch, limit_remaining
+            batch_count, log_url, was_rate_limited = await _run_one_range(
+                claimed,
+                session_factory,
+                client,
+                settings,
+                _batch,
+                limit_remaining,
             )
+            if was_rate_limited:
+                hit_count = rate_limit_hits.get(claimed.log_source_id, 0) + 1
+                rate_limit_hits[claimed.log_source_id] = hit_count
+                backoff_seconds = min(
+                    settings.ct_rate_limit_backoff_max_seconds,
+                    settings.ct_rate_limit_backoff_seconds * (2 ** (hit_count - 1)),
+                )
+                rate_limited_until[claimed.log_source_id] = now + float(backoff_seconds)
+                if on_status is not None:
+                    on_status(
+                        "Rate limited for log "
+                        f"{claimed.log_source_id} — pausing {backoff_seconds} s"
+                    )
+                if once:
+                    return
+                continue
+
             if batch_count == 0 and on_status is not None:
                 on_status("  └ fetch error — range marked failed")
+
+            if batch_count > 0:
+                rate_limit_hits.pop(claimed.log_source_id, None)
+                rate_limited_until.pop(claimed.log_source_id, None)
+
             total_processed += batch_count
             if batch_count > 0 and on_batch is not None:
                 on_batch(log_url, batch_count, total_processed)

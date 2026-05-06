@@ -25,7 +25,7 @@ class DiskGuardError(CtPoolError):
     """Raised when disk space falls below a configured threshold."""
 
 
-class RateLimitError(CtPoolError):
+class RateLimitError(FetchError):
     """Raised when a CT log responds with HTTP 429 Too Many Requests."""
 
 

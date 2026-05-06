@@ -56,7 +56,7 @@ function LogsSection({ logs }: LogsSectionProps) {
  * persistent client-side filter.
  */
 function StatsContent() {
-  const [watching, setWatching] = useState(false);
+  const [watching, setWatching] = useState(true);
   const { data, isLoading, isError } = useStats(
     watching ? WATCH_INTERVAL : DEFAULT_INTERVAL,
   );

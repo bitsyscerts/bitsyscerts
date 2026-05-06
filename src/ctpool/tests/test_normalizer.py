@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
 
 from ctpool.normalizer import (
+    _resolve_tldextract_cache_dir,
     build_normalized_entry,
     extract_registrable_domain,
     normalize_hostnames,
@@ -61,9 +65,15 @@ def test_normalize_hostnames_strips_trailing_dot() -> None:
 
 
 def test_normalize_hostnames_removes_duplicates() -> None:
-    """normalize_hostnames deduplicates while preserving first-seen order."""
+    """normalize_hostnames deduplicates values."""
     result = normalize_hostnames(["a.example.com", "a.example.com", "b.example.com"])
     assert result == ["a.example.com", "b.example.com"]
+
+
+def test_normalize_hostnames_returns_sorted_output() -> None:
+    """normalize_hostnames returns deterministic lexicographically sorted output."""
+    result = normalize_hostnames(["z.example.com", "a.example.com"])
+    assert result == ["a.example.com", "z.example.com"]
 
 
 def test_normalize_hostnames_removes_empty_strings() -> None:
@@ -117,6 +127,18 @@ def test_extract_registrable_domain_localhost_returns_clean_string() -> None:
     result = extract_registrable_domain("localhost")
     assert isinstance(result, str)
     assert len(result) > 0
+
+
+def test_resolve_tldextract_cache_dir_uses_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CT_TLDEXTRACT_CACHE_DIR takes precedence and is created if missing."""
+    override = tmp_path / "custom-cache"
+    monkeypatch.setenv("CT_TLDEXTRACT_CACHE_DIR", str(override))
+    cache_dir = _resolve_tldextract_cache_dir()
+    assert cache_dir == str(override)
+    assert override.is_dir()
 
 
 # ---------------------------------------------------------------------------

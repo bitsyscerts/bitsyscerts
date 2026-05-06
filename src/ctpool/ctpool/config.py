@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     ct_tail_interval_seconds: int = 300
     ct_default_batch_size: int = 256
     ct_max_batch_size: int = 1024
+    ct_deadlock_max_retries: int = 3
+    ct_deadlock_base_backoff_seconds: float = 0.05
+    ct_deadlock_max_backoff_seconds: float = 1.0
+    ct_rate_limit_backoff_seconds: int = 30
+    ct_rate_limit_backoff_max_seconds: int = 300
 
     # Disk safety thresholds (GiB)
     ct_min_free_disk_gb: int = 50

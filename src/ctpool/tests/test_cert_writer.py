@@ -84,6 +84,17 @@ async def test_upsert_certificate_idempotent(db_session: AsyncSession) -> None:
     assert id1 == id2
 
 
+async def test_upsert_certificate_idempotent_noop_conflict(
+    db_session: AsyncSession,
+) -> None:
+    """No-op conflict path still returns existing certificate UUID."""
+    parsed = _make_parsed()
+    id1 = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
+    id2 = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
+
+    assert id1 == id2
+
+
 async def test_upsert_certificate_updates_on_conflict(db_session: AsyncSession) -> None:
     """On conflict, wildcard flag and san_count are updated."""
     parsed = _make_parsed(san_dns_names=["example.com"])

@@ -8,16 +8,50 @@ Exports:
 
 from __future__ import annotations
 
+import os
+import tempfile
 import uuid
+from pathlib import Path
 
 import tldextract
 
 from ctpool.pipeline_schemas import NormalizedEntry, ParsedCertificate
 
-# Use an explicit cache directory that exists and is writable inside the
-# container.  The default (~/.cache) is unavailable because appuser is created
-# with --no-create-home.
-_tld = tldextract.TLDExtract(cache_dir="/app/.tldextract-cache")
+
+def _resolve_tldextract_cache_dir() -> str | None:
+    """Return a writable cache directory for tldextract, or None.
+
+    Search order:
+    1. ``CT_TLDEXTRACT_CACHE_DIR`` (explicit override)
+    2. ``$XDG_CACHE_HOME/ctpool/tldextract``
+    3. ``$TMPDIR/ctpool-tldextract-cache``
+
+    Returns ``None`` when no candidate can be created/written, which tells
+    tldextract to run without a filesystem cache (silences permission warnings).
+    """
+    candidates: list[Path] = []
+
+    override = os.environ.get("CT_TLDEXTRACT_CACHE_DIR")
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        candidates.append(Path(xdg_cache_home).expanduser() / "ctpool" / "tldextract")
+
+    candidates.append(Path(tempfile.gettempdir()) / "ctpool-tldextract-cache")
+
+    for candidate in candidates:
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return str(candidate)
+        except OSError:
+            continue
+
+    return None
+
+
+_tld = tldextract.TLDExtract(cache_dir=_resolve_tldextract_cache_dir())
 
 
 def normalize_hostnames(san_dns_names: list[str]) -> list[str]:
@@ -27,7 +61,8 @@ def normalize_hostnames(san_dns_names: list[str]) -> list[str]:
     - Lowercase all characters.
     - Strip trailing dots.
     - Remove empty strings.
-    - Deduplicate while preserving first-seen order.
+    - Deduplicate values.
+    - Return lexicographically sorted output for deterministic write order.
 
     Args:
         san_dns_names: Raw DNS SAN values from a certificate.
@@ -42,7 +77,7 @@ def normalize_hostnames(san_dns_names: list[str]) -> list[str]:
         if normalized and normalized not in seen:
             seen.add(normalized)
             result.append(normalized)
-    return result
+    return sorted(result)
 
 
 def extract_registrable_domain(hostname: str) -> str:
