@@ -37,12 +37,13 @@ export function useLogFilter(logs: LogStatsItem[]) {
 
   const filtered = useMemo(
     () =>
-      logs.filter((log) => {
-        const queryOk = query === "" || matchesQuery(log, query);
-        const stateOk =
-          stateFilter.length === 0 || stateFilter.includes(log.log_state);
-        return queryOk && stateOk;
-      })
+      logs
+        .filter((log) => {
+          const queryOk = query === "" || matchesQuery(log, query);
+          const stateOk =
+            stateFilter.length === 0 || stateFilter.includes(log.log_state);
+          return queryOk && stateOk;
+        })
         .sort((a, b) => {
           const completionDiff = completionScore(b) - completionScore(a);
           if (completionDiff !== 0) return completionDiff;
