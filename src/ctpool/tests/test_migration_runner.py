@@ -123,6 +123,15 @@ def test_make_alembic_cfg_sets_db_url(settings: Settings) -> None:
     assert str(settings.database_url) == url
 
 
+def test_make_alembic_cfg_sets_script_location(settings: Settings) -> None:
+    """_make_alembic_cfg points Alembic at the resolved migration directory."""
+    from ctpool.migration_runner import _make_alembic_cfg, _resolve_migration_root
+
+    cfg = _make_alembic_cfg(settings)
+
+    assert cfg.get_main_option("script_location") == str(_resolve_migration_root())
+
+
 def test_fetch_revision_sync_returns_none_when_no_table(
     settings: Settings,
 ) -> None:

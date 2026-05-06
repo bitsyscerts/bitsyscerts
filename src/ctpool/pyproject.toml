@@ -37,6 +37,10 @@ ctpool = "ctpool.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["ctpool"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"alembic.ini" = "ctpool/_alembic/alembic.ini"
+"migrations" = "ctpool/_alembic/migrations"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 88

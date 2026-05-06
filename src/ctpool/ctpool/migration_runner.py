@@ -19,8 +19,9 @@ from sqlalchemy import Connection, create_engine, text
 from ctpool.config import Settings
 from ctpool.exceptions import SchemaStateError
 
-# Path to the alembic.ini co-located with this package root
-_ALEMBIC_INI = Path(__file__).parent.parent / "alembic.ini"
+_PACKAGED_MIGRATIONS = Path(__file__).resolve().parent / "_alembic" / "migrations"
+_SOURCE_MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations"
+_DOCKER_MIGRATIONS = Path("/app/migrations")
 _CORE_TABLES = (
     "certificates",
     "certificate_hostnames",
@@ -36,10 +37,25 @@ _CORE_TABLES = (
 
 
 def _make_alembic_cfg(settings: Settings) -> AlembicConfig:
-    """Build an AlembicConfig pointing at the project alembic.ini."""
-    cfg = AlembicConfig(str(_ALEMBIC_INI))
+    """Build an AlembicConfig pointing at the resolved migration directory."""
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(_resolve_migration_root()))
     cfg.set_main_option("sqlalchemy.url", str(settings.database_url))
     return cfg
+
+
+def _resolve_migration_root() -> Path:
+    """Return the migration-script directory for source, wheel, or container
+    installs.
+    """
+    for candidate in (_PACKAGED_MIGRATIONS, _SOURCE_MIGRATIONS, _DOCKER_MIGRATIONS):
+        if candidate.is_dir():
+            return candidate
+
+    raise SchemaStateError(
+        "Alembic migration scripts were not found. Expected a migrations directory "
+        "in the installed ctpool package, the source tree, or /app/migrations."
+    )
 
 
 def _upgrade_sync(cfg: AlembicConfig) -> None:
