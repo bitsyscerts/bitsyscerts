@@ -18,8 +18,15 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from certsapi.app import create_app
+from certsapi.config import Settings
 
 _TEST_DB_URL = "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
+
+# Credential-free Settings used by all unit tests that call create_app().
+# PostgresDsn requires a valid URL structure but no password is needed.
+_UNIT_TEST_SETTINGS = Settings.model_validate(
+    {"database_url": "postgresql+psycopg://localhost/test"}
+)
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -50,7 +57,7 @@ async def db_session(async_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, 
 @pytest.fixture()
 def app() -> object:
     """Bare FastAPI app instance for dependency override testing."""
-    return create_app()
+    return create_app(settings=_UNIT_TEST_SETTINGS)
 
 
 @pytest_asyncio.fixture()

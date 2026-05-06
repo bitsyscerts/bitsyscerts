@@ -7,12 +7,17 @@ from unittest.mock import AsyncMock
 from httpx import ASGITransport, AsyncClient
 
 from certsapi.app import create_app
+from certsapi.config import Settings
 from certsapi.health.models import HealthResponse
 from certsapi.health.router import _get_health_service
 
+_UNIT_TEST_SETTINGS = Settings.model_validate(
+    {"database_url": "postgresql+psycopg://localhost/test"}
+)
+
 
 def _client_with_service(service: object) -> AsyncClient:
-    app = create_app()
+    app = create_app(settings=_UNIT_TEST_SETTINGS)
     app.dependency_overrides[_get_health_service] = lambda: service  # type: ignore[attr-defined]
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 

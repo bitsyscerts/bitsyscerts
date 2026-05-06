@@ -12,6 +12,11 @@ from certsapi.app import create_app
 from certsapi.certificates.dependencies import get_certificate_service
 from certsapi.certificates.exceptions import CertificateNotFoundError
 from certsapi.certificates.models import CertificateResponse
+from certsapi.config import Settings
+
+_UNIT_TEST_SETTINGS = Settings.model_validate(
+    {"database_url": "postgresql+psycopg://localhost/test"}
+)
 
 
 def _make_response(fp: str = "abc123") -> CertificateResponse:
@@ -43,7 +48,7 @@ def _make_response(fp: str = "abc123") -> CertificateResponse:
 
 
 def _client_with_service(service: object) -> AsyncClient:
-    app = create_app()
+    app = create_app(settings=_UNIT_TEST_SETTINGS)
     app.dependency_overrides[get_certificate_service] = lambda: service  # type: ignore[attr-defined]
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 

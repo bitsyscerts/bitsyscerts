@@ -7,10 +7,16 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
+from certsapi.app import create_app
+from certsapi.config import Settings
 from certsapi.hostnames.dependencies import get_hostname_service
 from certsapi.hostnames.models import HostnameListResponse, HostnameResult
+
+_UNIT_TEST_SETTINGS = Settings.model_validate(
+    {"database_url": "postgresql+psycopg://localhost/test"}
+)
 
 
 def _make_result(hostname: str = "api.example.com") -> HostnameResult:
@@ -41,11 +47,7 @@ def mock_service() -> AsyncMock:
 
 @pytest.fixture()
 def client_with_mock(app: object, mock_service: AsyncMock) -> AsyncClient:
-    from httpx import ASGITransport
-
-    from certsapi.app import create_app
-
-    _app = create_app()
+    _app = create_app(settings=_UNIT_TEST_SETTINGS)
     _app.dependency_overrides[get_hostname_service] = lambda: mock_service  # type: ignore[attr-defined]
     return AsyncClient(transport=ASGITransport(app=_app), base_url="http://test")
 
@@ -58,11 +60,7 @@ class TestSearchHostnamesRouter:
     async def test_valid_request_returns_200(
         self, app: object, mock_service: AsyncMock
     ) -> None:
-        from httpx import ASGITransport
-
-        from certsapi.app import create_app
-
-        _app = create_app()
+        _app = create_app(settings=_UNIT_TEST_SETTINGS)
         _app.dependency_overrides[get_hostname_service] = lambda: mock_service  # type: ignore[attr-defined]
         async with AsyncClient(
             transport=ASGITransport(app=_app), base_url="http://test"
@@ -73,14 +71,10 @@ class TestSearchHostnamesRouter:
     async def test_response_has_items_and_next_cursor_keys(
         self, app: object, mock_service: AsyncMock
     ) -> None:
-        from httpx import ASGITransport
-
-        from certsapi.app import create_app
-
         mock_service.search.return_value = HostnameListResponse(
             items=[_make_result()], next_cursor=None, total_returned=1
         )
-        _app = create_app()
+        _app = create_app(settings=_UNIT_TEST_SETTINGS)
         _app.dependency_overrides[get_hostname_service] = lambda: mock_service  # type: ignore[attr-defined]
         async with AsyncClient(
             transport=ASGITransport(app=_app), base_url="http://test"

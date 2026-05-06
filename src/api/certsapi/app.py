@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from certsapi.certificates.exceptions import CertificateNotFoundError
 from certsapi.certificates.router import certificate_router
-from certsapi.config import get_settings
+from certsapi.config import Settings, get_settings
 from certsapi.health.router import health_router
 from certsapi.hostnames.exceptions import InvalidCursorError, InvalidQueryError
 from certsapi.hostnames.router import hostname_router
@@ -27,12 +27,19 @@ async def _invalid_query(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 
-def create_app() -> FastAPI:
-    """Build and return the configured FastAPI application."""
-    settings = get_settings()
+def create_app(settings: Settings | None = None) -> FastAPI:
+    """Build and return the configured FastAPI application.
+
+    Args:
+        settings: Pre-built Settings instance.  When ``None`` (the default,
+            used in production) settings are loaded from the environment via
+            ``get_settings()``.  Pass an explicit instance in tests to avoid
+            requiring a real DATABASE_URL environment variable.
+    """
+    resolved = settings if settings is not None else get_settings()
     app = FastAPI(
-        title=settings.app_name,
-        version=settings.app_version,
+        title=resolved.app_name,
+        version=resolved.app_version,
         docs_url=None,  # Replaced by Scalar below
         redoc_url=None,
     )
@@ -58,7 +65,7 @@ def create_app() -> FastAPI:
 
         return get_scalar_api_reference(
             openapi_url=app.openapi_url or "/openapi.json",
-            title=settings.app_name,
+            title=resolved.app_name,
         )
 
     return app
