@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, type ChangeEvent } from "react";
 import {
   Box,
+  Checkbox,
   Chip,
   Collapse,
   Group,
@@ -24,8 +25,10 @@ const STATE_OPTIONS = [
 interface LogStatsFilterProps {
   query: string;
   stateFilter: string[];
+  hideSynced: boolean;
   onQueryChange: (q: string) => void;
   onStateFilterChange: (states: string[]) => void;
+  onHideSyncedChange: (hide: boolean) => void;
   totalCount: number;
   filteredCount: number;
 }
@@ -37,8 +40,10 @@ interface LogStatsFilterProps {
 export function LogStatsFilter({
   query,
   stateFilter,
+  hideSynced,
   onQueryChange,
   onStateFilterChange,
+  onHideSyncedChange,
   totalCount,
   filteredCount,
 }: LogStatsFilterProps) {
@@ -91,6 +96,16 @@ export function LogStatsFilter({
             ))}
           </Group>
         </Chip.Group>
+        <Group mb="xs">
+          <Checkbox
+            size="xs"
+            label="Hide synced logs"
+            checked={hideSynced}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => {
+              onHideSyncedChange(event.currentTarget.checked);
+            }}
+          />
+        </Group>
       </Collapse>
     </Box>
   );

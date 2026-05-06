@@ -38,6 +38,56 @@ describe("useLogFilter", () => {
     expect(result.current.filtered[0].log_state).toBe("usable");
   });
 
+  it("hides fully synced logs by default", () => {
+    const syncedLogs: LogStatsItem[] = [
+      makeLog({
+        log_id: "u1",
+        description: "Synced usable",
+        log_state: "usable",
+        backfill_complete_pct: 100,
+      }),
+      makeLog({
+        log_id: "u2",
+        description: "In-progress usable",
+        log_state: "usable",
+        backfill_complete_pct: 88,
+      }),
+    ];
+
+    const { result } = renderHook(() => useLogFilter(syncedLogs));
+    expect(result.current.filtered).toHaveLength(1);
+    expect(result.current.filtered[0].log_id).toBe("u2");
+    expect(result.current.hideSynced).toBe(true);
+  });
+
+  it("can show synced logs when hideSynced is disabled", () => {
+    const syncedLogs: LogStatsItem[] = [
+      makeLog({
+        log_id: "u1",
+        description: "Synced usable",
+        log_state: "usable",
+        backfill_complete_pct: 100,
+      }),
+      makeLog({
+        log_id: "u2",
+        description: "In-progress usable",
+        log_state: "usable",
+        backfill_complete_pct: 88,
+      }),
+    ];
+
+    const { result } = renderHook(() => useLogFilter(syncedLogs));
+    act(() => {
+      result.current.setHideSynced(false);
+    });
+
+    expect(result.current.filtered).toHaveLength(2);
+    expect(result.current.filtered.map((log) => log.log_id)).toEqual([
+      "u1",
+      "u2",
+    ]);
+  });
+
   it("filters by description (case-insensitive)", () => {
     const { result } = renderHook(() => useLogFilter(LOGS));
     act(() => {
@@ -132,8 +182,10 @@ describe("useLogFilter", () => {
     act(() => {
       result.current.setQuery("test");
       result.current.setStateFilter(["usable"]);
+      result.current.setHideSynced(false);
     });
     expect(result.current.query).toBe("test");
     expect(result.current.stateFilter).toEqual(["usable"]);
+    expect(result.current.hideSynced).toBe(false);
   });
 });

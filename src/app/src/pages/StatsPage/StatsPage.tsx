@@ -29,8 +29,15 @@ interface LogsSectionProps {
 
 /** CT Logs section with client-side text + state filtering. */
 function LogsSection({ logs }: LogsSectionProps) {
-  const { query, setQuery, stateFilter, setStateFilter, filtered } =
-    useLogFilter(logs);
+  const {
+    query,
+    setQuery,
+    stateFilter,
+    setStateFilter,
+    hideSynced,
+    setHideSynced,
+    filtered,
+  } = useLogFilter(logs);
 
   return (
     <Stack gap="sm">
@@ -40,8 +47,10 @@ function LogsSection({ logs }: LogsSectionProps) {
       <LogStatsFilter
         query={query}
         stateFilter={stateFilter}
+        hideSynced={hideSynced}
         onQueryChange={setQuery}
         onStateFilterChange={setStateFilter}
+        onHideSyncedChange={setHideSynced}
         totalCount={logs.length}
         filteredCount={filtered.length}
       />

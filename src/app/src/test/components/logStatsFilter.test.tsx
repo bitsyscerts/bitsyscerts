@@ -11,8 +11,10 @@ function wrapper({ children }: { children: ReactNode }) {
 const BASE_PROPS = {
   query: "",
   stateFilter: [],
+  hideSynced: true,
   onQueryChange: vi.fn(),
   onStateFilterChange: vi.fn(),
+  onHideSyncedChange: vi.fn(),
   totalCount: 10,
   filteredCount: 10,
 };
@@ -44,6 +46,24 @@ describe("LogStatsFilter", () => {
     expect(screen.getByText("Readonly")).toBeInTheDocument();
     expect(screen.getByText("Retired")).toBeInTheDocument();
     expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.getByLabelText(/hide synced logs/i)).toBeInTheDocument();
+  });
+
+  it("calls onHideSyncedChange when checkbox is toggled", () => {
+    const onHideSyncedChange = vi.fn();
+    render(
+      <LogStatsFilter
+        {...BASE_PROPS}
+        onHideSyncedChange={onHideSyncedChange}
+      />,
+      {
+        wrapper,
+      },
+    );
+
+    screen.getByText("States").click();
+    fireEvent.click(screen.getByLabelText(/hide synced logs/i));
+    expect(onHideSyncedChange).toHaveBeenCalledWith(false);
   });
 
   it("calls onQueryChange when text is entered", () => {
