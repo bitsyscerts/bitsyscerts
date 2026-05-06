@@ -22,6 +22,8 @@ from ctpool.exceptions import FetchError
 from ctpool.log_discovery import fetch_log_list, sync_log_sources
 from ctpool.models.log_source import CtLogSource
 
+pytestmark = pytest.mark.integration
+
 _LOG_LIST_URL = "https://www.gstatic.com/ct/log_list/v3/log_list.json"
 
 _SAMPLE_RESPONSE = {

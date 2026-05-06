@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +17,8 @@ from ctpool.models.certificate import Certificate
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.observation import CtLogObservation
 from ctpool.observation_writer import upsert_observation
+
+pytestmark = pytest.mark.integration
 
 
 def _make_log_source(

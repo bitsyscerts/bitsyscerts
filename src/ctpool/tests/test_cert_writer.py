@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +23,8 @@ from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
 from ctpool.models.hostname import Hostname
 from ctpool.pipeline_schemas import ParsedCertificate
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -10,11 +10,14 @@ import uuid
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 from pytest_httpx import HTTPXMock
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ctpool.log_prober import probe_log
 from ctpool.models.log_source import CtLogSource
+
+pytestmark = pytest.mark.integration
 
 _STH_URL_SUFFIX = "/ct/v1/get-sth"
 

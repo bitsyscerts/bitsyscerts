@@ -10,6 +10,8 @@ from ctpool.config import Settings
 from ctpool.db import create_engine, create_session_factory, get_session
 from ctpool.models import Base
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture()
 def settings(test_settings: Settings) -> Settings:

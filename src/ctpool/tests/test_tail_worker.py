@@ -96,6 +96,9 @@ def _make_session_factory(
     session.begin = MagicMock()
     session.begin.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock()
+    session.begin_nested.return_value.__aenter__ = AsyncMock(return_value=None)
+    session.begin_nested.return_value.__aexit__ = AsyncMock(return_value=False)
 
     factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)

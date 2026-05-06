@@ -9,12 +9,15 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.ingestion_metric import IngestionMetric
 from ctpool.models.log_source import CtLogSource
+
+pytestmark = pytest.mark.integration
 
 
 def _make_log_source() -> CtLogSource:
