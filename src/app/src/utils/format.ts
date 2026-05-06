@@ -5,6 +5,14 @@ const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", {
   month: "short",
   day: "2-digit",
 });
+const DATE_TIME_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  year: "numeric",
+  month: "short",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+});
 
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
 const COMPACT_NUMBER_FORMAT = new Intl.NumberFormat("en-US", {
@@ -17,6 +25,15 @@ export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   try {
     return DATE_FORMAT.format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  try {
+    return DATE_TIME_FORMAT.format(new Date(iso));
   } catch {
     return iso;
   }

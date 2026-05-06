@@ -22,10 +22,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from ctpool.db_contention_observability import read_db_contention_operator_snapshot
 from ctpool.models.certificate import Certificate
 from ctpool.models.hostname import Hostname
 from ctpool.models.ingestion_metric import IngestionMetric
 from ctpool.models.log_source import CtLogSource
+from ctpool.stats_contention import render_db_contention_panel
 
 _THROUGHPUT_WINDOW_MINUTES: int = 10
 
@@ -207,8 +209,10 @@ async def render_stats(session: AsyncSession, console: Console) -> None:
     logs = await _query_log_rows(session)
     total_size, table_rows = await _query_db_size(session)
     throughputs = await _query_recent_throughputs(session)
+    contention_snapshot = await read_db_contention_operator_snapshot(session)
     table = _build_stats_table(logs, cert_count, hostname_count, throughputs)
     console.print(table)
+    console.print(render_db_contention_panel(contention_snapshot))
     console.print(_build_size_panel(total_size, table_rows))
 
 

@@ -11,17 +11,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from typer.testing import CliRunner
 
 from ctpool.cli import app
+from ctpool.exceptions import SchemaStateError
 
 _runner = CliRunner()
 
 
 # ---------------------------------------------------------------------------
-# db-init
+# apply-migrations
 # ---------------------------------------------------------------------------
 
 
-def test_db_init_command_invokes_migration_runner() -> None:
-    """db-init delegates to run_upgrade_head and exits zero."""
+def test_apply_migrations_command_invokes_migration_runner() -> None:
+    """apply-migrations delegates to run_upgrade_head and exits zero."""
     with (
         patch("ctpool.cli.get_settings", return_value=MagicMock()),
         patch("ctpool.migration_runner.run_upgrade_head", new_callable=AsyncMock),
@@ -29,10 +30,40 @@ def test_db_init_command_invokes_migration_runner() -> None:
         # Patch inside cli module's local import
         with patch("ctpool.cli.asyncio.run") as mock_run:
             mock_run.return_value = None
+            result = _runner.invoke(app, ["apply-migrations"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+def test_db_init_alias_invokes_migration_runner() -> None:
+    """db-init remains as a compatibility alias for apply-migrations."""
+    with (
+        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.migration_runner.run_upgrade_head", new_callable=AsyncMock),
+    ):
+        with patch("ctpool.cli.asyncio.run") as mock_run:
+            mock_run.return_value = None
             result = _runner.invoke(app, ["db-init"])
 
     assert result.exit_code == 0
     mock_run.assert_called_once()
+
+
+def test_apply_migrations_exits_nonzero_for_incomplete_schema() -> None:
+    """apply-migrations surfaces schema-state mismatches as a CLI failure."""
+    with (
+        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch(
+            "ctpool.migration_runner.run_upgrade_head",
+            new_callable=AsyncMock,
+            side_effect=SchemaStateError("missing hostnames"),
+        ),
+    ):
+        result = _runner.invoke(app, ["apply-migrations"])
+
+    assert result.exit_code == 1
+    assert "missing hostnames" in result.output
 
 
 # ---------------------------------------------------------------------------

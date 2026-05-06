@@ -120,6 +120,13 @@ Minimum required values in `.env`:
 | `DATABASE_URL` | Must match `POSTGRES_PASSWORD` — use `postgres` as the host |
 | `IMAGE_TAG` | Tag to pull from GHCR, e.g. `latest` or `26.504.913` |
 
+For the bundled PostgreSQL service, the default one-role setup is sufficient:
+the role referenced by `DATABASE_URL` is also the bootstrap role created by the
+official `postgres` image, so `ctpool init-db --force` can reset the app DB
+without a second DSN. Set `DATABASE_ADMIN_URL` only when using an external or
+locked-down PostgreSQL server where the app role does not have database-create
+privileges.
+
 **3. Deploy:**
 
 ```sh
@@ -129,9 +136,24 @@ Minimum required values in `.env`:
 This script:
 1. Pulls all images from GHCR
 2. Starts PostgreSQL and waits until it is healthy
-3. Runs `alembic upgrade head` to initialise / migrate the schema
+3. Runs the compose-native `migrate` service to initialise / migrate the schema
 4. Runs `ctpool sync-logs` to fetch the current CT log list
 5. Brings up the full stack (API, frontend, backfill worker, tail worker)
+
+If you need to rerun migrations manually outside the wrapper script, use the
+compose service directly:
+
+```sh
+docker compose up --abort-on-container-exit --exit-code-from migrate migrate
+```
+
+If you need to destructively reset the configured application database, run the
+same image through the `migrate` service rather than trying to `exec` into a
+nonexistent `ctpool` service:
+
+```sh
+docker compose run --rm migrate ctpool init-db --force
+```
 
 ### Re-deploying / updating
 

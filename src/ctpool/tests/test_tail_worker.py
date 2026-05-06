@@ -14,6 +14,7 @@ import pytest
 
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
+from ctpool.db_contention_types import DbContentionDirective, DbContentionObservation
 from ctpool.exceptions import FetchError
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
@@ -37,6 +38,7 @@ def _make_settings(**kwargs: object) -> Settings:
         "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
         "ct_tail_interval_seconds": 1,
         "ct_default_batch_size": 2,
+        "ct_db_contention_enabled": False,
         "ct_min_free_disk_gb": 1,
         "ct_critical_free_disk_gb": 0,
         "ct_http_timeout_seconds": 5,
@@ -104,6 +106,7 @@ def _make_session_factory(
     session.execute.return_value = execute_result
 
     factory = MagicMock()
+    factory.session = session
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
     return factory
@@ -151,13 +154,14 @@ async def test_tail_worker_exits_after_one_iteration_with_once_flag() -> None:
             "ctpool.tail_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.tail_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch("ctpool.tail_worker.httpx.AsyncClient"),
     ):
         factory = _make_session_factory([log], {})
         await run_tail(factory, settings, once=True)
         # Should return without raising — no infinite loop
+        factory.session.begin_nested.assert_not_called()
 
 
 async def test_tail_worker_pauses_when_disk_is_low() -> None:
@@ -205,7 +209,11 @@ async def test_tail_worker_stops_at_entry_limit() -> None:
     settings = _make_settings()
     written: list[object] = []
 
-    async def mock_write(session: object, entry: object) -> None:
+    async def mock_write(
+        session: object,
+        entry: object,
+        **_: object,
+    ) -> None:
         written.append(entry)
 
     with (
@@ -230,7 +238,7 @@ async def test_tail_worker_stops_at_entry_limit() -> None:
             "ctpool.tail_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.tail_worker.write_normalized_entry", mock_write),
+        patch("ctpool.tail_worker.persist_entry_with_retry", mock_write),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch("ctpool.tail_worker.httpx.AsyncClient"),
     ):
@@ -387,7 +395,7 @@ async def test_tail_worker_calls_on_batch_callback_with_correct_args() -> None:
         ),
         patch("ctpool.tail_worker.parse_leaf_entry", MagicMock()),
         patch("ctpool.tail_worker.build_normalized_entry", MagicMock()),
-        patch("ctpool.tail_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch("ctpool.tail_worker.httpx.AsyncClient"),
     ):
@@ -658,7 +666,7 @@ async def test_tail_worker_calls_persist_snapshot_on_success() -> None:
             "ctpool.tail_worker.build_normalized_entry",
             return_value=MagicMock(),
         ),
-        patch("ctpool.tail_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch(
             "ctpool.tail_worker.LogMetricsAccumulator.persist_snapshot",
@@ -703,3 +711,48 @@ async def test_tail_worker_does_not_call_persist_snapshot_on_fetch_error() -> No
         await run_tail(_make_session_factory([log], {}), settings, once=True)
 
     assert snapshot_calls == []
+
+
+async def test_tail_worker_applies_shared_db_pacing_before_processing_log() -> None:
+    """Shared DB-pressure pacing sleeps before tailing and clamps batch size."""
+    log = _make_log()
+    settings = _make_settings(ct_db_contention_enabled=True)
+    observation = DbContentionObservation(entries_attempted=1, retryable_errors=0)
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.tail_worker.get_db_contention_directive",
+            AsyncMock(
+                return_value=DbContentionDirective(
+                    pressure_ema=0.2,
+                    base_sleep_seconds=0.5,
+                    batch_size_cap=1,
+                )
+            ),
+        ),
+        patch(
+            "ctpool.tail_worker.sleep_for_db_contention",
+            AsyncMock(return_value=0.5),
+        ) as sleep_mock,
+        patch(
+            "ctpool.tail_worker._tail_one_log",
+            AsyncMock(return_value=(1, False, False, observation)),
+        ) as tail_one_log_mock,
+        patch(
+            "ctpool.tail_worker.submit_db_contention_observation",
+            AsyncMock(),
+        ) as submit_mock,
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        await run_tail(_make_session_factory([log], {}), settings, once=True)
+
+    sleep_mock.assert_awaited_once()
+    assert tail_one_log_mock.await_count == 1
+    assert tail_one_log_mock.await_args_list[0].kwargs["batch_size"] == 1
+    submit_mock.assert_awaited_once()

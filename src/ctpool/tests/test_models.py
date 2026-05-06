@@ -8,6 +8,7 @@ from ctpool.models import (
     Base,
     Certificate,
     CertificateHostname,
+    CtDbContentionState,
     CtLogBackfillRange,
     CtLogObservation,
     CtLogSource,
@@ -100,3 +101,13 @@ def test_backfill_range_bigint_start_and_end() -> None:
             "BIGINT" in str(col.type).upper() or "BigInteger" in type(col.type).__name__
         )
         assert bigint_type
+
+
+def test_db_contention_scope_is_unique() -> None:
+    """CtDbContentionState.scope participates in a unique constraint."""
+    uq_cols: set[str] = set()
+    for constraint in _table(CtDbContentionState).constraints:
+        if hasattr(constraint, "columns"):
+            for col in constraint.columns:
+                uq_cols.add(col.name)
+    assert "scope" in uq_cols

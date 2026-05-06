@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 from certsapi.app import create_app
 from certsapi.config import Settings
 from certsapi.stats.models import (
+    DbContentionStats,
     LogStatsItem,
     StatsResponse,
     StorageProjection,
@@ -57,6 +58,16 @@ def _make_stats(**kwargs: object) -> StatsResponse:
             projection_high_bytes=None,
             notes=[],
         ),
+        "db_contention": DbContentionStats(
+            status="initializing",
+            degraded_mode_active=False,
+            pressure_ema=0.0,
+            base_sleep_seconds=0.0,
+            shared_batch_size_cap=None,
+            effective_batch_size_cap=None,
+            updated_at=None,
+            notes=["No shared DB contention state has been recorded yet."],
+        ),
         "logs": [],
     }
     defaults.update(kwargs)
@@ -89,6 +100,7 @@ class TestStatsRouter:
             "total_logs",
             "storage",
             "storage_projection",
+            "db_contention",
             "logs",
         ):
             assert key in body
@@ -127,3 +139,24 @@ class TestStatsRouter:
         projection = resp.json()["storage_projection"]
         assert projection["disk_total_bytes"] is None
         assert projection["projected_fits_on_disk"] is None
+
+    async def test_db_contention_block_serializes(self) -> None:
+        svc = AsyncMock()
+        svc.get_stats.return_value = _make_stats(
+            db_contention=DbContentionStats(
+                status="throttling",
+                degraded_mode_active=False,
+                pressure_ema=0.25,
+                base_sleep_seconds=0.5,
+                shared_batch_size_cap=32,
+                effective_batch_size_cap=32,
+                updated_at=datetime.now(UTC),
+                notes=["Shared DB contention throttling is currently active."],
+            )
+        )
+        async with _client_with_service(svc) as client:
+            resp = await client.get("/v1/stats")
+
+        contention = resp.json()["db_contention"]
+        assert contention["status"] == "throttling"
+        assert contention["effective_batch_size_cap"] == 32

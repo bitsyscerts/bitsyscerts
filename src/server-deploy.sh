@@ -7,8 +7,7 @@
 # Usage:
 #   ./server-deploy.sh [--skip-migrate] [--skip-sync-logs]
 #
-#   --skip-migrate    Skip `alembic upgrade head`  (useful on re-deploys when
-#                     the schema has not changed).
+#   --skip-migrate    Skip the compose-native `migrate` bootstrap step.
 #   --skip-sync-logs  Skip `ctpool sync-logs`       (skips the CT log list
 #                     refresh; useful if the list was already synced recently).
 #
@@ -27,6 +26,10 @@ ENV_FILE="${SCRIPT_DIR}/.env"
 # ── Helpers ───────────────────────────────────────────────────────────────────
 log()  { echo "[deploy] $*"; }
 fail() { echo "[deploy] ERROR: $*" >&2; exit 1; }
+
+compose() {
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+}
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 SKIP_MIGRATE=false
@@ -51,16 +54,15 @@ docker compose version >/dev/null 2>&1 \
 
 # ── Pull all images ───────────────────────────────────────────────────────────
 log "Pulling images from GHCR..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull --quiet
+compose pull --quiet
 
 # ── Start postgres first and wait for it to be healthy ───────────────────────
 log "Starting postgres..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d postgres
+compose up -d postgres
 
 log "Waiting for postgres to be healthy..."
 RETRIES=30
-until docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
-    exec -T postgres pg_isready -U bitsyscerts >/dev/null 2>&1; do
+until compose exec -T postgres pg_isready -U bitsyscerts >/dev/null 2>&1; do
   RETRIES=$((RETRIES - 1))
   [[ $RETRIES -gt 0 ]] || fail "Postgres did not become healthy in time."
   sleep 2
@@ -68,29 +70,26 @@ done
 log "Postgres is ready."
 
 # ── One-shot init: run migrations ─────────────────────────────────────────────
-# Uses `docker compose run` so the container is automatically on the compose
-# network and can reach the `postgres` service by hostname.
 if [[ "$SKIP_MIGRATE" == false ]]; then
-  log "Running Alembic migrations..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
-    run --rm api \
-    alembic -c /app/alembic.ini upgrade head
+  log "Running compose migrate service..."
+  compose up --abort-on-container-exit --exit-code-from migrate migrate
   log "Migrations complete."
 fi
 
 # ── One-shot init: sync CT log list ──────────────────────────────────────────
 if [[ "$SKIP_SYNC_LOGS" == false ]]; then
   log "Syncing CT log list..."
-  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
-    run --rm api \
-    ctpool sync-logs
+  compose run --rm --no-deps api ctpool sync-logs
   log "CT log sync complete."
 fi
 
 # ── Bring up the full stack ───────────────────────────────────────────────────
 log "Starting all services..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" \
-  up --detach --remove-orphans
+if [[ "$SKIP_MIGRATE" == true ]]; then
+  compose up --detach --remove-orphans --no-deps api frontend backfill tail
+else
+  compose up --detach --remove-orphans
+fi
 
 log "Deploy complete. Stack status:"
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
+compose ps

@@ -35,3 +35,15 @@ class ConfigurationError(CtPoolError):
 
 class DispatcherError(CtPoolError):
     """Raised when the dispatcher cannot claim or advance a work unit."""
+
+
+class SchemaStateError(CtPoolError):
+    """Raised when Alembic revision state does not match the actual schema."""
+
+
+class DatabaseInitError(CtPoolError):
+    """Raised when init-db cannot safely prepare the target database."""
+
+
+class DatabasePrivilegeError(DatabaseInitError):
+    """Raised when maintenance DB privileges are insufficient for init-db."""

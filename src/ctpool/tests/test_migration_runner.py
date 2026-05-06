@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ctpool.config import Settings
-from ctpool.migration_runner import get_current_revision, run_upgrade_head
+from ctpool.exceptions import SchemaStateError
+from ctpool.migration_runner import (
+    get_current_revision,
+    get_missing_core_tables,
+    run_upgrade_head,
+)
 
 
 @pytest.fixture()
@@ -23,7 +28,10 @@ def settings(test_settings: Settings) -> Settings:
 
 async def test_run_upgrade_head_calls_alembic_upgrade(settings: Settings) -> None:
     """run_upgrade_head invokes _upgrade_sync via a thread executor."""
-    with patch("ctpool.migration_runner._upgrade_sync") as mock_upgrade:
+    with (
+        patch("ctpool.migration_runner._upgrade_sync") as mock_upgrade,
+        patch("ctpool.migration_runner._raise_for_incomplete_schema"),
+    ):
         mock_upgrade.return_value = None
         await run_upgrade_head(settings)
     mock_upgrade.assert_called_once()
@@ -38,7 +46,10 @@ async def test_run_upgrade_head_passes_alembic_config(settings: Settings) -> Non
     def _capture(cfg: AlembicConfig) -> None:
         captured.append(cfg)
 
-    with patch("ctpool.migration_runner._upgrade_sync", side_effect=_capture):
+    with (
+        patch("ctpool.migration_runner._upgrade_sync", side_effect=_capture),
+        patch("ctpool.migration_runner._raise_for_incomplete_schema"),
+    ):
         await run_upgrade_head(settings)
 
     assert len(captured) == 1
@@ -73,11 +84,29 @@ async def test_get_current_revision_returns_string_when_migrated(
 
 async def test_run_upgrade_head_uses_executor(settings: Settings) -> None:
     """run_upgrade_head dispatches work to a thread-pool executor."""
-    with patch("ctpool.migration_runner._upgrade_sync"):
+    with (
+        patch("ctpool.migration_runner._upgrade_sync"),
+        patch("ctpool.migration_runner._raise_for_incomplete_schema"),
+    ):
         # If run_in_executor is called, the _upgrade_sync mock should be invoked
         await run_upgrade_head(settings)
         # No assertion needed beyond no exception being raised — the mock above
         # validates the executor pathway was used
+
+
+async def test_run_upgrade_head_raises_when_core_tables_missing(
+    settings: Settings,
+) -> None:
+    """run_upgrade_head fails when Alembic revision does not match real tables."""
+    with (
+        patch("ctpool.migration_runner._upgrade_sync"),
+        patch(
+            "ctpool.migration_runner._raise_for_incomplete_schema",
+            side_effect=SchemaStateError("missing hostnames"),
+        ),
+    ):
+        with pytest.raises(SchemaStateError, match="missing hostnames"):
+            await run_upgrade_head(settings)
 
 
 # ------------------------------------------------------------------
@@ -144,3 +173,16 @@ def test_fetch_revision_sync_returns_revision_when_table_exists(
             result = _fetch_revision_sync(str(settings.database_url))
 
     assert result == fake_rev
+
+
+async def test_get_missing_core_tables_returns_missing_subset(
+    settings: Settings,
+) -> None:
+    """get_missing_core_tables returns the missing required table names."""
+    with patch(
+        "ctpool.migration_runner._missing_core_tables",
+        return_value=("hostnames", "certificates"),
+    ):
+        result = await get_missing_core_tables(settings)
+
+    assert result == ("hostnames", "certificates")

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from ctpool.config import Settings as CtPoolSettings
+from ctpool.db_contention_observability import read_db_contention_operator_snapshot
+from ctpool.db_contention_types import DbContentionOperatorSnapshot
 from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
 from ctpool.models.hostname import Hostname
@@ -19,8 +22,13 @@ from certsapi.stats.projection import progress_statuses
 class StatsRepository:
     """Executes scalar COUNT queries and the per-log aggregation query."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        ctpool_settings: CtPoolSettings | None = None,
+    ) -> None:
         self._session = session
+        self._ctpool_settings = ctpool_settings
 
     async def total_hostnames(self) -> int:
         """Return the total number of unique hostnames."""
@@ -141,3 +149,11 @@ class StatsRepository:
         )
         result = await self._session.execute(stmt)
         return list(result.mappings().all())
+
+    async def db_contention_snapshot(self) -> DbContentionOperatorSnapshot:
+        """Return the normalized shared DB contention status."""
+
+        return await read_db_contention_operator_snapshot(
+            self._session,
+            self._ctpool_settings,
+        )

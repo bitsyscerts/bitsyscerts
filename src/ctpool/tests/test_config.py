@@ -18,6 +18,17 @@ def test_loads_all_required_fields_from_env() -> None:
     assert str(s.database_url).startswith("postgresql")
 
 
+def test_database_admin_url_is_optional() -> None:
+    """DATABASE_ADMIN_URL can be provided for maintenance operations."""
+    s = Settings.model_validate(
+        {
+            "database_url": "postgresql+psycopg://u:p@localhost:5432/db",
+            "database_admin_url": "postgresql+psycopg://admin:p@localhost:5432/postgres",
+        }
+    )
+    assert s.database_admin_url is not None
+
+
 def test_missing_database_url_raises_validation_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -70,3 +81,34 @@ def test_ct_log_list_url_is_compile_time_constant() -> None:
         {"database_url": "postgresql+psycopg://u:p@localhost:5432/db"}
     )
     assert s.ct_log_list_url == "https://www.gstatic.com/ct/log_list/v3/log_list.json"
+
+
+def test_db_contention_control_is_enabled_by_default() -> None:
+    """Shared DB contention control defaults to enabled."""
+    s = Settings.model_validate(
+        {"database_url": "postgresql+psycopg://u:p@localhost:5432/db"}
+    )
+    assert s.ct_db_contention_enabled is True
+
+
+def test_invalid_db_contention_jitter_fraction_raises_validation_error() -> None:
+    """DB contention jitter must remain between 0.0 and 1.0 inclusive."""
+    with pytest.raises(ValidationError):
+        Settings.model_validate(
+            {
+                "database_url": "postgresql+psycopg://u:p@localhost:5432/db",
+                "ct_db_contention_jitter_fraction": 1.5,
+            }
+        )
+
+
+def test_invalid_db_contention_threshold_order_raises_validation_error() -> None:
+    """Low retry ratio must not exceed the high retry ratio."""
+    with pytest.raises(ValidationError):
+        Settings.model_validate(
+            {
+                "database_url": "postgresql+psycopg://u:p@localhost:5432/db",
+                "ct_db_contention_low_retry_ratio": 0.2,
+                "ct_db_contention_high_retry_ratio": 0.1,
+            }
+        )

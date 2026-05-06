@@ -200,6 +200,7 @@ async def test_render_stats_shows_db_size_panel(db_session: AsyncSession) -> Non
     console = Console(record=True, width=120)
     await render_stats(db_session, console)
     output = console.export_text()
+    assert "DB Contention Control" in output
     assert "Database Storage" in output
     assert "certificate" in output
     assert "hostname" in output

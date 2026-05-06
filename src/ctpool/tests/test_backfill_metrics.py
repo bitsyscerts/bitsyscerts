@@ -29,6 +29,7 @@ def _make_settings(**kwargs: object) -> Settings:
         "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
         "ct_default_batch_size": 2,
         "ct_backfill_days": 180,
+        "ct_db_contention_enabled": False,
     }
     base.update(kwargs)
     return Settings(**base)  # type: ignore[arg-type]
@@ -148,7 +149,7 @@ async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.backfill_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch(

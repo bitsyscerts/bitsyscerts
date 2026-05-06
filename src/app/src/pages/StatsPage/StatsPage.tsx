@@ -11,6 +11,7 @@ import {
 } from "@mantine/core";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
+import { DbContentionCard } from "@/components/StatsPanel/DbContentionCard";
 import { StorageProjectionCard } from "@/components/StatsPanel/StorageProjectionCard";
 import { StatsSummary } from "@/components/StatsPanel/StatsSummary";
 import { StorageTable } from "@/components/StatsPanel/StorageTable";
@@ -92,6 +93,7 @@ function StatsContent() {
               totalLogs={data.total_logs}
             />
             <StorageProjectionCard projection={data.storage_projection} />
+            <DbContentionCard contention={data.db_contention} />
           </Stack>
         </Grid.Col>
         <Grid.Col span={{ base: 12, md: 8, lg: 9 }}>

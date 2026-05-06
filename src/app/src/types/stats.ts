@@ -56,11 +56,30 @@ export interface StorageProjection {
   notes: string[];
 }
 
+export type DbContentionStatus =
+  | "disabled"
+  | "initializing"
+  | "healthy"
+  | "throttling"
+  | "stale";
+
+export interface DbContentionStats {
+  status: DbContentionStatus;
+  degraded_mode_active: boolean;
+  pressure_ema: number;
+  base_sleep_seconds: number;
+  shared_batch_size_cap: number | null;
+  effective_batch_size_cap: number | null;
+  updated_at: string | null;
+  notes: string[];
+}
+
 export interface StatsResponse {
   total_hostnames: number;
   total_certificates: number;
   total_logs: number;
   storage: StorageStats;
   storage_projection: StorageProjection;
+  db_contention: DbContentionStats;
   logs: LogStatsItem[];
 }

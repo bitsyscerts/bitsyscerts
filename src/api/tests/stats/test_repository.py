@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
+from ctpool.config import Settings as CtPoolSettings
 from ctpool.models import CtLogBackfillRange, CtLogObservation, CtLogTailCursor
+from ctpool.models.db_contention_state import CtDbContentionState
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from certsapi.stats.repository import StatsRepository
 from tests.conftest import make_certificate, make_hostname, make_log_source
+
+
+def _ctpool_settings(**overrides: object) -> CtPoolSettings:
+    base = {
+        "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
+        "ct_default_batch_size": 64,
+        "ct_db_contention_enabled": True,
+        "ct_db_contention_stale_after_seconds": 30,
+    }
+    base.update(overrides)
+    return CtPoolSettings.model_validate(base)
 
 
 @pytest_asyncio.fixture()
@@ -158,3 +171,22 @@ class TestStatsRepository:
         progress = await repo.backfill_observation_progress()
         assert progress["planned_observations_total"] == 2000
         assert progress["planned_observations_completed"] == 1500
+
+    async def test_db_contention_snapshot_reads_shared_status(
+        self, session_with_data: AsyncSession
+    ) -> None:
+        session_with_data.add(
+            CtDbContentionState(
+                scope="global",
+                pressure_ema=0.2,
+                extra_sleep_seconds=0.5,
+                batch_size_cap=16,
+            )
+        )
+        await session_with_data.flush()
+
+        repo = StatsRepository(session_with_data, ctpool_settings=_ctpool_settings())
+        snapshot = await repo.db_contention_snapshot()
+
+        assert snapshot.status == "throttling"
+        assert snapshot.effective_batch_size_cap == 16

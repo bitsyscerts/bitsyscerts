@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy.engine import RowMapping
 
 from certsapi.stats.models import (
+    DbContentionStats,
     LogStatsItem,
     StatsResponse,
     StorageStats,
@@ -50,6 +51,7 @@ class StatsService:
         per_log = await self._repository.per_log_stats()
         progress = await self._repository.backfill_observation_progress()
         storage_data = await self._repository.db_storage()
+        contention = await self._repository.db_contention_snapshot()
         total_size_bytes = int(storage_data["total"]["total_size_bytes"])
         storage = StorageStats(
             total_size_bytes=total_size_bytes,
@@ -84,5 +86,15 @@ class StatsService:
             total_logs=total_l,
             storage=storage,
             storage_projection=storage_projection,
+            db_contention=DbContentionStats(
+                status=contention.status,
+                degraded_mode_active=contention.degraded_mode_active,
+                pressure_ema=contention.pressure_ema,
+                base_sleep_seconds=contention.base_sleep_seconds,
+                shared_batch_size_cap=contention.shared_batch_size_cap,
+                effective_batch_size_cap=contention.effective_batch_size_cap,
+                updated_at=contention.updated_at,
+                notes=list(contention.notes),
+            ),
             logs=[_row_to_log_item(row) for row in per_log],
         )

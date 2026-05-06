@@ -8,6 +8,8 @@ export type {
 export { DEFAULT_HOSTNAME_SEARCH_PARAMS, SORT_FIELD_LABELS } from "./hostnames";
 export type { CertificateResponse } from "./certificates";
 export type {
+  DbContentionStats,
+  DbContentionStatus,
   LogStatsItem,
   StorageProjection,
   StorageProjectionStatus,

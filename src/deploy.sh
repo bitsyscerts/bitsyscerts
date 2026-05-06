@@ -5,7 +5,7 @@
 #   ./src/deploy.sh [--build] [--skip-migrate] [--skip-sync-logs]
 #
 #   --build           Force local image builds instead of pulling from GHCR.
-#   --skip-migrate    Skip `alembic upgrade head`.
+#   --skip-migrate    Skip the compose-native `migrate` bootstrap step.
 #   --skip-sync-logs  Skip `ctpool sync-logs`.
 #
 # Requirements:
@@ -45,52 +45,70 @@ docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin (v2) is re
 # Load IMAGE_TAG from .env (default: latest)
 IMAGE_TAG="$(grep -E '^IMAGE_TAG=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'" || true)"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
-PYTHON_IMAGE="ghcr.io/bitsyscerts/bitsyscerts-python:${IMAGE_TAG}"
+API_IMAGE="ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG}"
+FRONTEND_IMAGE="ghcr.io/bitsyscerts/bitsyscerts-app:${IMAGE_TAG}"
+
+compose() {
+  docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" "$@"
+}
+
+wait_for_postgres() {
+  local retries=30
+  until compose exec -T postgres pg_isready -U bitsyscerts >/dev/null 2>&1; do
+    retries=$((retries - 1))
+    [[ $retries -gt 0 ]] || fail "Postgres did not become healthy in time."
+    sleep 2
+  done
+}
 
 log "IMAGE_TAG=${IMAGE_TAG}"
 
 # ── Optional local build ─────────────────────────────────────────────────────
 if [[ "$DO_BUILD" == true ]]; then
-  log "Building Python image from source..."
+  log "Building API image from source..."
   docker build \
     --file "${SRC_DIR}/api/Dockerfile" \
-    --tag  "${PYTHON_IMAGE}" \
+    --tag  "${API_IMAGE}" \
     "${REPO_ROOT}"
 
   log "Building frontend image from source..."
   docker build \
     --file "${SRC_DIR}/app/Dockerfile" \
-    --tag  "ghcr.io/bitsyscerts/bitsyscerts-frontend:${IMAGE_TAG}" \
+    --tag  "${FRONTEND_IMAGE}" \
     "${REPO_ROOT}"
+else
+  log "Pulling latest images..."
+  compose pull --quiet
 fi
 
-# ── One-shot init containers ─────────────────────────────────────────────────
+# ── Compose-native bootstrap ─────────────────────────────────────────────────
+log "Starting postgres..."
+compose up -d postgres
+
+log "Waiting for postgres to be healthy..."
+wait_for_postgres
+log "Postgres is ready."
+
 if [[ "$SKIP_MIGRATE" == false ]]; then
-  log "Running Alembic migrations..."
-  docker run --rm \
-    --env-file "${ENV_FILE}" \
-    --workdir /app \
-    "${PYTHON_IMAGE}" \
-    alembic upgrade head
+  log "Running compose migrate service..."
+  compose up --abort-on-container-exit --exit-code-from migrate migrate
   log "Migrations complete."
 fi
 
 if [[ "$SKIP_SYNC_LOGS" == false ]]; then
   log "Syncing CT log list..."
-  docker run --rm \
-    --env-file "${ENV_FILE}" \
-    "${PYTHON_IMAGE}" \
-    ctpool sync-logs
+  compose run --rm --no-deps api ctpool sync-logs
   log "CT log sync complete."
 fi
 
 # ── Bring up the stack ───────────────────────────────────────────────────────
-log "Pulling latest images..."
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" pull --quiet
-
 log "Starting services..."
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" \
-  up --force-recreate --detach --remove-orphans
+if [[ "$SKIP_MIGRATE" == true ]]; then
+  compose up --force-recreate --detach --remove-orphans --no-deps \
+    api frontend backfill tail
+else
+  compose up --force-recreate --detach --remove-orphans
+fi
 
 log "Deploy complete. Stack status:"
-docker compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" ps
+compose ps

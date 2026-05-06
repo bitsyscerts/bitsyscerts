@@ -46,6 +46,16 @@ const STATS_FIXTURE = {
     projected_fits_on_disk: true,
     notes: [],
   },
+  db_contention: {
+    status: "healthy" as const,
+    degraded_mode_active: false,
+    pressure_ema: 0.02,
+    base_sleep_seconds: 0,
+    shared_batch_size_cap: null,
+    effective_batch_size_cap: null,
+    updated_at: "2025-01-01T00:00:00Z",
+    notes: ["Shared DB contention control is active and not throttling."],
+  },
   logs: [],
 };
 
@@ -85,6 +95,7 @@ describe("StatsPage with data", () => {
       </AllProviders>,
     );
     expect(screen.getByText("Storage Projection")).toBeInTheDocument();
+    expect(screen.getByText("DB Contention Control")).toBeInTheDocument();
     expect(screen.getByText("Database Storage")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: /watch/i })).toBeChecked();
     expect(screen.getAllByText("CT Logs").length).toBeGreaterThan(0);

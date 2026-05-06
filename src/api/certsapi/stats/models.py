@@ -72,6 +72,25 @@ class StorageProjection(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class DbContentionStats(BaseModel):
+    """Operator-facing shared DB contention status."""
+
+    status: Literal[
+        "disabled",
+        "initializing",
+        "healthy",
+        "throttling",
+        "stale",
+    ]
+    degraded_mode_active: bool
+    pressure_ema: float
+    base_sleep_seconds: float
+    shared_batch_size_cap: int | None
+    effective_batch_size_cap: int | None
+    updated_at: datetime | None
+    notes: list[str] = Field(default_factory=list)
+
+
 class StatsResponse(BaseModel):
     """Global ingestion statistics."""
 
@@ -80,4 +99,5 @@ class StatsResponse(BaseModel):
     total_logs: int
     storage: StorageStats
     storage_projection: StorageProjection
+    db_contention: DbContentionStats
     logs: list[LogStatsItem]

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from ctpool.db_contention_types import DbContentionOperatorSnapshot
 
 from certsapi.stats.models import StatsResponse
 from certsapi.stats.service import StatsService
@@ -71,6 +72,19 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
         },
     )
     repo.db_storage.return_value = overrides.get("db_storage", _make_storage_data())
+    repo.db_contention_snapshot.return_value = overrides.get(
+        "db_contention_snapshot",
+        DbContentionOperatorSnapshot(
+            status="initializing",
+            degraded_mode_active=False,
+            pressure_ema=0.0,
+            base_sleep_seconds=0.0,
+            shared_batch_size_cap=None,
+            effective_batch_size_cap=None,
+            updated_at=None,
+            notes=["No shared DB contention state has been recorded yet."],
+        ),
+    )
     return repo
 
 
@@ -173,3 +187,23 @@ class TestStatsService:
         result = await StatsService(repo).get_stats()
         assert result.storage_projection.status == "insufficient_backfill_plan"
         assert result.storage_projection.sync_percent_by_observation is None
+
+    async def test_db_contention_snapshot_included(self) -> None:
+        repo = _repo_with_defaults(
+            db_contention_snapshot=DbContentionOperatorSnapshot(
+                status="throttling",
+                degraded_mode_active=False,
+                pressure_ema=0.25,
+                base_sleep_seconds=0.5,
+                shared_batch_size_cap=32,
+                effective_batch_size_cap=32,
+                updated_at=datetime.now(UTC),
+                notes=["Shared DB contention throttling is currently active."],
+            )
+        )
+
+        result = await StatsService(repo).get_stats()
+
+        assert result.db_contention.status == "throttling"
+        assert result.db_contention.effective_batch_size_cap == 32
+        assert result.db_contention.base_sleep_seconds == pytest.approx(0.5)

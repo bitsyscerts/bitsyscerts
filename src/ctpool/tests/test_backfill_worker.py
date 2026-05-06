@@ -15,6 +15,7 @@ import pytest
 from ctpool.backfill_worker import run_backfill
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
+from ctpool.db_contention_types import DbContentionDirective, DbContentionObservation
 from ctpool.exceptions import FetchError
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -30,6 +31,7 @@ def _make_settings(**kwargs: object) -> Settings:
     base = {
         "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
         "ct_default_batch_size": 2,
+        "ct_db_contention_enabled": False,
         "ct_min_free_disk_gb": 1,
         "ct_critical_free_disk_gb": 0,
         "ct_http_timeout_seconds": 5,
@@ -95,6 +97,7 @@ def _make_session_factory() -> MagicMock:
     session.begin_nested.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin_nested.return_value.__aexit__ = AsyncMock(return_value=False)
     factory = MagicMock()
+    factory.session = session
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
     return factory
@@ -170,7 +173,7 @@ async def test_backfill_worker_marks_range_complete_on_success() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.backfill_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_complete", mock_mark_complete),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
@@ -178,9 +181,11 @@ async def test_backfill_worker_marks_range_complete_on_success() -> None:
             "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
-        await run_backfill(_make_session_factory(), settings, once=True)
+        factory = _make_session_factory()
+        await run_backfill(factory, settings, once=True)
 
     assert claimed.id in completed_ids
+    factory.session.begin_nested.assert_not_called()
 
 
 async def test_backfill_worker_marks_range_failed_on_fetch_error() -> None:
@@ -297,7 +302,11 @@ async def test_backfill_worker_exits_at_entry_limit() -> None:
     settings = _make_settings()
     written: list[object] = []
 
-    async def mock_write(session: object, entry: object) -> None:
+    async def mock_write(
+        session: object,
+        entry: object,
+        **_: object,
+    ) -> None:
         written.append(entry)
 
     with (
@@ -331,7 +340,7 @@ async def test_backfill_worker_exits_at_entry_limit() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.backfill_worker.write_normalized_entry", mock_write),
+        patch("ctpool.backfill_worker.persist_entry_with_retry", mock_write),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
@@ -416,7 +425,7 @@ async def test_backfill_worker_on_status_fires_before_fetching_range() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.backfill_worker.write_normalized_entry", AsyncMock()),
+        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
@@ -429,3 +438,57 @@ async def test_backfill_worker_on_status_fires_before_fetching_range() -> None:
         )
 
     assert any("Fetching" in m and "0" in m and "63" in m for m in status_messages)
+
+
+async def test_backfill_worker_applies_shared_db_pacing_before_processing() -> None:
+    """Shared DB-pressure pacing sleeps before claim and clamps the batch size."""
+    log = _make_log()
+    claimed = _make_range(log.id)
+    settings = _make_settings(ct_db_contention_enabled=True)
+    observation = DbContentionObservation(entries_attempted=1, retryable_errors=0)
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=True)
+        ),
+        patch(
+            "ctpool.backfill_worker.get_db_contention_directive",
+            AsyncMock(
+                return_value=DbContentionDirective(
+                    pressure_ema=0.2,
+                    base_sleep_seconds=0.5,
+                    batch_size_cap=1,
+                )
+            ),
+        ),
+        patch(
+            "ctpool.backfill_worker.sleep_for_db_contention",
+            AsyncMock(return_value=0.5),
+        ) as sleep_mock,
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(return_value=claimed),
+        ),
+        patch(
+            "ctpool.backfill_worker._run_one_range",
+            AsyncMock(return_value=(1, log.url, False, observation)),
+        ) as run_range_mock,
+        patch(
+            "ctpool.backfill_worker.submit_db_contention_observation",
+            AsyncMock(),
+        ) as submit_mock,
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        await run_backfill(_make_session_factory(), settings, once=True)
+
+    sleep_mock.assert_awaited_once()
+    await_args = run_range_mock.await_args
+    assert await_args is not None
+    assert await_args.args[4] == 1
+    submit_mock.assert_awaited_once()

@@ -23,6 +23,15 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ctpool.config import Settings
+from ctpool.db_contention_accumulator import DbRetryPressureAccumulator
+from ctpool.db_contention_coordinator import (
+    build_db_retry_callback,
+    get_db_contention_directive,
+    resolve_effective_batch_size,
+    sleep_for_db_contention,
+    submit_db_contention_observation,
+)
+from ctpool.db_contention_types import DbContentionObservation
 from ctpool.disk_guard import is_disk_critical, is_disk_low
 from ctpool.dispatcher import (
     claim_backfill_range,
@@ -33,6 +42,7 @@ from ctpool.dispatcher import (
     mark_range_failed,
     mark_range_pending,
 )
+from ctpool.entry_persistence import persist_entry_with_retry
 from ctpool.exceptions import FetchError, ParseError, RateLimitError
 from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.metrics import LogMetricsAccumulator
@@ -40,9 +50,6 @@ from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
 from ctpool.parser import parse_leaf_entry
-from ctpool.pipeline_schemas import NormalizedEntry
-from ctpool.retry import run_with_db_retry
-from ctpool.writer import write_normalized_entry
 
 _logger = logging.getLogger(__name__)
 
@@ -185,10 +192,10 @@ async def _process_range_batch(
     metrics: LogMetricsAccumulator,
     limit_remaining: int | None,
     settings: Settings,
-) -> int:
+) -> tuple[int, DbContentionObservation]:
     """Fetch and write one batch of entries within *claimed*.
 
-    Returns the number of entries successfully written.
+    Returns the number of entries successfully written plus one retry sample.
     """
     start = claimed.next_index
     batch = batch_size
@@ -198,6 +205,7 @@ async def _process_range_batch(
 
     response = await fetch_entries(log_url, start, end, client)
     count = 0
+    retry_accumulator = DbRetryPressureAccumulator()
     for i, raw_entry in enumerate(response.entries):
         entry_index = start + i
         try:
@@ -205,12 +213,6 @@ async def _process_range_batch(
             normalized = build_normalized_entry(
                 parsed, claimed.log_source_id, entry_index
             )
-
-            # Use per-entry savepoints + bounded deadlock retry so transient
-            # lock cycles do not fail the whole range batch.
-            async def _write_once(entry: NormalizedEntry = normalized) -> None:
-                async with session.begin_nested():
-                    await write_normalized_entry(session, entry)
 
             def _on_retry(
                 attempt: int,
@@ -229,12 +231,14 @@ async def _process_range_batch(
                     exc,
                 )
 
-            await run_with_db_retry(
-                _write_once,
+            retry_accumulator.record_entry_attempt()
+            await persist_entry_with_retry(
+                session,
+                normalized,
                 max_retries=settings.ct_deadlock_max_retries,
                 base_backoff_seconds=settings.ct_deadlock_base_backoff_seconds,
                 max_backoff_seconds=settings.ct_deadlock_max_backoff_seconds,
-                on_retry=_on_retry,
+                on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
             )
             count += 1
         except ParseError as exc:
@@ -257,7 +261,7 @@ async def _process_range_batch(
     metrics.record_entries_fetched(len(response.entries))
     metrics.record_entries_parsed(count)
     metrics.record_certs_upserted(count)
-    return count
+    return count, retry_accumulator.drain()
 
 
 async def _run_one_range(
@@ -267,7 +271,7 @@ async def _run_one_range(
     settings: Settings,
     batch_size: int,
     limit_remaining: int | None,
-) -> tuple[int, str, bool]:
+) -> tuple[int, str, bool, DbContentionObservation]:
     """Process *claimed* range; mark complete or failed.
 
     Returns:
@@ -278,36 +282,37 @@ async def _run_one_range(
         async with session_factory() as session:
             async with session.begin():
                 log_url = await _resolve_log_url(session, claimed)
-                count = await _process_range_batch(
-                    claimed,
-                    log_url,
-                    session,
-                    client,
-                    batch_size,
-                    metrics,
-                    limit_remaining,
-                    settings,
-                )
-                if count > 0:
+            count, observation = await _process_range_batch(
+                claimed,
+                log_url,
+                session,
+                client,
+                batch_size,
+                metrics,
+                limit_remaining,
+                settings,
+            )
+            if count > 0:
+                async with session.begin():
                     await metrics.persist_snapshot(session, claimed.log_source_id)
 
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_complete(session, claimed.id)
 
-        return count, log_url, False
+        return count, log_url, False, observation
     except RateLimitError as exc:
         _logger.warning("rate limited backfill range=%s: %s", claimed.id, exc)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_pending(session, claimed.id)
-        return 0, "", True
+        return 0, "", True, DbContentionObservation(0, 0)
     except FetchError as exc:
         _logger.error("fetch error backfill range=%s: %s", claimed.id, exc)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_failed(session, claimed.id, str(exc))
-        return 0, "", False
+        return 0, "", False, DbContentionObservation(0, 0)
 
 
 async def run_backfill(
@@ -386,6 +391,15 @@ async def run_backfill(
             excluded_log_ids = {
                 lid for lid, until in rate_limited_until.items() if now < until
             }
+            directive = await get_db_contention_directive(
+                session_factory,
+                settings,
+                _batch,
+            )
+            effective_batch = resolve_effective_batch_size(_batch, directive)
+            db_sleep = await sleep_for_db_contention(directive, settings)
+            if db_sleep > 0.0 and on_status is not None:
+                on_status(f"DB contention — pacing {db_sleep:.2f} s")
 
             async with session_factory() as session:
                 async with session.begin():
@@ -415,12 +429,12 @@ async def run_backfill(
                     f"Fetching [{claimed.start_index:,}–{claimed.end_index:,}]"
                     f" ({claimed.end_index - claimed.start_index + 1:,} entries)…"
                 )
-            batch_count, log_url, was_rate_limited = await _run_one_range(
+            batch_count, log_url, was_rate_limited, observation = await _run_one_range(
                 claimed,
                 session_factory,
                 client,
                 settings,
-                _batch,
+                effective_batch,
                 limit_remaining,
             )
             if was_rate_limited:
@@ -439,6 +453,14 @@ async def run_backfill(
                 if once:
                     return
                 continue
+
+            if observation.has_activity:
+                await submit_db_contention_observation(
+                    session_factory,
+                    settings,
+                    observation,
+                    _batch,
+                )
 
             if batch_count == 0 and on_status is not None:
                 on_status("  └ fetch error — range marked failed")

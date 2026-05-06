@@ -20,6 +20,15 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ctpool.config import Settings
+from ctpool.db_contention_accumulator import DbRetryPressureAccumulator
+from ctpool.db_contention_coordinator import (
+    build_db_retry_callback,
+    get_db_contention_directive,
+    resolve_effective_batch_size,
+    sleep_for_db_contention,
+    submit_db_contention_observation,
+)
+from ctpool.db_contention_types import DbContentionObservation
 from ctpool.disk_guard import is_disk_critical, is_disk_low
 from ctpool.dispatcher import (
     advance_tail_cursor,
@@ -28,15 +37,13 @@ from ctpool.dispatcher import (
     reset_tail_cursor,
     try_claim_tail_log,
 )
+from ctpool.entry_persistence import persist_entry_with_retry
 from ctpool.exceptions import FetchError, ParseError, RateLimitError
 from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
 from ctpool.parser import parse_leaf_entry
-from ctpool.pipeline_schemas import NormalizedEntry
-from ctpool.retry import run_with_db_retry
-from ctpool.writer import write_normalized_entry
 
 _logger = logging.getLogger(__name__)
 
@@ -59,7 +66,7 @@ async def _process_log_batch(
     settings: Settings,
     *,
     init_from_end: int = 0,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, DbContentionObservation]:
     """Fetch and write one batch of entries for *log*.
 
     Returns:
@@ -72,9 +79,10 @@ async def _process_log_batch(
     tree_size: int = sth.tree_size
 
     init_index = max(0, tree_size - init_from_end)
-    cursor, was_created = await ensure_tail_cursor(
-        session, log.id, init_index=init_index
-    )
+    async with session.begin():
+        cursor, was_created = await ensure_tail_cursor(
+            session, log.id, init_index=init_index
+        )
     if was_created:
         mode = "recent sample" if init_from_end else "current edge"
         _logger.info(
@@ -87,7 +95,7 @@ async def _process_log_batch(
 
     start = cursor.next_index
     if start >= tree_size:
-        return 0, True
+        return 0, True, DbContentionObservation(0, 0)
 
     batch = batch_size
     if limit_remaining is not None:
@@ -97,20 +105,15 @@ async def _process_log_batch(
     response = await fetch_entries(log.url, start, end, client)
     entries = response.entries
     if not entries:
-        return 0, True
+        return 0, True, DbContentionObservation(0, 0)
 
     count = 0
+    retry_accumulator = DbRetryPressureAccumulator()
     for i, raw_entry in enumerate(entries):
         entry_index = start + i
         try:
             parsed = parse_leaf_entry(raw_entry.leaf_input)
             normalized = build_normalized_entry(parsed, log.id, entry_index)
-
-            # Use per-entry savepoints + bounded deadlock retry so transient
-            # lock cycles do not fail the whole range batch.
-            async def _write_once(entry: NormalizedEntry = normalized) -> None:
-                async with session.begin_nested():
-                    await write_normalized_entry(session, entry)
 
             def _on_retry(
                 attempt: int,
@@ -128,12 +131,14 @@ async def _process_log_batch(
                     exc,
                 )
 
-            await run_with_db_retry(
-                _write_once,
+            retry_accumulator.record_entry_attempt()
+            await persist_entry_with_retry(
+                session,
+                normalized,
                 max_retries=settings.ct_deadlock_max_retries,
                 base_backoff_seconds=settings.ct_deadlock_base_backoff_seconds,
                 max_backoff_seconds=settings.ct_deadlock_max_backoff_seconds,
-                on_retry=_on_retry,
+                on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
             )
             count += 1
         except ParseError as exc:
@@ -153,8 +158,9 @@ async def _process_log_batch(
     metrics.record_certs_upserted(count)
 
     next_index = start + len(entries)
-    await advance_tail_cursor(session, log.id, next_index)
-    return count, False
+    async with session.begin():
+        await advance_tail_cursor(session, log.id, next_index)
+    return count, False, retry_accumulator.drain()
 
 
 async def _tail_one_log(
@@ -167,7 +173,7 @@ async def _tail_one_log(
     batch_size: int,
     limit_remaining: int | None,
     init_from_end: int = 0,
-) -> tuple[int, bool, bool]:
+) -> tuple[int, bool, bool, DbContentionObservation]:
     """Run one tail batch for *log* in its own session/transaction.
 
     Returns:
@@ -176,27 +182,28 @@ async def _tail_one_log(
     async with session_factory() as session:
         async with session.begin():
             if not await try_claim_tail_log(session, log.id):
-                return 0, True, False
-            try:
-                count, is_empty = await _process_log_batch(
-                    log,
-                    session,
-                    client,
-                    batch_size,
-                    metrics,
-                    limit_remaining,
-                    settings=settings,
-                    init_from_end=init_from_end,
-                )
-                if count > 0:
+                return 0, True, False, DbContentionObservation(0, 0)
+        try:
+            count, is_empty, observation = await _process_log_batch(
+                log,
+                session,
+                client,
+                batch_size,
+                metrics,
+                limit_remaining,
+                settings=settings,
+                init_from_end=init_from_end,
+            )
+            if count > 0:
+                async with session.begin():
                     await metrics.persist_snapshot(session, log.id)
-                return count, is_empty, False
-            except RateLimitError as exc:
-                _logger.warning("rate limited tail log=%s: %s", log.id, exc)
-                return 0, True, True
-            except FetchError as exc:
-                _logger.error("fetch error tail log=%s: %s", log.id, exc)
-                return 0, False, False
+            return count, is_empty, False, observation
+        except RateLimitError as exc:
+            _logger.warning("rate limited tail log=%s: %s", log.id, exc)
+            return 0, True, True, DbContentionObservation(0, 0)
+        except FetchError as exc:
+            _logger.error("fetch error tail log=%s: %s", log.id, exc)
+            return 0, False, False, DbContentionObservation(0, 0)
 
 
 async def run_tail(
@@ -278,14 +285,28 @@ async def run_tail(
                 limit_remaining = (
                     (limit - total_processed) if limit is not None else None
                 )
+                directive = await get_db_contention_directive(
+                    session_factory,
+                    settings,
+                    _batch,
+                )
+                effective_batch = resolve_effective_batch_size(_batch, directive)
+                db_sleep = await sleep_for_db_contention(directive, settings)
+                if db_sleep > 0.0 and on_status is not None:
+                    on_status(f"DB contention — pacing {db_sleep:.2f} s")
                 metrics = LogMetricsAccumulator()
-                processed, is_empty, was_rate_limited = await _tail_one_log(
+                (
+                    processed,
+                    is_empty,
+                    was_rate_limited,
+                    observation,
+                ) = await _tail_one_log(
                     log,
                     session_factory,
                     client,
                     metrics,
                     settings=settings,
-                    batch_size=_batch,
+                    batch_size=effective_batch,
                     limit_remaining=limit_remaining,
                     init_from_end=init_from_end,
                 )
@@ -304,6 +325,14 @@ async def run_tail(
                             f"{log.description} — pausing {backoff_seconds} s"
                         )
                     continue
+
+                if observation.has_activity:
+                    await submit_db_contention_observation(
+                        session_factory,
+                        settings,
+                        observation,
+                        _batch,
+                    )
 
                 if processed > 0:
                     rate_limit_hits.pop(log.id, None)

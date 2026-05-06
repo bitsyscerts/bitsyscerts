@@ -32,6 +32,7 @@ def _make_settings(**kwargs: object) -> Settings:
         "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
         "ct_default_batch_size": 2,
         "ct_backfill_days": 180,
+        "ct_db_contention_enabled": False,
     }
     base.update(kwargs)
     return Settings(**base)  # type: ignore[arg-type]

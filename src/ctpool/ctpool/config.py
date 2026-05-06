@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import functools
 
-from pydantic import PostgresDsn
+from pydantic import Field, PostgresDsn, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,7 @@ class Settings(BaseSettings):
 
     # Database — required; no default
     database_url: PostgresDsn
+    database_admin_url: PostgresDsn | None = None
 
     # Ingestion behavior
     ct_backfill_days: int = 180
@@ -39,6 +40,18 @@ class Settings(BaseSettings):
     ct_deadlock_max_retries: int = 3
     ct_deadlock_base_backoff_seconds: float = 0.05
     ct_deadlock_max_backoff_seconds: float = 1.0
+    ct_db_contention_enabled: bool = True
+    ct_db_contention_ema_alpha: float = Field(default=0.25, gt=0.0, le=1.0)
+    ct_db_contention_high_retry_ratio: float = Field(default=0.05, ge=0.0)
+    ct_db_contention_low_retry_ratio: float = Field(default=0.01, ge=0.0)
+    ct_db_contention_recovery_windows: int = Field(default=3, ge=1)
+    ct_db_contention_sleep_step_seconds: float = Field(default=0.25, ge=0.0)
+    ct_db_contention_max_sleep_seconds: float = Field(default=5.0, ge=0.0)
+    ct_db_contention_jitter_fraction: float = Field(default=0.25, ge=0.0, le=1.0)
+    ct_db_contention_min_batch_size: int = Field(default=16, ge=1)
+    ct_db_contention_batch_growth_step: int = Field(default=32, ge=1)
+    ct_db_contention_stale_after_seconds: int = Field(default=120, ge=1)
+    ct_db_contention_enable_batch_cap: bool = True
     ct_rate_limit_backoff_seconds: int = 30
     ct_rate_limit_backoff_max_seconds: int = 300
 
@@ -65,6 +78,31 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def validate_db_contention_settings(self) -> Settings:
+        """Validate cross-field relationships for DB contention controls."""
+        if (
+            self.ct_db_contention_low_retry_ratio
+            > self.ct_db_contention_high_retry_ratio
+        ):
+            raise ValueError(
+                "ct_db_contention_low_retry_ratio must be <= "
+                "ct_db_contention_high_retry_ratio"
+            )
+        if (
+            self.ct_db_contention_max_sleep_seconds
+            < self.ct_db_contention_sleep_step_seconds
+        ):
+            raise ValueError(
+                "ct_db_contention_max_sleep_seconds must be >= "
+                "ct_db_contention_sleep_step_seconds"
+            )
+        if self.ct_db_contention_min_batch_size > self.ct_default_batch_size:
+            raise ValueError(
+                "ct_db_contention_min_batch_size must be <= ct_default_batch_size"
+            )
+        return self
 
 
 @functools.lru_cache(maxsize=1)
