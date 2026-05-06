@@ -39,7 +39,7 @@ export function StatsPanel() {
         </Text>
         <StorageTable
           tables={data.storage.tables}
-          totalPretty={data.storage.total_size_pretty}
+          totalSizeBytes={data.storage.total_size_bytes}
         />
         <Text size="sm" fw={600}>
           CT Logs

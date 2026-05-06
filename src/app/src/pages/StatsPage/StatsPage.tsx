@@ -102,7 +102,7 @@ function StatsContent() {
             </Group>
             <StorageTable
               tables={data.storage.tables}
-              totalPretty={data.storage.total_size_pretty}
+              totalSizeBytes={data.storage.total_size_bytes}
             />
           </Stack>
         </Grid.Col>

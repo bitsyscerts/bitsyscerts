@@ -4,6 +4,7 @@ import {
   truncateFingerprint,
   formatNumber,
   formatPct,
+  formatStorageSize,
   isCertExpired,
 } from "@/utils/format";
 
@@ -71,6 +72,24 @@ describe("formatPct", () => {
     expect(formatPct(0)).toBe("0.0%");
     expect(formatPct(100)).toBe("100.0%");
     expect(formatPct(33.333)).toBe("33.3%");
+  });
+});
+
+describe("formatStorageSize", () => {
+  it("returns em-dash for nullish input", () => {
+    expect(formatStorageSize(null)).toBe("—");
+    expect(formatStorageSize(undefined)).toBe("—");
+  });
+
+  it("uses binary units and one decimal for KB/MB/GB", () => {
+    expect(formatStorageSize(1024)).toBe("1.0 KB");
+    expect(formatStorageSize(1024 ** 2)).toBe("1.0 MB");
+    expect(formatStorageSize(1024 ** 3)).toBe("1.0 GB");
+  });
+
+  it("uses two decimals for TB and above", () => {
+    const onePointThreeThreeTb = Math.round(1.33 * 1024 ** 4);
+    expect(formatStorageSize(onePointThreeThreeTb)).toBe("1.33 TB");
   });
 });
 

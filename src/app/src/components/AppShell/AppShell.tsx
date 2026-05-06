@@ -1,6 +1,7 @@
 import { AppShell as MantineAppShell, Box } from "@mantine/core";
 import type { ReactNode } from "react";
 import { AppHeader } from "./AppHeader";
+import { AppFooter } from "./AppFooter";
 import { BottomNav } from "./BottomNav";
 
 interface AppShellProps {
@@ -16,9 +17,10 @@ export function AppShell({ children }: AppShellProps) {
     <MantineAppShell header={{ height: 60 }} padding="md">
       <AppHeader />
       <MantineAppShell.Main>
-        {/* pb prevents content hiding behind the mobile bottom nav */}
-        <Box pb={{ base: 60, sm: 0 }}>{children}</Box>
+        {/* pb prevents content hiding behind sticky footer + mobile bottom nav */}
+        <Box pb={{ base: 104, sm: 44 }}>{children}</Box>
       </MantineAppShell.Main>
+      <AppFooter />
       <BottomNav />
     </MantineAppShell>
   );
