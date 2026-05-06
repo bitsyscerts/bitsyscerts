@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+import certsapi.database as database_module
+import certsapi.root.router as root_router_module
 from certsapi.app import create_app
 from certsapi.config import Settings
 
@@ -27,6 +29,18 @@ _TEST_DB_URL = "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
 _UNIT_TEST_SETTINGS = Settings.model_validate(
     {"database_url": "postgresql+psycopg://localhost/test"}
 )
+
+
+@pytest.fixture(autouse=True)
+def _patch_settings_imports(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch direct get_settings imports used by request-path dependencies.
+
+    Some runtime paths (DB dependency and root index route) call module-level
+    imports of ``get_settings`` directly, bypassing create_app(...). This keeps
+    unit tests independent from DATABASE_URL in the environment.
+    """
+    monkeypatch.setattr(database_module, "get_settings", lambda: _UNIT_TEST_SETTINGS)
+    monkeypatch.setattr(root_router_module, "get_settings", lambda: _UNIT_TEST_SETTINGS)
 
 
 @pytest_asyncio.fixture(scope="session")
