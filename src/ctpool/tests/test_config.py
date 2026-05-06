@@ -112,3 +112,28 @@ def test_invalid_db_contention_threshold_order_raises_validation_error() -> None
                 "ct_db_contention_high_retry_ratio": 0.1,
             }
         )
+
+
+def test_small_batch_size_is_allowed_when_contention_control_is_disabled() -> None:
+    """Tiny worker test batch sizes remain valid when shared control is off."""
+    settings = Settings.model_validate(
+        {
+            "database_url": "postgresql+psycopg://u:p@localhost:5432/db",
+            "ct_default_batch_size": 2,
+            "ct_db_contention_enabled": False,
+        }
+    )
+
+    assert settings.ct_default_batch_size == 2
+
+
+def test_small_batch_size_is_rejected_when_contention_control_is_enabled() -> None:
+    """Shared contention control still requires a min batch <= default batch."""
+    with pytest.raises(ValidationError):
+        Settings.model_validate(
+            {
+                "database_url": "postgresql+psycopg://u:p@localhost:5432/db",
+                "ct_default_batch_size": 2,
+                "ct_db_contention_enabled": True,
+            }
+        )

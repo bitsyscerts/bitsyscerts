@@ -98,7 +98,10 @@ class Settings(BaseSettings):
                 "ct_db_contention_max_sleep_seconds must be >= "
                 "ct_db_contention_sleep_step_seconds"
             )
-        if self.ct_db_contention_min_batch_size > self.ct_default_batch_size:
+        if (
+            self.ct_db_contention_enabled
+            and self.ct_db_contention_min_batch_size > self.ct_default_batch_size
+        ):
             raise ValueError(
                 "ct_db_contention_min_batch_size must be <= ct_default_batch_size"
             )

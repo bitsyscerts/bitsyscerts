@@ -31,6 +31,7 @@ def _make_settings(**kwargs: object) -> Settings:
     base = {
         "database_url": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
         "ct_default_batch_size": 2,
+        "ct_db_contention_min_batch_size": 1,
         "ct_db_contention_enabled": False,
         "ct_min_free_disk_gb": 1,
         "ct_critical_free_disk_gb": 0,

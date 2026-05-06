@@ -78,6 +78,22 @@ jobs:
   test-ctpool:
     name: "Test · ctpool"
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: ctpool_test
+          POSTGRES_USER: ctpool
+          POSTGRES_PASSWORD: ctpool
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ctpool -d ctpool_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test
     defaults:
       run:
         working-directory: src/ctpool
