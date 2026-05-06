@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { StorageProjectionCard } from "@/components/StatsPanel/StorageProjectionCard";
 import type { StorageProjection } from "@/types";
 import { AllProviders } from "../AllProviders";
@@ -42,8 +41,7 @@ function makeProjection(
 }
 
 describe("StorageProjectionCard", () => {
-  it("renders available projection metrics and expands details on demand", async () => {
-    const user = userEvent.setup();
+  it("renders available projection metrics and expands details on demand", () => {
     render(
       <AllProviders>
         <StorageProjectionCard projection={makeProjection()} />
@@ -57,7 +55,7 @@ describe("StorageProjectionCard", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Projected range/i)).not.toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: /show details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /show details/i }));
 
     expect(screen.getByText(/Projected range/i)).toBeVisible();
     expect(
