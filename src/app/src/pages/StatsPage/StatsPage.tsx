@@ -21,7 +21,7 @@ import { useStats } from "@/hooks/useStats";
 import { useLogFilter } from "@/hooks/useLogFilter";
 import type { LogStatsItem } from "@/types";
 
-const WATCH_INTERVAL = 15_000;
+const WATCH_INTERVAL = 1_000;
 const DEFAULT_INTERVAL = 60_000;
 
 interface LogsSectionProps {
@@ -66,7 +66,7 @@ function LogsSection({ logs }: LogsSectionProps) {
  * persistent client-side filter.
  */
 function StatsContent() {
-  const [watching, setWatching] = useState(false);
+  const [watching, setWatching] = useState(true);
   const { data, isLoading, isError } = useStats(
     watching ? WATCH_INTERVAL : DEFAULT_INTERVAL,
   );
@@ -101,7 +101,7 @@ function StatsContent() {
                 <Text size="sm" fw={600}>
                   Database Storage
                 </Text>
-                <Tooltip label="Refresh every 15 s" position="left" withArrow>
+                <Tooltip label="Refresh every 1 s" position="left" withArrow>
                   <Checkbox
                     label="Watch"
                     size="xs"

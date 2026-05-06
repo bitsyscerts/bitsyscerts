@@ -11,5 +11,9 @@ export function useStats(refetchInterval = 60_000) {
     queryKey: STATS_QUERY_KEYS.stats(),
     queryFn: getStats,
     refetchInterval,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchOnMount: "always",
   });
 }

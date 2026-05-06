@@ -86,6 +86,7 @@ describe("StatsPage with data", () => {
     );
     expect(screen.getByText("Storage Projection")).toBeInTheDocument();
     expect(screen.getByText("Database Storage")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /watch/i })).toBeChecked();
     expect(screen.getAllByText("CT Logs").length).toBeGreaterThan(0);
   });
 
