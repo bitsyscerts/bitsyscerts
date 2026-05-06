@@ -9,6 +9,8 @@ export { DEFAULT_HOSTNAME_SEARCH_PARAMS, SORT_FIELD_LABELS } from "./hostnames";
 export type { CertificateResponse } from "./certificates";
 export type {
   LogStatsItem,
+  StorageProjection,
+  StorageProjectionStatus,
   StorageStats,
   StatsResponse,
   TableStorageItem,

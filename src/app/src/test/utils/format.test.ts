@@ -1,9 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   formatDate,
+  formatCompactNumber,
+  formatObservationDensity,
   truncateFingerprint,
   formatNumber,
   formatPct,
+  formatRatioPct,
   formatStorageSize,
   isCertExpired,
 } from "@/utils/format";
@@ -58,6 +61,13 @@ describe("formatNumber", () => {
   });
 });
 
+describe("formatCompactNumber", () => {
+  it("formats large values compactly", () => {
+    expect(formatCompactNumber(6_300_000)).toBe("6.3M");
+    expect(formatCompactNumber(4_800_000_000)).toBe("4.8B");
+  });
+});
+
 describe("formatPct", () => {
   it("returns em-dash for null", () => {
     expect(formatPct(null)).toBe("—");
@@ -72,6 +82,19 @@ describe("formatPct", () => {
     expect(formatPct(0)).toBe("0.0%");
     expect(formatPct(100)).toBe("100.0%");
     expect(formatPct(33.333)).toBe("33.3%");
+  });
+});
+
+describe("formatRatioPct", () => {
+  it("returns em-dash for nullish values", () => {
+    expect(formatRatioPct(null)).toBe("—");
+    expect(formatRatioPct(undefined)).toBe("—");
+  });
+
+  it("formats ratios as percentages", () => {
+    expect(formatRatioPct(0.423)).toBe("42.3%");
+    expect(formatRatioPct(0.001)).toBe("0.1%");
+    expect(formatRatioPct(0.0009)).toBe("<0.1%");
   });
 });
 
@@ -90,6 +113,12 @@ describe("formatStorageSize", () => {
   it("uses two decimals for TB and above", () => {
     const onePointThreeThreeTb = Math.round(1.33 * 1024 ** 4);
     expect(formatStorageSize(onePointThreeThreeTb)).toBe("1.33 TB");
+  });
+});
+
+describe("formatObservationDensity", () => {
+  it("appends the observation suffix", () => {
+    expect(formatObservationDensity(1_252.44)).toBe("1.2 KB / observation");
   });
 });
 

@@ -50,7 +50,7 @@ export function StatsSummary({
   totalLogs,
 }: StatsSummaryProps) {
   return (
-    <SimpleGrid cols={{ base: 3, sm: 1 }} spacing="md">
+    <SimpleGrid cols={1} spacing="md">
       <StatCard
         icon={<IconServer size={18} />}
         label="Hostnames"

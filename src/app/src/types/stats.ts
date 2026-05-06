@@ -23,10 +23,44 @@ export interface StorageStats {
   tables: TableStorageItem[];
 }
 
+export type StorageProjectionStatus =
+  | "available"
+  | "insufficient_backfill_plan"
+  | "insufficient_observations";
+
+export interface StorageProjection {
+  status: StorageProjectionStatus;
+  database_size_bytes: number;
+  ct_observations_count: number;
+  certificates_count: number;
+  hostnames_count: number;
+  certificate_hostnames_count: number;
+  planned_observations_total: number;
+  planned_observations_completed: number;
+  planned_observations_remaining: number;
+  sync_percent_by_observation: number | null;
+  bytes_per_observation_current: number | null;
+  projected_remaining_database_size_bytes: number | null;
+  projected_final_database_size_bytes: number | null;
+  storage_percent_of_projected: number | null;
+  projection_low_bytes: number | null;
+  projection_current_bytes: number | null;
+  projection_high_bytes: number | null;
+  disk_total_bytes: number | null;
+  disk_used_bytes: number | null;
+  disk_free_bytes: number | null;
+  disk_free_percent: number | null;
+  configured_min_free_disk_bytes: number | null;
+  projected_disk_free_after_sync_bytes: number | null;
+  projected_fits_on_disk: boolean | null;
+  notes: string[];
+}
+
 export interface StatsResponse {
   total_hostnames: number;
   total_certificates: number;
   total_logs: number;
   storage: StorageStats;
+  storage_projection: StorageProjection;
   logs: LogStatsItem[];
 }

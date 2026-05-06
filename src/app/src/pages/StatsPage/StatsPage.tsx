@@ -11,6 +11,7 @@ import {
 } from "@mantine/core";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
+import { StorageProjectionCard } from "@/components/StatsPanel/StorageProjectionCard";
 import { StatsSummary } from "@/components/StatsPanel/StatsSummary";
 import { StorageTable } from "@/components/StatsPanel/StorageTable";
 import { LogStatsList } from "@/components/StatsPanel/LogStatsList";
@@ -20,7 +21,7 @@ import { useStats } from "@/hooks/useStats";
 import { useLogFilter } from "@/hooks/useLogFilter";
 import type { LogStatsItem } from "@/types";
 
-const WATCH_INTERVAL = 1_000;
+const WATCH_INTERVAL = 15_000;
 const DEFAULT_INTERVAL = 60_000;
 
 interface LogsSectionProps {
@@ -65,7 +66,7 @@ function LogsSection({ logs }: LogsSectionProps) {
  * persistent client-side filter.
  */
 function StatsContent() {
-  const [watching, setWatching] = useState(true);
+  const [watching, setWatching] = useState(false);
   const { data, isLoading, isError } = useStats(
     watching ? WATCH_INTERVAL : DEFAULT_INTERVAL,
   );
@@ -82,41 +83,44 @@ function StatsContent() {
 
   return (
     <Stack gap="lg">
-      <Grid gutter="lg" align="stretch">
-        <Grid.Col span={{ base: 12, sm: 3 }}>
-          <Stack justify="center" h="100%">
+      <Grid gutter="lg" align="flex-start">
+        <Grid.Col span={{ base: 12, md: 4, lg: 3 }}>
+          <Stack>
             <StatsSummary
               totalHostnames={data.total_hostnames}
               totalCertificates={data.total_certificates}
               totalLogs={data.total_logs}
             />
+            <StorageProjectionCard projection={data.storage_projection} />
           </Stack>
         </Grid.Col>
-        <Grid.Col span={{ base: 12, sm: 9 }}>
-          <Stack gap="sm">
-            <Group justify="space-between" align="center">
-              <Text size="sm" fw={600}>
-                Database Storage
-              </Text>
-              <Tooltip label="Refresh every 1 s" position="left" withArrow>
-                <Checkbox
-                  label="Watch"
-                  size="xs"
-                  checked={watching}
-                  onChange={(e) => {
-                    setWatching(e.currentTarget.checked);
-                  }}
-                />
-              </Tooltip>
-            </Group>
-            <StorageTable
-              tables={data.storage.tables}
-              totalSizeBytes={data.storage.total_size_bytes}
-            />
+        <Grid.Col span={{ base: 12, md: 8, lg: 9 }}>
+          <Stack gap="lg">
+            <Stack gap="sm">
+              <Group justify="space-between" align="center">
+                <Text size="sm" fw={600}>
+                  Database Storage
+                </Text>
+                <Tooltip label="Refresh every 15 s" position="left" withArrow>
+                  <Checkbox
+                    label="Watch"
+                    size="xs"
+                    checked={watching}
+                    onChange={(e) => {
+                      setWatching(e.currentTarget.checked);
+                    }}
+                  />
+                </Tooltip>
+              </Group>
+              <StorageTable
+                tables={data.storage.tables}
+                totalSizeBytes={data.storage.total_size_bytes}
+              />
+            </Stack>
+            <LogsSection logs={data.logs} />
           </Stack>
         </Grid.Col>
       </Grid>
-      <LogsSection logs={data.logs} />
     </Stack>
   );
 }

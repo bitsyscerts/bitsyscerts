@@ -1,4 +1,4 @@
-import { Group, Skeleton, Stack } from "@mantine/core";
+import { Skeleton, Stack } from "@mantine/core";
 
 /**
  * Skeleton layout matching the shape of StatsSummary + StorageTable for
@@ -7,12 +7,13 @@ import { Group, Skeleton, Stack } from "@mantine/core";
 export function StatsPanelSkeleton() {
   return (
     <Stack gap="md">
-      <Group grow wrap="wrap">
+      <Stack gap="md">
         <Skeleton height={72} radius="md" />
         <Skeleton height={72} radius="md" />
         <Skeleton height={72} radius="md" />
-      </Group>
-      <Skeleton height={120} radius="md" />
+        <Skeleton height={220} radius="md" />
+      </Stack>
+      <Skeleton height={280} radius="md" />
     </Stack>
   );
 }

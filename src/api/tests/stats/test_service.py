@@ -57,7 +57,19 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
     repo.total_hostnames.return_value = overrides.get("total_hostnames", 0)
     repo.total_certificates.return_value = overrides.get("total_certificates", 0)
     repo.total_logs.return_value = overrides.get("total_logs", 0)
+    repo.total_ct_observations.return_value = overrides.get("total_ct_observations", 0)
+    repo.total_certificate_hostnames.return_value = overrides.get(
+        "total_certificate_hostnames",
+        0,
+    )
     repo.per_log_stats.return_value = overrides.get("per_log_stats", [])
+    repo.backfill_observation_progress.return_value = overrides.get(
+        "backfill_observation_progress",
+        {
+            "planned_observations_total": 0,
+            "planned_observations_completed": 0,
+        },
+    )
     repo.db_storage.return_value = overrides.get("db_storage", _make_storage_data())
     return repo
 
@@ -116,3 +128,48 @@ class TestStatsService:
         assert len(result.storage.tables) == 1
         assert result.storage.tables[0].table_name == "hostnames"
         assert result.storage.tables[0].size_pretty == "512 kB"
+
+    async def test_storage_projection_available(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "certsapi.stats.service.read_disk_safety_snapshot",
+            lambda: None,
+        )
+        repo = _repo_with_defaults(
+            total_hostnames=25,
+            total_certificates=10,
+            total_ct_observations=100,
+            total_certificate_hostnames=30,
+            backfill_observation_progress={
+                "planned_observations_total": 1_000,
+                "planned_observations_completed": 250,
+            },
+            db_storage=_make_storage_data(total_bytes=10_000, pretty="10 KB"),
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.storage_projection.status == "available"
+        assert result.storage_projection.bytes_per_observation_current == pytest.approx(
+            100.0
+        )
+        assert (
+            result.storage_projection.projected_remaining_database_size_bytes == 75_000
+        )
+        assert result.storage_projection.projected_final_database_size_bytes == 85_000
+        assert result.storage_projection.sync_percent_by_observation == pytest.approx(
+            0.25
+        )
+
+    async def test_storage_projection_unavailable_without_backfill_plan(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "certsapi.stats.service.read_disk_safety_snapshot",
+            lambda: None,
+        )
+        repo = _repo_with_defaults(total_ct_observations=100)
+        result = await StatsService(repo).get_stats()
+        assert result.storage_projection.status == "insufficient_backfill_plan"
+        assert result.storage_projection.sync_percent_by_observation is None

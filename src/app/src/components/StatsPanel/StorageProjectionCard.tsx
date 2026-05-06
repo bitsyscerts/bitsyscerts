@@ -1,0 +1,195 @@
+import { useState } from "react";
+import {
+  Alert,
+  Badge,
+  Button,
+  Collapse,
+  Group,
+  Paper,
+  RingProgress,
+  SimpleGrid,
+  Stack,
+  Text,
+} from "@mantine/core";
+import { IconAlertTriangle } from "@tabler/icons-react";
+import type { StorageProjection } from "@/types";
+import {
+  formatCompactNumber,
+  formatObservationDensity,
+  formatRatioPct,
+  formatStorageSize,
+} from "@/utils/format";
+
+interface StorageProjectionCardProps {
+  projection: StorageProjection;
+}
+
+interface DetailItemProps {
+  label: string;
+  value: string;
+}
+
+function DetailItem({ label, value }: DetailItemProps) {
+  return (
+    <Stack gap={2}>
+      <Text size="xs" c="dimmed">
+        {label}
+      </Text>
+      <Text size="sm" fw={500}>
+        {value}
+      </Text>
+    </Stack>
+  );
+}
+
+function warningMessage(projection: StorageProjection): string | null {
+  if (projection.status !== "available") return null;
+  if (projection.projected_fits_on_disk !== false) return null;
+  return (
+    projection.notes.find((note) => note.includes("disk")) ??
+    "Projected size may exceed available disk space."
+  );
+}
+
+function unavailableMessage(projection: StorageProjection): string {
+  return (
+    projection.notes[0] ??
+    "Storage projection unavailable. Backfill ranges or observation counts are not available yet."
+  );
+}
+
+export function StorageProjectionCard({
+  projection,
+}: StorageProjectionCardProps) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const warning = warningMessage(projection);
+  const storageValue = (projection.storage_percent_of_projected ?? 0) * 100;
+
+  return (
+    <Paper withBorder radius="md" p="md">
+      <Stack gap="md">
+        <Group justify="space-between" align="flex-start">
+          <Stack gap={2}>
+            <Text size="sm" fw={600}>
+              Storage Projection
+            </Text>
+            <Text size="xs" c="dimmed">
+              Storage used vs projected
+            </Text>
+          </Stack>
+          <Badge variant="light" color="gray">
+            Estimate
+          </Badge>
+        </Group>
+
+        {projection.status === "available" ? (
+          <Stack gap="md">
+            <Group align="center" gap="md" wrap="wrap">
+              <RingProgress
+                size={132}
+                thickness={14}
+                roundCaps
+                rootColor="gray.3"
+                sections={[
+                  {
+                    value: Math.min(storageValue, 100),
+                    color: warning ? "orange" : "teal",
+                  },
+                ]}
+                label={
+                  <Stack gap={0} align="center">
+                    <Text fw={700} size="lg">
+                      {formatRatioPct(projection.storage_percent_of_projected)}
+                    </Text>
+                    <Text size="xs" c="dimmed">
+                      used
+                    </Text>
+                  </Stack>
+                }
+              />
+              <Stack gap={4} maw={280}>
+                <Text size="sm" fw={600}>
+                  {formatStorageSize(projection.database_size_bytes)} used of ~
+                  {formatStorageSize(
+                    projection.projected_final_database_size_bytes,
+                  )}{" "}
+                  projected
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {formatRatioPct(projection.storage_percent_of_projected)} of
+                  projected storage
+                </Text>
+                <Text size="sm" fw={600}>
+                  Sync estimate
+                </Text>
+                <Text size="sm">
+                  {formatRatioPct(projection.sync_percent_by_observation)} of
+                  planned CT observations processed
+                </Text>
+                <Text size="sm" c="dimmed">
+                  {formatCompactNumber(
+                    projection.planned_observations_completed,
+                  )}{" "}
+                  / {formatCompactNumber(projection.planned_observations_total)}{" "}
+                  observations
+                </Text>
+              </Stack>
+            </Group>
+
+            <Button
+              variant="subtle"
+              color="gray"
+              size="compact-sm"
+              px={0}
+              justify="flex-start"
+              onClick={() => {
+                setDetailsOpen((open) => !open);
+              }}
+            >
+              {detailsOpen ? "Hide details" : "Show details"}
+            </Button>
+
+            <Collapse in={detailsOpen}>
+              <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="sm">
+                <DetailItem
+                  label="Projected range"
+                  value={`${formatStorageSize(projection.projection_low_bytes)} - ${formatStorageSize(projection.projection_high_bytes)}`}
+                />
+                <DetailItem
+                  label="Current density"
+                  value={formatObservationDensity(
+                    projection.bytes_per_observation_current,
+                  )}
+                />
+                <DetailItem
+                  label="Disk free now"
+                  value={formatStorageSize(projection.disk_free_bytes)}
+                />
+                <DetailItem
+                  label="Projected free after"
+                  value={formatStorageSize(
+                    projection.projected_disk_free_after_sync_bytes,
+                  )}
+                />
+              </SimpleGrid>
+            </Collapse>
+          </Stack>
+        ) : (
+          <Alert color="gray" variant="light">
+            {unavailableMessage(projection)}
+          </Alert>
+        )}
+
+        {warning ? (
+          <Alert
+            icon={<IconAlertTriangle size={16} />}
+            color="orange"
+            variant="light"
+          >
+            {warning}
+          </Alert>
+        ) : null}
+      </Stack>
+    </Paper>
+  );
+}

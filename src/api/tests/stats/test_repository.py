@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from ctpool.models import CtLogBackfillRange, CtLogTailCursor
+from ctpool.models import CtLogBackfillRange, CtLogObservation, CtLogTailCursor
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from certsapi.stats.repository import StatsRepository
@@ -37,6 +38,13 @@ async def session_with_data(db_session: AsyncSession) -> AsyncSession:
     c = make_certificate()
     db_session.add_all([h, c])
     await db_session.flush()
+
+    observation = CtLogObservation(
+        log_source_id=log.id,
+        log_index=0,
+        certificate_id=c.id,
+    )
+    db_session.add(observation)
 
     br = CtLogBackfillRange(
         log_source_id=log.id,
@@ -123,3 +131,30 @@ class TestStatsRepository:
         rows = await repo.per_log_stats()
         row = rows[0]
         assert row["tail_position"] == 1000
+
+    async def test_total_ct_observations_reflects_seeded_count(
+        self, session_with_data: AsyncSession
+    ) -> None:
+        repo = StatsRepository(session_with_data)
+        count = await repo.total_ct_observations()
+        assert count == 1
+
+    async def test_backfill_observation_progress_counts_partial_ranges(
+        self, session_with_data: AsyncSession
+    ) -> None:
+        rows = await session_with_data.execute(select(CtLogBackfillRange.log_source_id))
+        log_source_id = rows.scalar_one()
+        session_with_data.add(
+            CtLogBackfillRange(
+                log_source_id=log_source_id,
+                start_index=1000,
+                end_index=1999,
+                next_index=1500,
+                status="in_progress",
+            )
+        )
+        await session_with_data.flush()
+        repo = StatsRepository(session_with_data)
+        progress = await repo.backfill_observation_progress()
+        assert progress["planned_observations_total"] == 2000
+        assert progress["planned_observations_completed"] == 1500
