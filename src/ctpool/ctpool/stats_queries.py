@@ -280,14 +280,15 @@ async def query_log_stats(
             ls.url,
             ls.log_state,
             lrs.tree_size       AS tail_position,
-            lrs.last_fetched_at AS last_tail_sync,
+            ltc.updated_at      AS last_tail_sync,
             COUNT(lbr.id)       AS total_ranges,
             COUNT(lbr.id) FILTER (WHERE lbr.status = 'complete') AS complete_ranges
         FROM ct_log_sources ls
         LEFT JOIN ct_log_runtime_state lrs ON lrs.log_source_id = ls.id
+        LEFT JOIN ct_log_tail_cursors ltc ON ltc.log_source_id = ls.id
         LEFT JOIN ct_log_backfill_ranges lbr ON lbr.log_source_id = ls.id
         GROUP BY ls.id, ls.description, ls.url, ls.log_state,
-                 lrs.tree_size, lrs.last_fetched_at
+                 lrs.tree_size, ltc.updated_at
         ORDER BY ls.description
     """)
     result = await session.execute(stmt)
