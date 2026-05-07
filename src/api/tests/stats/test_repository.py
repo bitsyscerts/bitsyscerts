@@ -229,3 +229,40 @@ class TestStatsRepository:
         assert counts["error"] == 1
         assert counts["warning"] == 1
         assert counts["info"] == 0
+
+    async def test_tail_freshness_never_synced_cursors_counted_as_stale(
+        self, empty_session: AsyncSession
+    ) -> None:
+        """Cursors with updated_at IS NULL must count as stale, not fresh."""
+        log = make_log_source()
+        empty_session.add(log)
+        await empty_session.flush()
+        # Deliberately omit updated_at so it is NULL (freshly seeded cursor)
+        cursor = CtLogTailCursor(log_source_id=log.id, next_index=0)
+        empty_session.add(cursor)
+        await empty_session.flush()
+
+        repo = StatsRepository(empty_session)
+        row = await repo.tail_freshness_summary(stale_threshold_seconds=300)
+        assert int(row["stale_log_count"]) == 1
+
+    async def test_tail_freshness_synced_fresh_cursor_not_stale(
+        self, empty_session: AsyncSession
+    ) -> None:
+        """A cursor updated within the threshold window is not stale."""
+        from datetime import UTC, datetime
+
+        log = make_log_source()
+        empty_session.add(log)
+        await empty_session.flush()
+        cursor = CtLogTailCursor(
+            log_source_id=log.id,
+            next_index=100,
+            updated_at=datetime.now(UTC),
+        )
+        empty_session.add(cursor)
+        await empty_session.flush()
+
+        repo = StatsRepository(empty_session)
+        row = await repo.tail_freshness_summary(stale_threshold_seconds=300)
+        assert int(row["stale_log_count"]) == 0

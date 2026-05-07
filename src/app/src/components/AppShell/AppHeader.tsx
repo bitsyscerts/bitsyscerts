@@ -5,7 +5,7 @@ import {
   Group,
   Tabs,
 } from "@mantine/core";
-import { IconServer, IconCertificate, IconChartBar } from "@tabler/icons-react";
+import { IconServer, IconCertificate, IconSettings } from "@tabler/icons-react";
 import { Logo } from "@/components/Logo/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle/ThemeToggle";
 import { usePageContext, type ActivePage } from "@/context/PageContext";
@@ -18,7 +18,11 @@ const NAV_ITEMS: { value: ActivePage; label: string; icon: React.ReactNode }[] =
       label: "Certificates",
       icon: <IconCertificate size={15} />,
     },
-    { value: "stats", label: "Stats", icon: <IconChartBar size={15} /> },
+    {
+      value: "settings",
+      label: "Settings",
+      icon: <IconSettings size={15} />,
+    },
   ];
 
 /**

@@ -1,18 +1,20 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 
-export type ActivePage = "hosts" | "certificates" | "stats";
+export type ActivePage = "dashboard" | "hosts" | "certificates" | "settings";
 
 const PAGE_ROUTES: Record<ActivePage, string> = {
+  dashboard: "/",
   hosts: "/hosts",
   certificates: "/certificates",
-  stats: "/stats",
+  settings: "/settings",
 };
 
 function locationToPage(pathname: string): ActivePage {
+  if (pathname.startsWith("/hosts")) return "hosts";
   if (pathname.startsWith("/certificates")) return "certificates";
-  if (pathname.startsWith("/stats")) return "stats";
-  return "hosts";
+  if (pathname.startsWith("/settings")) return "settings";
+  return "dashboard";
 }
 
 interface PageContextValue {

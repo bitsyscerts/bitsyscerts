@@ -27,7 +27,7 @@ describe("PageContext", () => {
     const { result } = renderHook(() => usePageContext(), { wrapper });
     expect(() => {
       act(() => {
-        result.current.setActivePage("stats");
+        result.current.setActivePage("dashboard");
       });
     }).not.toThrow();
   });

@@ -216,7 +216,11 @@ class StatsRepository:
         self,
         stale_threshold_seconds: int = 300,
     ) -> RowMapping:
-        """Return oldest lag, median lag, and stale count across all tail cursors."""
+        """Return oldest lag, median lag, and stale count across all tail cursors.
+
+        Cursors with ``updated_at IS NULL`` (created but never processed by a
+        tail worker) are counted as stale — they are not fresh by definition.
+        """
         stmt = text("""
             SELECT
                 MAX(
@@ -226,7 +230,8 @@ class StatsRepository:
                     ORDER BY EXTRACT(EPOCH FROM (now() - updated_at))
                 )::int AS median_lag_seconds,
                 COUNT(*) FILTER (
-                    WHERE EXTRACT(EPOCH FROM (now() - updated_at))
+                    WHERE updated_at IS NULL
+                       OR EXTRACT(EPOCH FROM (now() - updated_at))
                           > :threshold
                 ) AS stale_log_count
             FROM ct_log_tail_cursors

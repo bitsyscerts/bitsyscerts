@@ -2,7 +2,7 @@ import { Box, Group, Stack, Text, UnstyledButton } from "@mantine/core";
 import {
   IconServer,
   IconCertificate,
-  IconChartBar,
+  IconSettings,
   type Icon as TablerIcon,
 } from "@tabler/icons-react";
 import { usePageContext, type ActivePage } from "@/context/PageContext";
@@ -10,7 +10,7 @@ import { usePageContext, type ActivePage } from "@/context/PageContext";
 const NAV_ITEMS: { value: ActivePage; label: string; Icon: TablerIcon }[] = [
   { value: "hosts", label: "Hosts", Icon: IconServer },
   { value: "certificates", label: "Certificates", Icon: IconCertificate },
-  { value: "stats", label: "Stats", Icon: IconChartBar },
+  { value: "settings", label: "Settings", Icon: IconSettings },
 ];
 
 /**

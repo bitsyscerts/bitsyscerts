@@ -92,7 +92,7 @@ describe("navigation components smoke tests", () => {
       </AppShellWrapper>,
     );
     expect(getByText("Hosts")).toBeInTheDocument();
-    expect(getByText("Stats")).toBeInTheDocument();
+    expect(getByText("Settings")).toBeInTheDocument();
   });
 
   it("BottomNav shows nav items", () => {
@@ -103,6 +103,6 @@ describe("navigation components smoke tests", () => {
     );
     expect(getByLabelText("Hosts")).toBeInTheDocument();
     expect(getByLabelText("Certificates")).toBeInTheDocument();
-    expect(getByLabelText("Stats")).toBeInTheDocument();
+    expect(getByLabelText("Settings")).toBeInTheDocument();
   });
 });

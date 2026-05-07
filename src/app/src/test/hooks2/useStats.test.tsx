@@ -33,7 +33,7 @@ describe("useStats", () => {
     expect(mockUseQuery).toHaveBeenCalledWith(
       expect.objectContaining({
         refetchInterval: 5_000,
-        refetchIntervalInBackground: true,
+        refetchIntervalInBackground: false,
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
         refetchOnMount: "always",

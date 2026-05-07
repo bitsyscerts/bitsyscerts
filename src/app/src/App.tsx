@@ -14,7 +14,8 @@ import { CertStateProvider } from "./context/CertStateContext";
 import { AppShell } from "./components/AppShell/AppShell";
 import { HostsPage } from "./pages/SearchPage/SearchPage";
 import { CertificatesPage } from "./pages/CertificatesPage/CertificatesPage";
-import { StatsPage } from "./pages/StatsPage/StatsPage";
+import { DashboardPage } from "./pages/DashboardPage/DashboardPage";
+import { SettingsPage } from "./pages/SettingsPage/SettingsPage";
 import { NotFoundPage } from "./pages/NotFoundPage/NotFoundPage";
 import { theme } from "./theme";
 
@@ -55,16 +56,17 @@ export function App() {
                 <PageProvider>
                   <AppShell>
                     <Routes>
-                      <Route
-                        path="/"
-                        element={<Navigate to="/hosts" replace />}
-                      />
+                      <Route path="/" element={<DashboardPage />} />
                       <Route path="/hosts" element={<HostsPage />} />
                       <Route
                         path="/certificates"
                         element={<CertificatesPage />}
                       />
-                      <Route path="/stats" element={<StatsPage />} />
+                      <Route
+                        path="/stats"
+                        element={<Navigate to="/" replace />}
+                      />
+                      <Route path="/settings" element={<SettingsPage />} />
                       <Route path="*" element={<NotFoundPage />} />
                     </Routes>
                   </AppShell>

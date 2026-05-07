@@ -1,14 +1,17 @@
-import { Box, Button, Divider } from "@mantine/core";
+import { Box, Button, Divider, Group } from "@mantine/core";
 import { IconChevronLeft } from "@tabler/icons-react";
+import type { ReactNode } from "react";
 
 interface DrawerFooterProps {
   onBack: () => void;
+  rightSection?: ReactNode;
 }
 
 /**
- * Sticky drawer footer with a single "← Back" button at the bottom-left.
+ * Sticky drawer footer with "← Back" on the left and an optional action on
+ * the right (e.g. a save button).
  */
-export function DrawerFooter({ onBack }: DrawerFooterProps) {
+export function DrawerFooter({ onBack, rightSection }: DrawerFooterProps) {
   return (
     <Box
       style={{
@@ -19,7 +22,7 @@ export function DrawerFooter({ onBack }: DrawerFooterProps) {
       }}
     >
       <Divider />
-      <Box p="md" pt="xs">
+      <Group p="md" pt="xs" justify="space-between">
         <Button
           variant="subtle"
           leftSection={<IconChevronLeft size={14} />}
@@ -28,7 +31,8 @@ export function DrawerFooter({ onBack }: DrawerFooterProps) {
         >
           Back
         </Button>
-      </Box>
+        {rightSection}
+      </Group>
     </Box>
   );
 }

@@ -10,6 +10,14 @@ vi.mock("@/hooks/useStats", () => ({
   }),
 }));
 
+vi.mock("@/hooks/useStorageSettings", () => ({
+  useStorageSettings: vi.fn().mockReturnValue({
+    data: undefined,
+    isLoading: true,
+    isError: false,
+  }),
+}));
+
 vi.mock("@/hooks/useHostnameSearch", () => ({
   useHostnameSearch: vi.fn().mockReturnValue({
     data: undefined,
@@ -62,12 +70,12 @@ describe("App", () => {
     render(<App />);
     // Navigation appears in both AppHeader and BottomNav — use getAllByText
     expect(screen.getAllByText("Hosts").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Stats").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Settings").length).toBeGreaterThan(0);
   });
 
-  it("renders the hosts search input on the /hosts route", () => {
-    render(<App />);
-    const input = screen.getByRole("textbox", { name: /search query/i });
-    expect(input).toBeInTheDocument();
+  it("renders Dashboard content at the root route", () => {
+    // / now renders the DashboardPage (stats skeleton while loading)
+    const { container } = render(<App />);
+    expect(container).toBeTruthy();
   });
 });

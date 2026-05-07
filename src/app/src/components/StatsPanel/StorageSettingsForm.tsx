@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   Alert,
-  Button,
   Checkbox,
   NumberInput,
   Select,
@@ -101,6 +100,7 @@ function buildInitialValues(
 }
 
 export interface StorageSettingsFormProps {
+  formId: string;
   currentSettings?: StorageProfileSettings | null;
   onSuccess: () => void;
   onSubmit: (values: UpdateStorageSettingsRequest) => Promise<void>;
@@ -109,9 +109,10 @@ export interface StorageSettingsFormProps {
 }
 
 export function StorageSettingsForm({
+  formId,
   currentSettings,
   onSubmit,
-  isSubmitting,
+  isSubmitting: _isSubmitting,
   submitError,
 }: StorageSettingsFormProps) {
   const [values, setValues] = useState<FormValues>(() =>
@@ -119,6 +120,7 @@ export function StorageSettingsForm({
   );
 
   const selectedProfile = values.storage_profile;
+  const isCustom = selectedProfile === "custom";
 
   // Auto-fill defaults when a non-custom profile is selected
   useEffect(() => {
@@ -145,6 +147,7 @@ export function StorageSettingsForm({
 
   return (
     <form
+      id={formId}
       onSubmit={(e) => {
         void handleSubmit(e);
       }}
@@ -162,6 +165,7 @@ export function StorageSettingsForm({
           label="Certificate storage mode"
           data={CERT_MODE_OPTIONS}
           value={values.cert_storage_mode}
+          disabled={!isCustom}
           onChange={(v) => {
             handleChange("cert_storage_mode", v ?? "none");
           }}
@@ -170,6 +174,7 @@ export function StorageSettingsForm({
           label="Hostname retention mode"
           data={HOSTNAME_RETENTION_OPTIONS}
           value={values.hostname_retention_mode}
+          disabled={!isCustom}
           onChange={(v) => {
             handleChange("hostname_retention_mode", v ?? "forever");
           }}
@@ -178,6 +183,7 @@ export function StorageSettingsForm({
           label="Backfill days"
           description="0 = unlimited"
           min={0}
+          disabled={!isCustom}
           value={values.backfill_days}
           onChange={(v) => {
             handleChange("backfill_days", typeof v === "number" ? v : 0);
@@ -186,6 +192,7 @@ export function StorageSettingsForm({
         <NumberInput
           label="Certificate retention (days)"
           min={0}
+          disabled={!isCustom}
           value={values.cert_retention_days}
           onChange={(v) => {
             handleChange("cert_retention_days", typeof v === "number" ? v : 0);
@@ -194,6 +201,7 @@ export function StorageSettingsForm({
         <NumberInput
           label="Observation retention (days)"
           min={0}
+          disabled={!isCustom}
           value={values.observation_retention_days}
           onChange={(v) => {
             handleChange(
@@ -205,6 +213,7 @@ export function StorageSettingsForm({
         <NumberInput
           label="Entry outcome retention (days)"
           min={0}
+          disabled={!isCustom}
           value={values.entry_outcome_retention_days}
           onChange={(v) => {
             handleChange(
@@ -216,6 +225,7 @@ export function StorageSettingsForm({
         <NumberInput
           label="Metrics retention (days)"
           min={1}
+          disabled={!isCustom}
           value={values.metrics_retention_days}
           onChange={(v) => {
             handleChange(
@@ -258,10 +268,6 @@ export function StorageSettingsForm({
             {submitError}
           </Alert>
         ) : null}
-
-        <Button type="submit" loading={isSubmitting} fullWidth mt="sm">
-          Save Settings
-        </Button>
       </Stack>
     </form>
   );
