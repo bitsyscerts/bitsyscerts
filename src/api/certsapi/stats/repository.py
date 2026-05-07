@@ -112,14 +112,15 @@ class StatsRepository:
         from ctpool.models.stats_snapshot import CtStatsSnapshot
 
         try:
-            stmt = (
-                select(CtStatsSnapshot)
-                .where(CtStatsSnapshot.snapshot_type == snapshot_type)
-                .order_by(CtStatsSnapshot.generated_at.desc())
-                .limit(1)
-            )
-            result = await self._session.execute(stmt)
-            row = result.scalar_one_or_none()
+            async with self._session.begin_nested():
+                stmt = (
+                    select(CtStatsSnapshot)
+                    .where(CtStatsSnapshot.snapshot_type == snapshot_type)
+                    .order_by(CtStatsSnapshot.generated_at.desc())
+                    .limit(1)
+                )
+                result = await self._session.execute(stmt)
+                row = result.scalar_one_or_none()
         except Exception:
             return None
         if row is None:
@@ -143,14 +144,15 @@ class StatsRepository:
         from ctpool.models.stats_snapshot import CtStatsSnapshot
 
         try:
-            stmt = (
-                select(CtStatsSnapshot.generated_at)
-                .where(CtStatsSnapshot.snapshot_type == snapshot_type)
-                .order_by(CtStatsSnapshot.generated_at.desc())
-                .limit(1)
-            )
-            result = await self._session.execute(stmt)
-            generated_at = result.scalar_one_or_none()
+            async with self._session.begin_nested():
+                stmt = (
+                    select(CtStatsSnapshot.generated_at)
+                    .where(CtStatsSnapshot.snapshot_type == snapshot_type)
+                    .order_by(CtStatsSnapshot.generated_at.desc())
+                    .limit(1)
+                )
+                result = await self._session.execute(stmt)
+                generated_at = result.scalar_one_or_none()
         except Exception:
             return None
         if generated_at is None:
