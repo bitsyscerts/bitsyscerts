@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
-from certsapi.stats.models import StorageProjection
+from certsapi.stats.models import StorageProjection, StorageProjectionCategoryBreakdown
+
+if TYPE_CHECKING:
+    from ctpool.models.instance_settings import CtInstanceSettings
 
 _BYTES_PER_GIB = 1024**3
 _PROGRESS_STATUSES = frozenset({"claimed", "in_progress", "partial", "running"})
@@ -51,8 +54,13 @@ def progress_statuses() -> tuple[str, ...]:
 def compute_storage_projection(
     inputs: ProjectionInputs,
     disk_snapshot: DiskSnapshot | None = None,
+    active_settings: "CtInstanceSettings | None" = None,
 ) -> StorageProjection:
-    """Build a conservative storage projection from current counts."""
+    """Build a conservative storage projection from current counts.
+
+    When ``active_settings`` is provided, also runs the profile-aware
+    category-estimate projection and includes the breakdown in the response.
+    """
 
     completed = _clamp_completed(
         inputs.planned_observations_completed,
@@ -60,11 +68,13 @@ def compute_storage_projection(
     )
     remaining = max(inputs.planned_observations_total - completed, 0)
     base = _projection_base(inputs, completed, remaining)
+    profile_fields = _profile_aware_fields(inputs, active_settings)
     if inputs.planned_observations_total <= 0:
         return _unavailable_projection(
             "insufficient_backfill_plan",
             base,
             "Storage projection unavailable. Backfill ranges are not available yet.",
+            profile_fields,
         )
     if inputs.ct_observations_count <= 0:
         return _unavailable_projection(
@@ -74,8 +84,56 @@ def compute_storage_projection(
                 "Storage projection unavailable. Observation counts are not "
                 "available yet."
             ),
+            profile_fields,
         )
-    return _available_projection(inputs, completed, remaining, base, disk_snapshot)
+    return _available_projection(
+        inputs, completed, remaining, base, disk_snapshot, profile_fields
+    )
+
+
+def _profile_aware_fields(
+    inputs: ProjectionInputs,
+    active_settings: "CtInstanceSettings | None",
+) -> dict[str, object]:
+    """Return profile_basis, profile, and category_breakdown fields.
+
+    Returns an empty dict if no active_settings are provided.
+    """
+    if active_settings is None:
+        return {}
+    try:
+        from ctpool.profile_projection import compute_profile_aware_projection
+
+        result = compute_profile_aware_projection(
+            profile=active_settings.storage_profile,
+            cert_storage_mode=active_settings.cert_storage_mode,
+            hostname_count=inputs.hostnames_count,
+            cert_count=inputs.certificates_count,
+            obs_count=inputs.ct_observations_count,
+            cert_hostname_count=inputs.certificate_hostnames_count,
+            backfill_days=active_settings.backfill_days,
+            cert_retention_days=active_settings.cert_retention_days,
+            observation_retention_days=active_settings.observation_retention_days,
+            entry_outcome_retention_days=active_settings.entry_outcome_retention_days,
+        )
+        breakdown = StorageProjectionCategoryBreakdown(
+            hostname_index_bytes=result.hostname_index_bytes,
+            certificate_metadata_bytes=result.certificate_metadata_bytes,
+            certificate_public_key_bytes=result.certificate_public_key_bytes,
+            raw_cert_der_bytes=result.raw_cert_der_bytes,
+            ct_observations_bytes=result.ct_observations_bytes,
+            entry_outcomes_bytes=result.entry_outcomes_bytes,
+            cert_hostname_relationships_bytes=result.cert_hostname_relationships_bytes,
+            metrics_and_ops_bytes=result.metrics_and_ops_bytes,
+            index_overhead_bytes=result.index_overhead_bytes,
+        )
+        return {
+            "projection_basis": "profile_aware_category_estimate",
+            "profile": result.profile,
+            "category_breakdown": breakdown,
+        }
+    except Exception:  # pragma: no cover — defensive; never fails in prod
+        return {}
 
 
 def read_disk_safety_snapshot() -> DiskSnapshot | None:
@@ -125,11 +183,13 @@ def _unavailable_projection(
     status: ProjectionStatus,
     base: dict[str, int],
     note: str,
+    profile_fields: dict[str, object] | None = None,
 ) -> StorageProjection:
     """Return a projection payload when required inputs are unavailable."""
 
     payload: dict[str, object] = {
         **base,
+        **(profile_fields or {}),
         "status": status,
         "sync_percent_by_observation": None,
         "bytes_per_observation_current": None,
@@ -150,6 +210,7 @@ def _available_projection(
     remaining: int,
     base: dict[str, int],
     disk_snapshot: DiskSnapshot | None,
+    profile_fields: dict[str, object] | None = None,
 ) -> StorageProjection:
     """Return a projection payload when planning and observation counts exist."""
 
@@ -172,6 +233,7 @@ def _available_projection(
     payload: dict[str, object] = {
         **base,
         **disk_fields,
+        **(profile_fields or {}),
         "status": "available",
         "sync_percent_by_observation": completed / inputs.planned_observations_total,
         "bytes_per_observation_current": bytes_per_observation,

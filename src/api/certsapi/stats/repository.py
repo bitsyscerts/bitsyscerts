@@ -27,6 +27,7 @@ from ctpool.models.certificate_hostname import CertificateHostname
 from ctpool.models.entry_outcome import CtEntryOutcome
 from ctpool.models.hostname import Hostname
 from ctpool.models.ingestion_metric import IngestionMetric
+from ctpool.models.instance_settings import CtInstanceSettings
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
@@ -84,6 +85,15 @@ class StatsRepository:
             select(func.count()).select_from(CertificateHostname)
         )
         return int(result.scalar_one())
+
+    async def get_active_instance_settings(self) -> CtInstanceSettings | None:
+        """Return the most-recently-updated instance settings row, or None."""
+        result = await self._session.execute(
+            select(CtInstanceSettings)
+            .order_by(CtInstanceSettings.updated_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def db_storage(self) -> RowMapping:
         """Return total DB size and per-table sizes using pg_* system functions."""

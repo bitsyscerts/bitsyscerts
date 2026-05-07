@@ -149,6 +149,10 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
         "audit_health_counts",
         {"critical": 0, "error": 0, "warning": 0, "info": 0},
     )
+    repo.get_active_instance_settings.return_value = overrides.get(
+        "active_instance_settings",
+        None,
+    )
     repo._ctpool_settings = None
     return repo
 

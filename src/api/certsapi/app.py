@@ -12,6 +12,7 @@ from certsapi.health.router import health_router
 from certsapi.hostnames.exceptions import InvalidCursorError, InvalidQueryError
 from certsapi.hostnames.router import hostname_router
 from certsapi.root.router import root_router
+from certsapi.settings.router import settings_router
 from certsapi.stats.router import stats_router
 
 
@@ -54,6 +55,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(certificate_router)
     app.include_router(health_router)
     app.include_router(stats_router)
+    app.include_router(settings_router)
     app.include_router(root_router)
 
     # Scalar interactive docs at /docs

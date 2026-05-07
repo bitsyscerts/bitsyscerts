@@ -29,8 +29,23 @@ export type StorageProjectionStatus =
   | "insufficient_backfill_plan"
   | "insufficient_observations";
 
+export interface StorageProjectionCategoryBreakdown {
+  hostname_index_bytes: number | null;
+  certificate_metadata_bytes: number | null;
+  certificate_public_key_bytes: number | null;
+  raw_cert_der_bytes: number | null;
+  ct_observations_bytes: number | null;
+  entry_outcomes_bytes: number | null;
+  cert_hostname_relationships_bytes: number | null;
+  metrics_and_ops_bytes: number | null;
+  index_overhead_bytes: number | null;
+}
+
 export interface StorageProjection {
   status: StorageProjectionStatus;
+  projection_basis?: string | null;
+  profile?: string | null;
+  category_breakdown?: StorageProjectionCategoryBreakdown | null;
   database_size_bytes: number;
   ct_observations_count: number;
   certificates_count: number;
@@ -136,8 +151,22 @@ export interface AuditHealth {
   status: AuditHealthStatus;
 }
 
+export interface StorageProfileSettings {
+  storage_profile: string;
+  cert_storage_mode: string;
+  hostname_retention_mode: string;
+  backfill_days: number;
+  cert_retention_days: number;
+  observation_retention_days: number;
+  entry_outcome_retention_days: number;
+  metrics_retention_days: number;
+  settings_hash: string;
+  source: "database" | "bootstrap_default" | "none";
+}
+
 export interface StatsResponse {
   total_hostnames: number;
+  storage_profile: StorageProfileSettings | null;
   total_certificates: number;
   total_logs: number;
   storage: StorageStats;

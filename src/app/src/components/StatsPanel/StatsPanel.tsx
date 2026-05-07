@@ -4,6 +4,7 @@ import { useStats } from "@/hooks/useStats";
 import { AuditHealthCard } from "./AuditHealthCard";
 import { BackfillRangesCard } from "./BackfillRangesCard";
 import { StatsSummary } from "./StatsSummary";
+import { StorageProfileCard } from "./StorageProfileCard";
 import { StorageTable } from "./StorageTable";
 import { LogStatsList } from "./LogStatsList";
 import { StatsPanelSkeleton } from "./StatsPanelSkeleton";
@@ -44,6 +45,7 @@ export function StatsPanel() {
         {data.audit_health && (
           <AuditHealthCard auditHealth={data.audit_health} />
         )}
+        <StorageProfileCard storageProfile={data.storage_profile} />
         <Text size="sm" fw={600}>
           Database Storage
         </Text>

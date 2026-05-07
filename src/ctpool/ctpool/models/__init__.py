@@ -3,7 +3,7 @@
 Domain coverage: ct_log_sources, ct_log_runtime_state, ct_log_tail_cursors,
 ct_log_backfill_ranges, ct_log_observations, ct_entry_outcomes, certificates,
 hostnames, certificate_hostnames, ingestion_metrics, ingestion_errors,
-ct_db_contention_state, ct_audit_findings.
+ct_db_contention_state, ct_audit_findings, ct_instance_settings.
 """
 
 from ctpool.models.audit_finding import CtAuditFinding
@@ -15,6 +15,7 @@ from ctpool.models.entry_outcome import CtEntryOutcome
 from ctpool.models.hostname import Hostname
 from ctpool.models.ingestion_error import IngestionError
 from ctpool.models.ingestion_metric import IngestionMetric
+from ctpool.models.instance_settings import CtInstanceSettings
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_runtime_state import CtLogRuntimeState
 from ctpool.models.log_source import CtLogSource
@@ -28,6 +29,7 @@ __all__ = [
     "CtAuditFinding",
     "CtDbContentionState",
     "CtEntryOutcome",
+    "CtInstanceSettings",
     "CtLogBackfillRange",
     "CtLogObservation",
     "CtLogRuntimeState",

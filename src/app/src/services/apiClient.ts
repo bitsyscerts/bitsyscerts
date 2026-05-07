@@ -46,3 +46,29 @@ export async function apiFetch<T>(
 
   return response.json() as Promise<T>;
 }
+
+export async function apiMutate<T>(
+  path: string,
+  body: unknown,
+  method: "PUT" | "POST" = "PUT",
+): Promise<T> {
+  const url = new URL(buildUrl(path), window.location.origin);
+
+  const response = await fetch(url.toString(), {
+    method,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      `API error ${String(response.status)}: ${response.statusText}`,
+    );
+  }
+
+  return response.json() as Promise<T>;
+}

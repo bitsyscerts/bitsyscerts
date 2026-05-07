@@ -17,6 +17,7 @@ from certsapi.stats.models import (
     LogStatsItem,
     MetricsRetentionStats,
     StatsResponse,
+    StorageProfileSettings,
     StorageStats,
     TableStorageItem,
     TailFreshnessStats,
@@ -177,6 +178,7 @@ class StatsService:
                 for row in storage_data["tables"]
             ],
         )
+        active_settings = await self._repository.get_active_instance_settings()
         storage_projection = compute_storage_projection(
             ProjectionInputs(
                 database_size_bytes=total_size_bytes,
@@ -190,9 +192,12 @@ class StatsService:
                 ),
             ),
             disk_snapshot=read_disk_safety_snapshot(),
+            active_settings=active_settings,
         )
+        storage_profile_block = _build_storage_profile_block(active_settings)
         return StatsResponse(
             total_hostnames=total_h,
+            storage_profile=storage_profile_block,
             total_certificates=total_c,
             total_logs=total_l,
             storage=storage,
@@ -238,3 +243,23 @@ class StatsService:
             audit_health=_build_audit_health(audit_counts),
             logs=[_row_to_log_item(row, now) for row in per_log],
         )
+
+
+def _build_storage_profile_block(
+    active_settings: object,
+) -> StorageProfileSettings | None:
+    """Convert an active settings row to StorageProfileSettings or None."""
+    if active_settings is None:
+        return None
+    return StorageProfileSettings(
+        storage_profile=active_settings.storage_profile,  # type: ignore[union-attr]
+        cert_storage_mode=active_settings.cert_storage_mode,  # type: ignore[union-attr]
+        hostname_retention_mode=active_settings.hostname_retention_mode,  # type: ignore[union-attr]
+        backfill_days=active_settings.backfill_days,  # type: ignore[union-attr]
+        cert_retention_days=active_settings.cert_retention_days,  # type: ignore[union-attr]
+        observation_retention_days=active_settings.observation_retention_days,  # type: ignore[union-attr]
+        entry_outcome_retention_days=active_settings.entry_outcome_retention_days,  # type: ignore[union-attr]
+        metrics_retention_days=active_settings.metrics_retention_days,  # type: ignore[union-attr]
+        settings_hash=active_settings.settings_hash,  # type: ignore[union-attr]
+        source="database",
+    )

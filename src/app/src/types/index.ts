@@ -20,5 +20,11 @@ export type {
   TableStorageItem,
   TailFreshnessStats,
 } from "./stats";
+export type {
+  StorageSettingsHistoryItem,
+  StorageSettingsResponse,
+  UpdateStorageSettingsRequest,
+  UpdateStorageSettingsResult,
+} from "./settings";
 
 export type SearchMode = "hostnames" | "certificates";

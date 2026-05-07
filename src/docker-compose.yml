@@ -56,6 +56,8 @@ services:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     command: ["certsapi", "serve", "--workers", "2"]
+    env_file:
+      - .env
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CT_DB_CONTENTION_ENABLED: "${CT_DB_CONTENTION_ENABLED:-true}"
@@ -87,6 +89,8 @@ services:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: on-failure
     command: ["ctpool", "backfill"]
+    env_file:
+      - .env
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CT_BACKFILL_DAYS: "${CT_BACKFILL_DAYS:-180}"
@@ -114,6 +118,8 @@ services:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: on-failure
     command: ["ctpool", "tail"]
+    env_file:
+      - .env
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CT_TAIL_INTERVAL_SECONDS: "${CT_TAIL_INTERVAL_SECONDS:-300}"

@@ -12,6 +12,7 @@ Command groups:
     cli_audit_commands    — check-audit-gaps, fix-audit-findings, doctor
     cli_prune_commands    — prune-metrics, prune-expired-certs
     cli_storage_commands  — storage-profile
+    cli_settings_commands — profile show, profile list
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import ctpool.cli_db_commands as _db
 import ctpool.cli_ingestion_commands as _ingestion
 import ctpool.cli_prune_commands as _prune
 import ctpool.cli_storage_commands as _storage
+from ctpool.cli_settings_commands import profile_app
 
 app = typer.Typer(name="ctpool", no_args_is_help=True, add_completion=False)
 
@@ -31,3 +33,4 @@ _ingestion.register(app)
 _audit.register(app)
 _prune.register(app)
 _storage.register(app)
+app.add_typer(profile_app)

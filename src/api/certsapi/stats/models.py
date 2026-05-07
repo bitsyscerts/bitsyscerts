@@ -39,6 +39,20 @@ class StorageStats(BaseModel):
     tables: list[TableStorageItem]
 
 
+class StorageProjectionCategoryBreakdown(BaseModel):
+    """Per-category byte estimates from the profile-aware projection."""
+
+    hostname_index_bytes: int | None = None
+    certificate_metadata_bytes: int | None = None
+    certificate_public_key_bytes: int | None = None
+    raw_cert_der_bytes: int | None = None
+    ct_observations_bytes: int | None = None
+    entry_outcomes_bytes: int | None = None
+    cert_hostname_relationships_bytes: int | None = None
+    metrics_and_ops_bytes: int | None = None
+    index_overhead_bytes: int | None = None
+
+
 class StorageProjection(BaseModel):
     """Estimated sync progress and projected database storage usage."""
 
@@ -47,6 +61,9 @@ class StorageProjection(BaseModel):
         "insufficient_backfill_plan",
         "insufficient_observations",
     ]
+    projection_basis: str | None = None
+    profile: str | None = None
+    category_breakdown: StorageProjectionCategoryBreakdown | None = None
     database_size_bytes: int
     ct_observations_count: int
     certificates_count: int
@@ -165,10 +182,26 @@ class MetricsRetentionStats(BaseModel):
     metrics_retention_days: int
 
 
+class StorageProfileSettings(BaseModel):
+    """Active instance storage settings embedded in stats responses."""
+
+    storage_profile: str
+    cert_storage_mode: str
+    hostname_retention_mode: str
+    backfill_days: int
+    cert_retention_days: int
+    observation_retention_days: int
+    entry_outcome_retention_days: int
+    metrics_retention_days: int
+    settings_hash: str
+    source: Literal["database", "bootstrap_default", "none"]
+
+
 class StatsResponse(BaseModel):
     """Global ingestion statistics."""
 
     total_hostnames: int
+    storage_profile: StorageProfileSettings | None = None
     total_certificates: int
     total_logs: int
     storage: StorageStats
