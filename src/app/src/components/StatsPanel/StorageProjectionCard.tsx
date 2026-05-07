@@ -12,6 +12,10 @@ import {
   Text,
 } from "@mantine/core";
 import { IconAlertTriangle } from "@tabler/icons-react";
+import { BackfillWorkloadSection } from "@/components/StatsPanel/BackfillWorkloadSection";
+import { ProfileBadge } from "@/components/StatsPanel/ProfileBadge";
+import { ProjectionConfidenceBadge } from "@/components/StatsPanel/ProjectionConfidenceBadge";
+import { RetainedStorageSection } from "@/components/StatsPanel/RetainedStorageSection";
 import type { StorageProjection } from "@/types";
 import {
   formatCompactNumber,
@@ -77,9 +81,13 @@ export function StorageProjectionCard({
               Storage used vs projected
             </Text>
           </Stack>
-          <Badge variant="light" color="gray">
-            Estimate
-          </Badge>
+          <Group gap="xs">
+            <ProfileBadge profile={projection.profile} />
+            <ProjectionConfidenceBadge confidence={projection.confidence} />
+            <Badge variant="light" color="gray">
+              Estimate
+            </Badge>
+          </Group>
         </Group>
 
         {projection.status === "available" ? (
@@ -108,31 +116,30 @@ export function StorageProjectionCard({
                 }
               />
               <Stack gap={4} maw={280}>
-                <Text size="sm" fw={600}>
-                  {formatStorageSize(projection.database_size_bytes)} used of ~
-                  {formatStorageSize(
-                    projection.projected_final_database_size_bytes,
-                  )}{" "}
-                  projected
-                </Text>
-                <Text size="sm" c="dimmed">
-                  {formatRatioPct(projection.storage_percent_of_projected)} of
-                  projected storage
-                </Text>
-                <Text size="sm" fw={600}>
-                  Sync estimate
-                </Text>
-                <Text size="sm">
-                  {formatRatioPct(projection.sync_percent_by_observation)} of
-                  planned CT observations processed
-                </Text>
-                <Text size="sm" c="dimmed">
-                  {formatCompactNumber(
-                    projection.planned_observations_completed,
-                  )}{" "}
-                  / {formatCompactNumber(projection.planned_observations_total)}{" "}
-                  observations
-                </Text>
+                <RetainedStorageSection projection={projection} />
+                {projection.ingestion_workload != null ? (
+                  <BackfillWorkloadSection
+                    workload={projection.ingestion_workload}
+                  />
+                ) : (
+                  <>
+                    <Text size="sm" fw={600}>
+                      Sync estimate
+                    </Text>
+                    <Text size="sm">
+                      {formatRatioPct(projection.sync_percent_by_observation)}{" "}
+                      of planned CT observations processed
+                    </Text>
+                    <Text size="sm" c="dimmed">
+                      {formatCompactNumber(
+                        projection.planned_observations_completed,
+                      )}{" "}
+                      /{" "}
+                      {formatCompactNumber(projection.planned_observations_total)}{" "}
+                      observations
+                    </Text>
+                  </>
+                )}
               </Stack>
             </Group>
 

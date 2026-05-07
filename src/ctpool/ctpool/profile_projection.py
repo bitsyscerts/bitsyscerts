@@ -17,6 +17,7 @@ Exports:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from ctpool.storage_modes import CertStorageMode, StorageProfile
 
@@ -48,6 +49,14 @@ _LEGACY_BYTES_PER_OBS: dict[CertStorageMode, tuple[int, int]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Confidence thresholds (observation count)
+# ---------------------------------------------------------------------------
+
+_CONFIDENCE_MEDIUM_THRESHOLD = 1_000_000
+_CONFIDENCE_HIGH_THRESHOLD = 100_000_000
+
+
 @dataclass(frozen=True)
 class ProfileAwareProjectionResult:
     """Profile-driven storage size estimate broken down by category."""
@@ -64,12 +73,35 @@ class ProfileAwareProjectionResult:
     metrics_and_ops_bytes: int
     index_overhead_bytes: int
     projected_total_bytes: int
+    # Additional breakdown fields
+    latest_cert_summary_on_hostnames_bytes: int = 0
+    backfill_ranges_bytes: int = 0
+    audit_maintenance_bytes: int = 0
     notes: list[str] = field(default_factory=list)
 
     @property
     def projected_total_gb(self) -> float:
         """Projected total in GiB."""
         return self.projected_total_bytes / 1_073_741_824
+
+
+def compute_projection_confidence(
+    obs_count: int,
+) -> Literal["low", "medium", "high"]:
+    """Classify projection confidence based on observed entry count.
+
+    Args:
+        obs_count: Number of CT log observations ingested.
+
+    Returns:
+        ``'low'`` below 1 M observations, ``'medium'`` up to 100 M,
+        ``'high'`` above 100 M.
+    """
+    if obs_count < _CONFIDENCE_MEDIUM_THRESHOLD:
+        return "low"
+    if obs_count < _CONFIDENCE_HIGH_THRESHOLD:
+        return "medium"
+    return "high"
 
 
 def _retention_multiplier(retention_days: int) -> float:

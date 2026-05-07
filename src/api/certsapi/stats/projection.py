@@ -1,4 +1,10 @@
-"""Projection helpers for estimated CT sync progress and storage growth."""
+"""Projection helpers for estimated CT sync progress and storage growth.
+
+# NOTE (201-500 line warning zone): This module consolidates all projection
+# computation paths in one place.  The profile-aware path and the linear
+# fallback path are closely coupled.  Splitting them would require passing
+# profile results between modules.  Resolve if either path exceeds 100 lines.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +14,11 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
-from certsapi.stats.models import StorageProjection, StorageProjectionCategoryBreakdown
+from certsapi.stats.models import (
+    IngestionWorkload,
+    StorageProjection,
+    StorageProjectionCategoryBreakdown,
+)
 
 if TYPE_CHECKING:
     from ctpool.models.instance_settings import CtInstanceSettings
@@ -131,6 +141,7 @@ def _profile_aware_fields(
             "projection_basis": "profile_aware_category_estimate",
             "profile": result.profile,
             "category_breakdown": breakdown,
+            "_profile_total_bytes": result.projected_total_bytes,
         }
     except Exception:  # pragma: no cover — defensive; never fails in prod
         return {}
@@ -189,7 +200,7 @@ def _unavailable_projection(
 
     payload: dict[str, object] = {
         **base,
-        **(profile_fields or {}),
+        **{k: v for k, v in (profile_fields or {}).items() if not k.startswith("_")},
         "status": status,
         "sync_percent_by_observation": None,
         "bytes_per_observation_current": None,
@@ -215,8 +226,29 @@ def _available_projection(
     """Return a projection payload when planning and observation counts exist."""
 
     bytes_per_observation = inputs.database_size_bytes / inputs.ct_observations_count
-    projected_remaining = int(round(remaining * bytes_per_observation))
-    projected_final = inputs.database_size_bytes + projected_remaining
+
+    # Use profile-aware projected retained total when available, so Lite mode
+    # does not report a 25+ TB projection based on all future CT observations.
+    profile_total = (
+        profile_fields.get("_profile_total_bytes") if profile_fields else None
+    )
+    if profile_total is not None:
+        projected_remaining = max(int(profile_total) - inputs.database_size_bytes, 0)
+        projected_final = int(profile_total)
+        try:
+            from ctpool.profile_projection import compute_projection_confidence
+
+            confidence: object = compute_projection_confidence(
+                inputs.ct_observations_count
+            )
+        except ImportError:  # pragma: no cover
+            confidence = None
+    else:
+        projected_remaining = int(round(remaining * bytes_per_observation))
+        projected_final = inputs.database_size_bytes + projected_remaining
+        confidence = None
+
+    ingestion_workload = _build_ingestion_workload(inputs, completed, remaining)
     notes = [
         (
             "Projection is based on current bytes per CT observation and "
@@ -233,8 +265,10 @@ def _available_projection(
     payload: dict[str, object] = {
         **base,
         **disk_fields,
-        **(profile_fields or {}),
+        **{k: v for k, v in (profile_fields or {}).items() if not k.startswith("_")},
         "status": "available",
+        "confidence": confidence,
+        "ingestion_workload": ingestion_workload,
         "sync_percent_by_observation": completed / inputs.planned_observations_total,
         "bytes_per_observation_current": bytes_per_observation,
         "projected_remaining_database_size_bytes": projected_remaining,
@@ -250,6 +284,31 @@ def _available_projection(
         "notes": notes,
     }
     return StorageProjection.model_validate(payload)
+
+
+def _build_ingestion_workload(
+    inputs: ProjectionInputs,
+    completed: int,
+    remaining: int,
+) -> IngestionWorkload:
+    """Build an IngestionWorkload summary from projection inputs.
+
+    Args:
+        inputs: Current projection counter snapshot.
+        completed: Clamped planned observations completed count.
+        remaining: Planned observations remaining.
+
+    Returns:
+        An :class:`~certsapi.stats.models.IngestionWorkload` instance.
+    """
+    total = inputs.planned_observations_total
+    sync_pct = (completed / total) if total > 0 else None
+    return IngestionWorkload(
+        planned_observations_total=total,
+        planned_observations_completed=completed,
+        planned_observations_remaining=remaining,
+        sync_percent=sync_pct,
+    )
 
 
 def _disk_projection_fields(

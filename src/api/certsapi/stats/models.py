@@ -1,4 +1,10 @@
-"""Pydantic models for the ingestion statistics endpoint."""
+"""Pydantic models for the ingestion statistics endpoint.
+
+# NOTE (201-500 line warning zone): This module consolidates all stats response
+# models in one file.  Splitting by concern would create many small files with
+# no reuse — e.g. StorageProjection requires StorageProjectionCategoryBreakdown
+# inline.  Resolve by extracting if any model group exceeds 10+ fields.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,8 @@ from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+ProjectionConfidence = Literal["low", "medium", "high"]
 
 
 class LogStatsItem(BaseModel):
@@ -53,6 +61,16 @@ class StorageProjectionCategoryBreakdown(BaseModel):
     index_overhead_bytes: int | None = None
 
 
+class IngestionWorkload(BaseModel):
+    """Observed vs planned observation counts for the current backfill workload."""
+
+    planned_observations_total: int
+    planned_observations_completed: int
+    planned_observations_remaining: int
+    sync_percent: float | None
+    eta_seconds: int | None = None
+
+
 class StorageProjection(BaseModel):
     """Estimated sync progress and projected database storage usage."""
 
@@ -80,6 +98,8 @@ class StorageProjection(BaseModel):
     projection_low_bytes: int | None
     projection_current_bytes: int | None
     projection_high_bytes: int | None
+    confidence: ProjectionConfidence | None = None
+    ingestion_workload: IngestionWorkload | None = None
     disk_total_bytes: int | None = None
     disk_used_bytes: int | None = None
     disk_free_bytes: int | None = None

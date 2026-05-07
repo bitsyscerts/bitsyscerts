@@ -209,17 +209,6 @@ def register(app: typer.Typer) -> None:
             )
         )
 
-    @app.command("stats")
-    def stats(
-        watch: Annotated[
-            bool, typer.Option("--watch", help="Refresh every 5 seconds.")
-        ] = False,
-    ) -> None:
-        """Display per-log ingestion statistics."""
-        from ctpool._cli_ops_impl import run_stats
-
-        asyncio.run(run_stats(watch=watch, console=_console))
-
     @app.command("logs-follow")
     def logs_follow(
         level: Annotated[

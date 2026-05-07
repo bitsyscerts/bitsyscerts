@@ -29,6 +29,16 @@ export type StorageProjectionStatus =
   | "insufficient_backfill_plan"
   | "insufficient_observations";
 
+export type ProjectionConfidence = "low" | "medium" | "high";
+
+export interface IngestionWorkload {
+  planned_observations_total: number;
+  planned_observations_completed: number;
+  planned_observations_remaining: number;
+  sync_percent: number | null;
+  eta_seconds?: number | null;
+}
+
 export interface StorageProjectionCategoryBreakdown {
   hostname_index_bytes: number | null;
   certificate_metadata_bytes: number | null;
@@ -43,6 +53,8 @@ export interface StorageProjectionCategoryBreakdown {
 
 export interface StorageProjection {
   status: StorageProjectionStatus;
+  confidence?: ProjectionConfidence | null;
+  ingestion_workload?: IngestionWorkload | null;
   projection_basis?: string | null;
   profile?: string | null;
   category_breakdown?: StorageProjectionCategoryBreakdown | null;

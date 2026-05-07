@@ -7,12 +7,14 @@
 # Then deploy with:  ./src/deploy.sh
 #
 # Services:
-#   postgres   — PostgreSQL 17 (omit if using an external managed DB)
-#   migrate    — one-shot schema migration/bootstrap service
-#   api        — certsapi HTTP server (internal, port 8000)
-#   frontend   — Nginx serving the React SPA; proxies /v1/* → api (port 80)
-#   backfill   — ctpool backfill worker (long-running)
-#   tail       — ctpool tail worker    (long-running)
+#   postgres    — PostgreSQL 17 (omit if using an external managed DB)
+#   migrate     — one-shot schema migration/bootstrap service
+#   api         — certsapi HTTP server (internal, port 8000)
+#   frontend    — Nginx serving the React SPA; proxies /v1/* → api (port 80)
+#   backfill    — ctpool backfill worker (long-running)
+#   tail        — ctpool tail worker    (long-running)
+#   stats       — ctpool stats snapshot service (long-running)
+#   maintenance — ctpool maintenance loop: prune + audit (long-running)
 
 services:
   # ── Database ────────────────────────────────────────────────────────────────
@@ -134,6 +136,49 @@ services:
       # Read-only mount of the postgres data volume so the disk guard measures
       # the actual storage used by PostgreSQL, not the container overlay layer.
       - postgres_data:/data/pgcheck:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - internal
+
+  # ── Stats snapshot service ─────────────────────────────────────────────────
+  # Writes a full stats payload to ct_stats_snapshots on a regular interval
+  # (default 300 s).  The API reads from the snapshot for cheap /v1/stats
+  # responses, falling back to live queries when no fresh snapshot is available.
+  stats:
+    image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    command: ["ctpool", "stats-snapshot", "--loop"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      CT_STATS_HEAVY_REFRESH_SECONDS: "${CT_STATS_HEAVY_REFRESH_SECONDS:-300}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - internal
+
+  # ── Maintenance loop ────────────────────────────────────────────────────────
+  # Runs periodic pruning of expired rows and audit-gap detection.
+  # Default interval is 3600 s (1 hour).
+  maintenance:
+    image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
+    restart: unless-stopped
+    command: ["ctpool", "maintenance", "--loop"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      CT_MAINTENANCE_INTERVAL_SECONDS: "${CT_MAINTENANCE_INTERVAL_SECONDS:-3600}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:
       postgres:
         condition: service_healthy

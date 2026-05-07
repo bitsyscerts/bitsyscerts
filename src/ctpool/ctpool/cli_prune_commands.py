@@ -1,8 +1,11 @@
 """Prune (data retention) CLI commands.
 
 Commands:
-    prune-metrics        — Delete old ingestion_metrics rows.
-    prune-expired-certs  — Prune expired certificate rows safely.
+    prune-metrics           — Delete old ingestion_metrics rows.
+    prune-expired-certs     — Prune expired certificate rows safely.
+    prune-observations      — Delete old ct_log_observations rows.
+    prune-entry-outcomes    — Delete old ct_entry_outcomes rows.
+    prune-for-storage-profile — Dispatch all pruning for the active profile.
 """
 
 from __future__ import annotations
@@ -87,3 +90,100 @@ def register(app: typer.Typer) -> None:
                 console=_console,
             )
         )
+
+    @app.command("prune-observations")
+    def prune_observations(
+        execute: Annotated[
+            bool,
+            typer.Option("--execute", help="Execute deletions (default is dry-run)."),
+        ] = False,
+        retention_days: Annotated[
+            int | None,
+            typer.Option(
+                "--retention-days",
+                help="Override ct_observation_retention_days from config.",
+            ),
+        ] = None,
+        batch_size: Annotated[
+            int,
+            typer.Option("--batch-size", help="Rows to delete per transaction."),
+        ] = 5000,
+        limit: Annotated[
+            int,
+            typer.Option("--limit", help="Maximum rows to delete (0 = unlimited)."),
+        ] = 0,
+    ) -> None:
+        """Delete old ct_log_observations rows beyond the retention window.
+
+        Runs in dry-run mode by default. Pass --execute to perform deletions.
+        """
+        from ctpool._cli_prune_observations_impl import run_prune_observations
+
+        asyncio.run(
+            run_prune_observations(
+                dry_run=not execute,
+                retention_days=retention_days,
+                batch_size=batch_size,
+                limit=limit,
+                console=_console,
+            )
+        )
+
+    @app.command("prune-entry-outcomes")
+    def prune_entry_outcomes(
+        execute: Annotated[
+            bool,
+            typer.Option("--execute", help="Execute deletions (default is dry-run)."),
+        ] = False,
+        retention_days: Annotated[
+            int | None,
+            typer.Option(
+                "--retention-days",
+                help="Override ct_entry_outcome_retention_days from config.",
+            ),
+        ] = None,
+        batch_size: Annotated[
+            int,
+            typer.Option("--batch-size", help="Rows to delete per transaction."),
+        ] = 5000,
+        limit: Annotated[
+            int,
+            typer.Option("--limit", help="Maximum rows to delete (0 = unlimited)."),
+        ] = 0,
+    ) -> None:
+        """Delete old ct_entry_outcomes rows beyond the retention window.
+
+        Runs in dry-run mode by default. Pass --execute to perform deletions.
+        """
+        from ctpool._cli_prune_entry_outcomes_impl import run_prune_entry_outcomes
+
+        asyncio.run(
+            run_prune_entry_outcomes(
+                dry_run=not execute,
+                retention_days=retention_days,
+                batch_size=batch_size,
+                limit=limit,
+                console=_console,
+            )
+        )
+
+    @app.command("prune-for-storage-profile")
+    def prune_for_storage_profile(
+        execute: Annotated[
+            bool,
+            typer.Option("--execute", help="Execute deletions (default is dry-run)."),
+        ] = False,
+    ) -> None:
+        """Run all prune operations appropriate for the active storage profile.
+
+        Dispatches: prune-metrics, prune-observations, prune-entry-outcomes.
+        Certificate pruning is not included here — use prune-expired-certs
+        separately as it has additional safety checks.
+
+        Runs in dry-run mode by default. Pass --execute to perform deletions.
+        """
+        from ctpool._cli_prune_storage_profile_impl import (
+            run_prune_for_storage_profile,
+        )
+
+        asyncio.run(run_prune_for_storage_profile(execute=execute, console=_console))

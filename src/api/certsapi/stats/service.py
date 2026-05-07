@@ -1,7 +1,14 @@
-"""Stats service: assembles global and per-log ingestion statistics."""
+"""Stats service: assembles global and per-log ingestion statistics.
+
+# NOTE (201-500 line warning zone): This module consolidates all stats assembly
+# and builder helpers in one place.  All helpers serve one endpoint and share
+# model types.  Splitting would create multiple files that only make sense as
+# a group.  Resolve by extracting if a second stats endpoint is added.
+"""
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy.engine import RowMapping
@@ -29,8 +36,10 @@ from certsapi.stats.projection import (
 )
 from certsapi.stats.repository import StatsRepository
 
+_logger = logging.getLogger(__name__)
 _INGESTION_RATE_WINDOWS = [300, 3600]
 _TAIL_STALE_THRESHOLD_SECONDS = 300
+_SNAPSHOT_TYPE = "full"
 
 
 def _row_to_log_item(row: RowMapping, now: datetime) -> LogStatsItem:
@@ -132,7 +141,46 @@ class StatsService:
         self._repository = repository
 
     async def get_stats(self) -> StatsResponse:
-        """Return aggregated ingestion statistics."""
+        """Return aggregated ingestion statistics.
+
+        Attempts to serve a recently-computed snapshot from ``ct_stats_snapshots``
+        when one is available and fresh (age < ``ct_stats_heavy_refresh_seconds``).
+        Falls back to running all live queries when no fresh snapshot exists.
+        """
+        snapshot_payload = await self._try_get_fresh_snapshot()
+        if snapshot_payload is not None:
+            try:
+                return StatsResponse.model_validate(snapshot_payload)
+            except Exception:
+                _logger.warning(
+                    "Failed to validate cached stats snapshot; falling back to live"
+                )
+
+        return await self._get_stats_live()
+
+    async def _try_get_fresh_snapshot(self) -> dict | None:
+        """Return snapshot payload if one exists and is fresh.
+
+        Fresh means younger than ``ct_stats_heavy_refresh_seconds`` (default 300 s).
+        Returns ``None`` when no fresh snapshot is available.
+        """
+        try:
+            from ctpool.config import get_settings as get_ct_settings
+
+            max_age = get_ct_settings().ct_stats_heavy_refresh_seconds
+        except Exception:
+            max_age = 300
+
+        try:
+            age = await self._repository.get_snapshot_age_seconds(_SNAPSHOT_TYPE)
+            if age is None or age > max_age:
+                return None
+            return await self._repository.get_latest_snapshot(_SNAPSHOT_TYPE)
+        except Exception:
+            return None
+
+    async def _get_stats_live(self) -> StatsResponse:
+        """Run all live queries and build a StatsResponse from scratch."""
         now = datetime.now(UTC)
         total_h = await self._repository.total_hostnames()
         total_c = await self._repository.total_certificates()

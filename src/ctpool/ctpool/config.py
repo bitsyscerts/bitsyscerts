@@ -149,6 +149,22 @@ class Settings(BaseSettings):
     storage.  Setting this to True is an explicit acknowledgement of that cost.
     """
 
+    # Stats snapshot cadence
+    ct_stats_live_refresh_seconds: int = 15
+    """Interval in seconds for refreshing lightweight live stats (tail, rate)."""
+    ct_stats_heavy_refresh_seconds: int = 300
+    """Interval in seconds for refreshing heavy stats (projection, table sizes)."""
+    ct_stats_snapshot_retention_hours: int = 24
+    """Hours to retain old snapshot rows before pruning."""
+
+    # Maintenance service cadences
+    ct_maintenance_interval_seconds: int = 3600
+    """Seconds between maintenance loop cycles."""
+    ct_audit_interval_seconds: int = 21600
+    """Seconds between automatic audit-gap checks in the maintenance loop."""
+    ct_prune_interval_seconds: int = 3600
+    """Seconds between automatic prune runs in the maintenance loop."""
+
     # Logging
     log_level: str = "INFO"
 
