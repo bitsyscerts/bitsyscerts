@@ -115,14 +115,10 @@ def test_resolve_severities_unknown_raises_value_error() -> None:
 
 
 def test_print_repair_line_includes_finding_info() -> None:
-    """_print_repair_line prints id, type, status, and action."""
-    finding = MagicMock()
-    finding.id = "abc-123"
-    finding.finding_type = FINDING_TYPE_STALE_BACKFILL_CLAIM
-    finding.status = "resolved"
-    finding.repair_action = "retry"
+    """_print_repair_line prints id, type, status, and action from the tuple."""
+    display = ("abc-123", FINDING_TYPE_STALE_BACKFILL_CLAIM, "resolved", "retry")
     console = _make_console()
-    _print_repair_line(finding, dry_run=False, console=console)
+    _print_repair_line(display, dry_run=False, console=console)
     msg = console.print.call_args[0][0]
     assert "abc-123" in msg
     assert FINDING_TYPE_STALE_BACKFILL_CLAIM in msg
@@ -132,9 +128,9 @@ def test_print_repair_line_includes_finding_info() -> None:
 
 def test_print_repair_line_dry_run_prefix() -> None:
     """_print_repair_line includes DRY RUN prefix when dry_run=True."""
-    finding = MagicMock()
+    display = ("abc-123", "stale_backfill_claim", "resolved", "retry")
     console = _make_console()
-    _print_repair_line(finding, dry_run=True, console=console)
+    _print_repair_line(display, dry_run=True, console=console)
     msg = console.print.call_args[0][0]
     assert "DRY RUN" in msg
 

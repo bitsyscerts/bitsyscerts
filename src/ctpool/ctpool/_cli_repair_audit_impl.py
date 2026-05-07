@@ -84,6 +84,14 @@ async def run_fix_audit_findings(
                 sp = await session.begin_nested()
                 try:
                     updated = await apply_repair(finding, session)
+                    # Snapshot display values NOW, before sp.commit() expires
+                    # the ORM object (which would trigger a sync lazy-load crash).
+                    display = (
+                        updated.id,
+                        updated.finding_type,
+                        updated.status,
+                        updated.repair_action,
+                    )
                     if dry_run:
                         await sp.rollback()
                     else:
@@ -98,7 +106,7 @@ async def run_fix_audit_findings(
                     )
                     errors += 1
                     continue
-                _print_repair_line(updated, dry_run, console)
+                _print_repair_line(display, dry_run, console)
                 processed += 1
             if not dry_run and processed > 0:
                 await session.commit()
@@ -157,19 +165,19 @@ def _resolve_severities(
 
 
 def _print_repair_line(
-    finding: object,
+    display: tuple[object, object, object, object],
     dry_run: bool,
     console: Console,
 ) -> None:
-    """Print one repair result line."""
+    """Print one repair result line.
+
+    Args:
+        display: (id, finding_type, status, repair_action) — plain values
+                 snapshotted before the savepoint commit expires the ORM object.
+    """
+    fid, ftype, fstatus, faction = display
     prefix = "[yellow][DRY RUN][/yellow] " if dry_run else ""
-    console.print(
-        f"{prefix}"
-        f"id={getattr(finding, 'id', '?')} "
-        f"type={getattr(finding, 'finding_type', '?')} "
-        f"→ status={getattr(finding, 'status', '?')} "
-        f"action={getattr(finding, 'repair_action', '?')}"
-    )
+    console.print(f"{prefix}id={fid} type={ftype} → status={fstatus} action={faction}")
 
 
 def _print_summary(
