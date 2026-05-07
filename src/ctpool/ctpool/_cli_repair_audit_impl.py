@@ -5,6 +5,7 @@ Extracted from cli.py to keep that module under the 500-line limit.
 
 from __future__ import annotations
 
+import logging
 import uuid
 
 from rich.console import Console
@@ -23,6 +24,8 @@ from ctpool.audit_repair import (
 )
 from ctpool.config import get_settings
 from ctpool.db import create_engine, create_session_factory
+
+_logger = logging.getLogger(__name__)
 
 
 async def run_fix_audit_findings(
@@ -70,20 +73,39 @@ async def run_fix_audit_findings(
     session_factory = create_session_factory(engine)
 
     processed = 0
-    async with session_factory() as session:
-        async with session.begin():
+    errors = 0
+    try:
+        async with session_factory() as session:
             findings = await fetch_repairable_findings(session, options)
             if not findings:
                 console.print("[green]No repairable findings found.[/green]")
-                await engine.dispose()
                 return 0
             for finding in findings:
-                updated = await apply_repair(finding, session, dry_run=dry_run)
+                sp = await session.begin_nested()
+                try:
+                    updated = await apply_repair(finding, session)
+                    if dry_run:
+                        await sp.rollback()
+                    else:
+                        await sp.commit()
+                except Exception as exc:
+                    await sp.rollback()
+                    _logger.warning(
+                        "Repair failed for finding %s (%s): %s",
+                        finding.id,
+                        finding.finding_type,
+                        exc,
+                    )
+                    errors += 1
+                    continue
                 _print_repair_line(updated, dry_run, console)
                 processed += 1
+            if not dry_run and processed > 0:
+                await session.commit()
+    finally:
+        await engine.dispose()
 
-    await engine.dispose()
-    _print_summary(processed, dry_run, console)
+    _print_summary(processed, errors, dry_run, console)
     return processed
 
 
@@ -101,12 +123,13 @@ async def run_mark_ignored(
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
 
-    async with session_factory() as session:
-        async with session.begin():
-            finding = await mark_finding_ignored(session, finding_id, reason)
-            found = finding is not None
-
-    await engine.dispose()
+    try:
+        async with session_factory() as session:
+            async with session.begin():
+                finding = await mark_finding_ignored(session, finding_id, reason)
+                found = finding is not None
+    finally:
+        await engine.dispose()
     if found:
         console.print(f"[green]Finding {finding_id} marked as ignored.[/green]")
     else:
@@ -151,9 +174,12 @@ def _print_repair_line(
 
 def _print_summary(
     count: int,
+    errors: int,
     dry_run: bool,
     console: Console,
 ) -> None:
     """Print the final processed-count summary."""
     mode = "Dry-run processed" if dry_run else "Repaired"
     console.print(f"[bold]{mode}[/bold]: {count} finding(s).")
+    if errors:
+        console.print(f"[red]Failed[/red]: {errors} finding(s) could not be repaired.")

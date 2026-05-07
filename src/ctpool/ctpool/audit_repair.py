@@ -87,18 +87,17 @@ async def fetch_repairable_findings(
 async def apply_repair(
     finding: CtAuditFinding,
     session: AsyncSession,
-    dry_run: bool = True,
 ) -> CtAuditFinding:
     """Dispatch a finding to its repair strategy.
 
-    When dry_run=True no DB writes are performed; the finding object is
-    annotated with what *would* happen and then the session is rolled back
-    by the caller.
+    The caller is responsible for wrapping this call in a savepoint
+    (``session.begin_nested()``) and deciding whether to commit or roll back.
+    Flushing inside the savepoint surfaces constraint violations before the
+    savepoint is committed, keeping each finding's repair fully isolated.
 
     Args:
         finding: The CtAuditFinding to repair (must be in session).
         session: Active async database session.
-        dry_run: If True, annotate but do not persist.
 
     Returns:
         The (possibly modified) finding with repair metadata set.
@@ -106,10 +105,7 @@ async def apply_repair(
     strategy = _STRATEGY_MAP.get(finding.finding_type, repair_unsupported)
     finding.repair_attempt_count = (finding.repair_attempt_count or 0) + 1
     updated = await strategy(finding, session)
-    if dry_run:
-        await session.rollback()
-    else:
-        await session.flush()
+    await session.flush()
     return updated
 
 

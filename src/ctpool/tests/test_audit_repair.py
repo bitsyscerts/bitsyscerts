@@ -24,6 +24,7 @@ from ctpool.audit_constants import (
     REPAIR_ACTION_REPAIR_RANGE_CREATED,
     REPAIR_ACTION_STALE_CLAIM_REQUEUED,
     REPAIR_ACTION_STORED_OUTCOMES_BACKFILLED,
+    STATUS_FAILED,
     STATUS_IGNORED,
     STATUS_OPEN,
     STATUS_REPAIR_ATTEMPTED,
@@ -122,7 +123,7 @@ async def test_repair_stale_backfill_claim_resets_range_to_pending(
     db_session.add(finding)
     await db_session.flush()
 
-    updated = await apply_repair(finding, db_session, dry_run=False)
+    updated = await apply_repair(finding, db_session)
 
     assert updated.status == STATUS_RESOLVED
     assert updated.repair_action == REPAIR_ACTION_STALE_CLAIM_REQUEUED
@@ -154,7 +155,7 @@ async def test_repair_stale_backfill_claim_clears_claim_metadata(
     db_session.add(finding)
     await db_session.flush()
 
-    await apply_repair(finding, db_session, dry_run=False)
+    await apply_repair(finding, db_session)
     await db_session.refresh(rng)
 
     assert rng.claimed_by is None
@@ -186,7 +187,7 @@ async def test_repair_failed_backfill_range_resets_to_pending(
     db_session.add(finding)
     await db_session.flush()
 
-    updated = await apply_repair(finding, db_session, dry_run=False)
+    updated = await apply_repair(finding, db_session)
 
     assert updated.status == STATUS_RESOLVED
     assert updated.repair_action == REPAIR_ACTION_FAILED_RANGE_REQUEUED
@@ -217,7 +218,7 @@ async def test_repair_missing_entry_outcomes_creates_repair_range(
     db_session.add(finding)
     await db_session.flush()
 
-    updated = await apply_repair(finding, db_session, dry_run=False)
+    updated = await apply_repair(finding, db_session)
 
     assert updated.status == STATUS_REPAIR_ATTEMPTED
     assert updated.repair_action == REPAIR_ACTION_REPAIR_RANGE_CREATED
@@ -252,7 +253,7 @@ async def test_repair_missing_observations_inserts_outcome_row(
     db_session.add(finding)
     await db_session.flush()
 
-    updated = await apply_repair(finding, db_session, dry_run=False)
+    updated = await apply_repair(finding, db_session)
 
     assert updated.status == STATUS_RESOLVED
     assert updated.repair_action == REPAIR_ACTION_STORED_OUTCOMES_BACKFILLED
@@ -283,9 +284,9 @@ async def test_repair_missing_observations_is_idempotent(
     db_session.add(finding)
     await db_session.flush()
 
-    await apply_repair(finding, db_session, dry_run=False)
+    await apply_repair(finding, db_session)
     finding.status = STATUS_OPEN
-    updated = await apply_repair(finding, db_session, dry_run=False)
+    updated = await apply_repair(finding, db_session)
     assert updated.status == STATUS_RESOLVED
 
 
@@ -305,9 +306,9 @@ async def test_repair_unsupported_type_marks_failed(
     db_session.add(finding)
     await db_session.flush()
 
-    updated = await apply_repair(finding, db_session, dry_run=False)
+    updated = await apply_repair(finding, db_session)
 
-    assert updated.status == "failed"
+    assert updated.status == STATUS_FAILED
     assert updated.repair_action == REPAIR_ACTION_NOT_SUPPORTED
     assert updated.repair_details_json is not None
     assert "reason" in updated.repair_details_json
@@ -318,10 +319,10 @@ async def test_repair_unsupported_type_marks_failed(
 # ---------------------------------------------------------------------------
 
 
-async def test_dry_run_does_not_commit_changes(
+async def test_savepoint_rollback_does_not_persist_repair(
     db_session: AsyncSession,
 ) -> None:
-    """dry_run=True rolls back; finding status remains open in the DB."""
+    """Caller-managed savepoint rollback prevents repair from being persisted."""
     source = _make_source(url="https://repair-dry1.example.com/")
     db_session.add(source)
     await db_session.flush()
@@ -337,12 +338,16 @@ async def test_dry_run_does_not_commit_changes(
     db_session.add(finding)
     await db_session.flush()
 
-    finding_id = finding.id
-    await apply_repair(finding, db_session, dry_run=True)
+    # Simulate the dry_run caller pattern: savepoint + rollback
+    sp = await db_session.begin_nested()
+    await apply_repair(finding, db_session)
+    await sp.rollback()
 
-    # After dry_run rollback we can't use the same session to check the finding
-    # (the session was rolled back). Just assert apply_repair returned without error.
-    assert finding_id is not None
+    # Refresh from DB — range and finding should be in original state
+    await db_session.refresh(rng)
+    await db_session.refresh(finding)
+    assert rng.status == "failed"  # repair was rolled back
+    assert finding.status == STATUS_OPEN  # finding not resolved
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +374,7 @@ async def test_apply_repair_increments_attempt_count(
     db_session.add(finding)
     await db_session.flush()
 
-    await apply_repair(finding, db_session, dry_run=False)
+    await apply_repair(finding, db_session)
     assert finding.repair_attempt_count == 1
 
 

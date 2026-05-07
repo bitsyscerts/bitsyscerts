@@ -31,16 +31,17 @@ async def run_check_audit_gaps(
 
     claim_timeout = settings.ct_backfill_claim_timeout_seconds
 
-    async with session_factory() as session:
-        async with session.begin():
+    try:
+        async with session_factory() as session:
             result = await run_all_checks(session, claim_timeout)
             if dry_run:
-                await session.rollback()
                 console.print("[yellow]Dry run — no findings written.[/yellow]")
             else:
+                await session.commit()
                 console.print("[green]Findings persisted.[/green]")
+    finally:
+        await engine.dispose()
 
-    await engine.dispose()
     _print_results(result, dry_run, console)
     return result
 

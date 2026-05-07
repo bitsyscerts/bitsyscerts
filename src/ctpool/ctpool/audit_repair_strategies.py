@@ -30,6 +30,7 @@ from ctpool.audit_constants import (
     REPAIR_ACTION_REPAIR_RANGE_CREATED,
     REPAIR_ACTION_STALE_CLAIM_REQUEUED,
     REPAIR_ACTION_STORED_OUTCOMES_BACKFILLED,
+    STATUS_FAILED,
     STATUS_REPAIR_ATTEMPTED,
     STATUS_RESOLVED,
 )
@@ -50,7 +51,7 @@ async def repair_stale_backfill_claim(
     """
     now = datetime.now(UTC)
     if finding.range_id is not None:
-        await session.execute(
+        result = await session.execute(
             update(CtLogBackfillRange)
             .where(CtLogBackfillRange.id == finding.range_id)
             .where(CtLogBackfillRange.status == "in_progress")
@@ -62,6 +63,10 @@ async def repair_stale_backfill_claim(
                 updated_at=now,
             )
         )
+        if result.rowcount == 0:
+            # Range status already changed (e.g. worker completed it concurrently).
+            # The stale condition is gone regardless — finding is still resolved.
+            finding.repair_details_json = {"concurrent_resolution": True}
     finding.status = STATUS_RESOLVED
     finding.repair_action = REPAIR_ACTION_STALE_CLAIM_REQUEUED
     finding.repair_attempted_at = now
@@ -80,7 +85,7 @@ async def repair_failed_backfill_range(
     """
     now = datetime.now(UTC)
     if finding.range_id is not None:
-        await session.execute(
+        result = await session.execute(
             update(CtLogBackfillRange)
             .where(CtLogBackfillRange.id == finding.range_id)
             .where(CtLogBackfillRange.status == "failed")
@@ -92,6 +97,10 @@ async def repair_failed_backfill_range(
                 updated_at=now,
             )
         )
+        if result.rowcount == 0:
+            # Range status already changed (e.g. worker retried it concurrently).
+            # The failed condition is gone regardless — finding is still resolved.
+            finding.repair_details_json = {"concurrent_resolution": True}
     finding.status = STATUS_RESOLVED
     finding.repair_action = REPAIR_ACTION_FAILED_RANGE_REQUEUED
     finding.repair_attempted_at = now
@@ -110,21 +119,31 @@ async def repair_missing_entry_outcomes(
     exists for this finding the INSERT is silently skipped.
     Sets finding status to repair_attempted.
     """
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
     now = datetime.now(UTC)
     if finding.start_index is not None and finding.end_index is not None:
-        repair_range = CtLogBackfillRange(
-            id=uuid.uuid4(),
-            log_source_id=finding.log_source_id,
-            start_index=finding.start_index,
-            end_index=finding.end_index,
-            next_index=finding.start_index,
-            status="pending",
-            range_kind=RANGE_KIND_REPAIR,
-            repair_for_finding_id=finding.id,
+        stmt = (
+            pg_insert(CtLogBackfillRange)
+            .values(
+                id=uuid.uuid4(),
+                log_source_id=finding.log_source_id,
+                start_index=finding.start_index,
+                end_index=finding.end_index,
+                next_index=finding.start_index,
+                status="pending",
+                range_kind=RANGE_KIND_REPAIR,
+                repair_for_finding_id=finding.id,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["log_source_id", "start_index", "end_index"]
+            )
+            .returning(CtLogBackfillRange.id)
         )
-        session.add(repair_range)
-        await session.flush()
-        finding.range_id = repair_range.id
+        result = await session.execute(stmt)
+        row = result.first()
+        if row is not None:
+            finding.range_id = row[0]
     finding.status = STATUS_REPAIR_ATTEMPTED
     finding.repair_action = REPAIR_ACTION_REPAIR_RANGE_CREATED
     finding.repair_attempted_at = now
@@ -169,7 +188,7 @@ async def repair_unsupported(
     _session: AsyncSession,
 ) -> CtAuditFinding:
     """Mark finding as failed because automatic repair is not supported."""
-    finding.status = "failed"
+    finding.status = STATUS_FAILED
     finding.repair_action = REPAIR_ACTION_NOT_SUPPORTED
     finding.repair_attempted_at = datetime.now(UTC)
     finding.repair_details_json = {

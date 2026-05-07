@@ -14,6 +14,7 @@ Exports:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -36,6 +37,8 @@ from ctpool.audit_queries import (
     query_stale_backfill_claims,
 )
 from ctpool.models.audit_finding import CtAuditFinding
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -215,14 +218,47 @@ async def run_all_checks(
     session: AsyncSession,
     claim_timeout_seconds: int,
 ) -> AuditCheckResult:
-    """Run all four audit checks and return per-type new-finding counts."""
+    """Run all four audit checks and return per-type new-finding counts.
+
+    Each check runs in its own savepoint so a failure in one check does not
+    prevent the remaining checks from running or poison the session state.
+    """
     result = AuditCheckResult()
-    result.stale_claims = await run_stale_backfill_claim_check(
-        session, claim_timeout_seconds
-    )
-    result.failed_ranges = await run_failed_backfill_range_check(session)
-    result.missing_outcomes = await run_missing_entry_outcomes_check(session)
-    result.missing_observations = await run_missing_observations_check(session)
+
+    sp = await session.begin_nested()
+    try:
+        result.stale_claims = await run_stale_backfill_claim_check(
+            session, claim_timeout_seconds
+        )
+        await sp.commit()
+    except Exception:
+        await sp.rollback()
+        _logger.exception("stale-claims audit check failed")
+
+    sp = await session.begin_nested()
+    try:
+        result.failed_ranges = await run_failed_backfill_range_check(session)
+        await sp.commit()
+    except Exception:
+        await sp.rollback()
+        _logger.exception("failed-ranges audit check failed")
+
+    sp = await session.begin_nested()
+    try:
+        result.missing_outcomes = await run_missing_entry_outcomes_check(session)
+        await sp.commit()
+    except Exception:
+        await sp.rollback()
+        _logger.exception("missing-outcomes audit check failed")
+
+    sp = await session.begin_nested()
+    try:
+        result.missing_observations = await run_missing_observations_check(session)
+        await sp.commit()
+    except Exception:
+        await sp.rollback()
+        _logger.exception("missing-observations audit check failed")
+
     return result
 
 

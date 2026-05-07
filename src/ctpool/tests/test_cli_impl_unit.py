@@ -142,7 +142,7 @@ def test_print_repair_line_dry_run_prefix() -> None:
 def test_print_summary_dry_run_message() -> None:
     """_print_summary says 'Dry-run processed' when dry_run=True."""
     console = _make_console()
-    _print_summary(5, dry_run=True, console=console)
+    _print_summary(5, errors=0, dry_run=True, console=console)
     msg = console.print.call_args[0][0]
     assert "Dry-run processed" in msg
     assert "5" in msg
@@ -151,7 +151,16 @@ def test_print_summary_dry_run_message() -> None:
 def test_print_summary_non_dry_run_message() -> None:
     """_print_summary says 'Repaired' when dry_run=False."""
     console = _make_console()
-    _print_summary(3, dry_run=False, console=console)
+    _print_summary(3, errors=0, dry_run=False, console=console)
     msg = console.print.call_args[0][0]
     assert "Repaired" in msg
     assert "3" in msg
+
+
+def test_print_summary_shows_error_count() -> None:
+    """_print_summary prints an error line when errors > 0."""
+    console = _make_console()
+    _print_summary(2, errors=1, dry_run=False, console=console)
+    all_text = " ".join(c[0][0] for c in console.print.call_args_list)
+    assert "Failed" in all_text
+    assert "1" in all_text

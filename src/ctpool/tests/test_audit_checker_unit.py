@@ -544,3 +544,66 @@ async def test_run_missing_observations_check_dedup_unit(
 
     assert count == 0
     assert len(mock_session.added_objects) == 0
+
+
+# ---------------------------------------------------------------------------
+# run_all_checks — exception isolation (savepoint rollback paths)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_all_checks_continues_when_one_check_raises_unit(
+    mock_session: AsyncMock,
+) -> None:
+    """A failing check is isolated; remaining checks still run and are counted."""
+    with (
+        patch(
+            "ctpool.audit_checker.run_stale_backfill_claim_check",
+            new=AsyncMock(side_effect=RuntimeError("db error")),
+        ),
+        patch(
+            "ctpool.audit_checker.run_failed_backfill_range_check",
+            new=AsyncMock(return_value=2),
+        ),
+        patch(
+            "ctpool.audit_checker.run_missing_entry_outcomes_check",
+            new=AsyncMock(return_value=3),
+        ),
+        patch(
+            "ctpool.audit_checker.run_missing_observations_check",
+            new=AsyncMock(return_value=4),
+        ),
+    ):
+        result = await run_all_checks(mock_session, claim_timeout_seconds=3600)
+
+    assert result.stale_claims == 0  # failed check defaults to 0
+    assert result.failed_ranges == 2
+    assert result.missing_outcomes == 3
+    assert result.missing_observations == 4
+
+
+async def test_run_all_checks_all_checks_fail_returns_zeros_unit(
+    mock_session: AsyncMock,
+) -> None:
+    """run_all_checks returns all-zero result when every check fails."""
+    err = RuntimeError("forced failure")
+    with (
+        patch(
+            "ctpool.audit_checker.run_stale_backfill_claim_check",
+            new=AsyncMock(side_effect=err),
+        ),
+        patch(
+            "ctpool.audit_checker.run_failed_backfill_range_check",
+            new=AsyncMock(side_effect=err),
+        ),
+        patch(
+            "ctpool.audit_checker.run_missing_entry_outcomes_check",
+            new=AsyncMock(side_effect=err),
+        ),
+        patch(
+            "ctpool.audit_checker.run_missing_observations_check",
+            new=AsyncMock(side_effect=err),
+        ),
+    ):
+        result = await run_all_checks(mock_session, claim_timeout_seconds=3600)
+
+    assert result.total_new_findings == 0
