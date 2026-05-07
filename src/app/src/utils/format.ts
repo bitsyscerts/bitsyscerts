@@ -102,3 +102,18 @@ export function isCertExpired(notAfterIso: string | null | undefined): boolean {
   if (!notAfterIso) return false;
   return new Date(notAfterIso) < new Date();
 }
+
+export function formatLagSeconds(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return "—";
+  if (seconds < 60) return `${String(seconds)}s`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSecs = seconds % 60;
+  if (hours > 0) return `${String(hours)}h ${String(minutes)}m`;
+  return `${String(minutes)}m ${String(remainingSecs)}s`;
+}
+
+export function formatRatePerMin(rate: number | null | undefined): string {
+  if (rate === null || rate === undefined) return "—";
+  return `${rate.toFixed(2)}/min`;
+}

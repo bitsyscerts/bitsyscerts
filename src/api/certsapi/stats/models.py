@@ -19,6 +19,7 @@ class LogStatsItem(BaseModel):
     tail_position: int | None
     last_tail_sync: datetime | None
     backfill_complete_pct: float | None
+    tail_freshness_lag_seconds: int | None = None
 
 
 class TableStorageItem(BaseModel):
@@ -89,6 +90,32 @@ class DbContentionStats(BaseModel):
     effective_batch_size_cap: int | None
     updated_at: datetime | None
     notes: list[str] = Field(default_factory=list)
+    total_retryable_errors: int = 0
+    retryable_errors_per_min_5min: float | None = None
+
+
+class IngestionRateWindow(BaseModel):
+    """Throughput aggregates for a single time window."""
+
+    window_seconds: int
+    observations_per_sec: float
+    certs_per_min: float
+    hostnames_per_min: float
+
+
+class IngestionRateStats(BaseModel):
+    """Global ingestion throughput across multiple time windows."""
+
+    windows: list[IngestionRateWindow]
+
+
+class TailFreshnessStats(BaseModel):
+    """Aggregate tail-cursor staleness summary across all CT logs."""
+
+    stale_threshold_seconds: int
+    stale_log_count: int
+    oldest_lag_seconds: int | None
+    median_lag_seconds: int | None
 
 
 class StatsResponse(BaseModel):
@@ -100,4 +127,6 @@ class StatsResponse(BaseModel):
     storage: StorageStats
     storage_projection: StorageProjection
     db_contention: DbContentionStats
+    ingestion_rate: IngestionRateStats
+    tail_freshness: TailFreshnessStats
     logs: list[LogStatsItem]

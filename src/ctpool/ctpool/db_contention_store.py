@@ -102,6 +102,7 @@ async def merge_db_contention_observation(
         now=now,
     )
     _apply_state_view(row, next_state)
+    _accumulate_retry_counts(row, observation.retryable_errors, now)
     return directive
 
 
@@ -157,3 +158,28 @@ def _apply_state_view(
     row.batch_size_cap = state.batch_size_cap
     row.healthy_streak = state.healthy_streak
     row.updated_at = state.updated_at or datetime.now(UTC)
+
+
+_RETRY_WINDOW_SECONDS = 300
+
+
+def _accumulate_retry_counts(
+    row: CtDbContentionState,
+    retryable_errors: int,
+    now: datetime,
+) -> None:
+    """Accumulate *retryable_errors* into the row's cumulative and rolling counters.
+
+    The rolling window resets when more than ``_RETRY_WINDOW_SECONDS`` have
+    elapsed since ``retry_window_start_at``.
+    """
+    if retryable_errors <= 0:
+        return
+    row.total_retryable_errors = (row.total_retryable_errors or 0) + retryable_errors
+    start = row.retry_window_start_at
+    elapsed = (now - start).total_seconds() if start is not None else None
+    if start is None or elapsed is None or elapsed > _RETRY_WINDOW_SECONDS:
+        row.retry_window_start_at = now
+        row.retry_window_count = retryable_errors
+    else:
+        row.retry_window_count = (row.retry_window_count or 0) + retryable_errors

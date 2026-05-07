@@ -1,6 +1,7 @@
 import { Badge, Group, Progress, Stack, Text } from "@mantine/core";
 import type { LogStatsItem } from "@/types";
 import { formatDate, formatNumber, formatPct } from "@/utils/format";
+import { LogStaleBadge } from "./LogStaleBadge";
 
 interface LogStatsListProps {
   logs: LogStatsItem[];
@@ -35,9 +36,12 @@ export function LogStatsList({ logs }: LogStatsListProps) {
             <Text size="sm" fw={500} truncate>
               {log.description || log.url}
             </Text>
-            <Badge size="xs" color={STATE_COLOR[log.log_state] ?? "gray"}>
-              {log.log_state}
-            </Badge>
+            <Group gap={4} wrap="nowrap">
+              <LogStaleBadge lagSeconds={log.tail_freshness_lag_seconds} />
+              <Badge size="xs" color={STATE_COLOR[log.log_state] ?? "gray"}>
+                {log.log_state}
+              </Badge>
+            </Group>
           </Group>
           {log.tail_position !== null && (
             <Text size="xs" c="dimmed">

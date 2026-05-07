@@ -8,6 +8,7 @@ export interface LogStatsItem {
   tail_position: number | null;
   last_tail_sync: string | null;
   backfill_complete_pct: number | null;
+  tail_freshness_lag_seconds: number | null;
 }
 
 export interface TableStorageItem {
@@ -72,6 +73,26 @@ export interface DbContentionStats {
   effective_batch_size_cap: number | null;
   updated_at: string | null;
   notes: string[];
+  total_retryable_errors: number;
+  retryable_errors_per_min_5min: number | null;
+}
+
+export interface IngestionRateWindow {
+  window_seconds: number;
+  observations_per_sec: number;
+  certs_per_min: number;
+  hostnames_per_min: number;
+}
+
+export interface IngestionRateStats {
+  windows: IngestionRateWindow[];
+}
+
+export interface TailFreshnessStats {
+  stale_threshold_seconds: number;
+  stale_log_count: number;
+  oldest_lag_seconds: number | null;
+  median_lag_seconds: number | null;
 }
 
 export interface StatsResponse {
@@ -81,5 +102,7 @@ export interface StatsResponse {
   storage: StorageStats;
   storage_projection: StorageProjection;
   db_contention: DbContentionStats;
+  ingestion_rate: IngestionRateStats;
+  tail_freshness: TailFreshnessStats;
   logs: LogStatsItem[];
 }

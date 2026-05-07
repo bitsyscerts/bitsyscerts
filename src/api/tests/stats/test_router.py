@@ -12,10 +12,12 @@ from certsapi.app import create_app
 from certsapi.config import Settings
 from certsapi.stats.models import (
     DbContentionStats,
+    IngestionRateStats,
     LogStatsItem,
     StatsResponse,
     StorageProjection,
     StorageStats,
+    TailFreshnessStats,
 )
 from certsapi.stats.router import _get_stats_service
 
@@ -67,6 +69,13 @@ def _make_stats(**kwargs: object) -> StatsResponse:
             effective_batch_size_cap=None,
             updated_at=None,
             notes=["No shared DB contention state has been recorded yet."],
+        ),
+        "ingestion_rate": IngestionRateStats(windows=[]),
+        "tail_freshness": TailFreshnessStats(
+            stale_threshold_seconds=300,
+            stale_log_count=0,
+            oldest_lag_seconds=None,
+            median_lag_seconds=None,
         ),
         "logs": [],
     }

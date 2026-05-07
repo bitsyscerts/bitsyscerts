@@ -21,6 +21,15 @@ const MOCK_DATA = {
       { table_name: "hostnames", pretty_size: "1 GB", row_estimate: 1000 },
     ],
   },
+  ingestion_rate: {
+    windows: [],
+  },
+  tail_freshness: {
+    stale_threshold_seconds: 300,
+    stale_log_count: 0,
+    oldest_lag_seconds: null,
+    median_lag_seconds: null,
+  },
   logs: [
     {
       id: 1,

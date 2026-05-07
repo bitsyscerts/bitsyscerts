@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, Numeric, Text, text
+from sqlalchemy import BigInteger, DateTime, Integer, Numeric, Text, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -52,4 +52,20 @@ class CtDbContentionState(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=text("now()"),
+    )
+    total_retryable_errors: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    retry_window_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    retry_window_start_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )

@@ -5,6 +5,8 @@ import { StatsSummary } from "./StatsSummary";
 import { StorageTable } from "./StorageTable";
 import { LogStatsList } from "./LogStatsList";
 import { StatsPanelSkeleton } from "./StatsPanelSkeleton";
+import { IngestionRateCard } from "./IngestionRateCard";
+import { TailFreshnessCard } from "./TailFreshnessCard";
 
 /**
  * Collapsible Accordion panel showing ingestion statistics. Uses useStats
@@ -34,6 +36,8 @@ export function StatsPanel() {
           totalCertificates={data.total_certificates}
           totalLogs={data.total_logs}
         />
+        <IngestionRateCard ingestionRate={data.ingestion_rate} />
+        <TailFreshnessCard tailFreshness={data.tail_freshness} />
         <Text size="sm" fw={600}>
           Database Storage
         </Text>

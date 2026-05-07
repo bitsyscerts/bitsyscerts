@@ -9,7 +9,7 @@ import {
 } from "@mantine/core";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import type { DbContentionStats } from "@/types";
-import { formatDateTime, formatNumber } from "@/utils/format";
+import { formatDateTime, formatNumber, formatRatePerMin } from "@/utils/format";
 
 interface DbContentionCardProps {
   contention: DbContentionStats;
@@ -84,6 +84,14 @@ export function DbContentionCard({ contention }: DbContentionCardProps) {
           <DetailItem
             label="Last update"
             value={formatDateTime(contention.updated_at)}
+          />
+          <DetailItem
+            label="Total retryable errors"
+            value={formatNumber(contention.total_retryable_errors)}
+          />
+          <DetailItem
+            label="Retry rate (5m)"
+            value={formatRatePerMin(contention.retryable_errors_per_min_5min)}
           />
         </SimpleGrid>
 

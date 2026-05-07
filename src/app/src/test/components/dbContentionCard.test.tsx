@@ -16,6 +16,8 @@ function makeContention(
     effective_batch_size_cap: 32,
     updated_at: "2025-01-01T00:00:00Z",
     notes: ["Shared DB contention throttling is currently active."],
+    total_retryable_errors: 0,
+    retryable_errors_per_min_5min: null,
     ...overrides,
   };
 }
@@ -57,5 +59,33 @@ describe("DbContentionCard", () => {
     expect(
       screen.getByText(/workers fall back to local conservative pacing/i),
     ).toBeInTheDocument();
+  });
+
+  it("renders total retryable errors and 5m rate when present", () => {
+    render(
+      <AllProviders>
+        <DbContentionCard
+          contention={makeContention({
+            total_retryable_errors: 42,
+            retryable_errors_per_min_5min: 2.5,
+          })}
+        />
+      </AllProviders>,
+    );
+
+    expect(screen.getByText("42")).toBeInTheDocument();
+    expect(screen.getByText("2.50/min")).toBeInTheDocument();
+  });
+
+  it("renders dash for retry rate when null", () => {
+    render(
+      <AllProviders>
+        <DbContentionCard
+          contention={makeContention({ retryable_errors_per_min_5min: null })}
+        />
+      </AllProviders>,
+    );
+
+    expect(screen.getByText("Retry rate (5m)")).toBeInTheDocument();
   });
 });

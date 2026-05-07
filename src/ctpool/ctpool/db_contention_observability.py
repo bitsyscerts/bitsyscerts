@@ -102,6 +102,12 @@ async def read_db_contention_operator_snapshot(
         effective_batch_size_cap=directive.batch_size_cap,
         updated_at=row.updated_at,
         notes=_snapshot_notes(status),
+        total_retryable_errors=int(row.total_retryable_errors),
+        retryable_errors_per_min_5min=_compute_retry_rate(
+            int(row.retry_window_count),
+            row.retry_window_start_at,
+            timestamp,
+        ),
     )
 
 
@@ -139,3 +145,25 @@ def _snapshot_notes(status: str) -> list[str]:
     if status == "healthy":
         return ["Shared DB contention control is active and not throttling."]
     return []
+
+
+_RETRY_RATE_WINDOW_SECONDS = 300
+
+
+def _compute_retry_rate(
+    window_count: int,
+    window_start_at: datetime | None,
+    now: datetime,
+) -> float | None:
+    """Return retryable errors per minute for the rolling 5-min window.
+
+    Returns None when no window has started (no retries have ever occurred).
+    Returns 0.0 when the window has started but the count is zero.
+    Clamps the elapsed denominator to at least 1 second to avoid division
+    by zero on the first observation.
+    """
+    if window_start_at is None:
+        return None
+    elapsed_seconds = max((now - window_start_at).total_seconds(), 1.0)
+    elapsed_minutes = elapsed_seconds / 60.0
+    return window_count / elapsed_minutes

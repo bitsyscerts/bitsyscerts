@@ -108,3 +108,58 @@ async def test_snapshot_degrades_when_shared_state_is_unavailable(
     assert snapshot.status == "initializing"
     assert snapshot.degraded_mode_active is True
     assert "Apply migrations" in snapshot.notes[0]
+
+
+async def test_snapshot_includes_retry_totals_from_row(
+    db_session: AsyncSession,
+) -> None:
+    db_session.add(
+        CtDbContentionState(
+            scope="global",
+            pressure_ema=0.0,
+            extra_sleep_seconds=0.0,
+            batch_size_cap=None,
+            updated_at=datetime.now(UTC),
+            total_retryable_errors=42,
+            retry_window_count=7,
+            retry_window_start_at=datetime.now(UTC) - timedelta(seconds=120),
+        )
+    )
+    await db_session.flush()
+
+    snapshot = await read_db_contention_operator_snapshot(
+        db_session,
+        _settings(),
+        now=datetime.now(UTC),
+    )
+
+    assert snapshot.total_retryable_errors == 42
+    assert snapshot.retryable_errors_per_min_5min is not None
+    assert snapshot.retryable_errors_per_min_5min == pytest.approx(7 / 2.0, rel=0.05)
+
+
+async def test_snapshot_retry_rate_is_none_when_no_window_started(
+    db_session: AsyncSession,
+) -> None:
+    db_session.add(
+        CtDbContentionState(
+            scope="global",
+            pressure_ema=0.0,
+            extra_sleep_seconds=0.0,
+            batch_size_cap=None,
+            updated_at=datetime.now(UTC),
+            total_retryable_errors=0,
+            retry_window_count=0,
+            retry_window_start_at=None,
+        )
+    )
+    await db_session.flush()
+
+    snapshot = await read_db_contention_operator_snapshot(
+        db_session,
+        _settings(),
+        now=datetime.now(UTC),
+    )
+
+    assert snapshot.total_retryable_errors == 0
+    assert snapshot.retryable_errors_per_min_5min is None

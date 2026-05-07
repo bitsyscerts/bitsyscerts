@@ -12,6 +12,7 @@ function makeLog(overrides: Partial<LogStatsItem> = {}): LogStatsItem {
     tail_position: null,
     backfill_complete_pct: null,
     last_tail_sync: null,
+    tail_freshness_lag_seconds: null,
     ...overrides,
   };
 }

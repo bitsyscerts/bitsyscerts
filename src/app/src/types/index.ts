@@ -10,12 +10,15 @@ export type { CertificateResponse } from "./certificates";
 export type {
   DbContentionStats,
   DbContentionStatus,
+  IngestionRateStats,
+  IngestionRateWindow,
   LogStatsItem,
   StorageProjection,
   StorageProjectionStatus,
   StorageStats,
   StatsResponse,
   TableStorageItem,
+  TailFreshnessStats,
 } from "./stats";
 
 export type SearchMode = "hostnames" | "certificates";

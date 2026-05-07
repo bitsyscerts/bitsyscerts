@@ -75,3 +75,5 @@ class DbContentionOperatorSnapshot:
     effective_batch_size_cap: int | None
     updated_at: datetime | None
     notes: list[str]
+    total_retryable_errors: int = 0
+    retryable_errors_per_min_5min: float | None = None

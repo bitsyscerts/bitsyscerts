@@ -1,6 +1,15 @@
-"""Ingestion statistics database queries."""
+"""Ingestion statistics database queries.
+
+# File consolidation rationale (lines 201-500 warning zone):
+# All query methods here serve a single API endpoint (/v1/stats).  Splitting
+# into multiple repository classes would require multiple injected dependencies
+# in the service layer with no domain separation benefit.  Consolidation is
+# justified until the stats endpoint grows a second distinct query domain.
+"""
 
 from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
 
 from ctpool.config import Settings as CtPoolSettings
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
@@ -8,6 +17,7 @@ from ctpool.db_contention_types import DbContentionOperatorSnapshot
 from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
 from ctpool.models.hostname import Hostname
+from ctpool.models.ingestion_metric import IngestionMetric
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
@@ -156,4 +166,53 @@ class StatsRepository:
         return await read_db_contention_operator_snapshot(
             self._session,
             self._ctpool_settings,
+        )
+
+    async def ingestion_rate_stats(
+        self,
+        window_seconds_list: list[int],
+    ) -> list[RowMapping]:
+        """Return aggregated ingestion totals for each requested time window."""
+        rows: list[RowMapping] = []
+        now = datetime.now(UTC)
+        for window_seconds in window_seconds_list:
+            cutoff = now - timedelta(seconds=window_seconds)
+            stmt = select(
+                func.coalesce(func.sum(IngestionMetric.entries_fetched), 0).label(
+                    "entries_fetched"
+                ),
+                func.coalesce(func.sum(IngestionMetric.certs_upserted), 0).label(
+                    "certs_upserted"
+                ),
+                func.coalesce(func.sum(IngestionMetric.hostnames_upserted), 0).label(
+                    "hostnames_upserted"
+                ),
+            ).where(IngestionMetric.snapshot_at >= cutoff)
+            result = (await self._session.execute(stmt)).mappings().one()
+            rows.append({"window_seconds": window_seconds, **dict(result)})  # type: ignore[arg-type]
+        return rows
+
+    async def tail_freshness_summary(
+        self,
+        stale_threshold_seconds: int = 300,
+    ) -> RowMapping:
+        """Return oldest lag, median lag, and stale count across all tail cursors."""
+        stmt = text("""
+            SELECT
+                MAX(
+                    EXTRACT(EPOCH FROM (now() - updated_at))
+                )::int AS oldest_lag_seconds,
+                PERCENTILE_CONT(0.5) WITHIN GROUP (
+                    ORDER BY EXTRACT(EPOCH FROM (now() - updated_at))
+                )::int AS median_lag_seconds,
+                COUNT(*) FILTER (
+                    WHERE EXTRACT(EPOCH FROM (now() - updated_at))
+                          > :threshold
+                ) AS stale_log_count
+            FROM ct_log_tail_cursors
+        """)
+        return (
+            (await self._session.execute(stmt, {"threshold": stale_threshold_seconds}))
+            .mappings()
+            .one()
         )
