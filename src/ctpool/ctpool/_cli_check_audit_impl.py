@@ -26,7 +26,7 @@ async def run_check_audit_gaps(
         AuditCheckResult with per-type counts of new findings.
     """
     settings = get_settings()
-    engine = create_engine(str(settings.database_url))
+    engine = create_engine(settings)
     session_factory = create_session_factory(engine)
 
     claim_timeout = settings.ct_backfill_claim_timeout_seconds

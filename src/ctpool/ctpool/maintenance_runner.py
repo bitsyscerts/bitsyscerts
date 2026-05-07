@@ -112,6 +112,6 @@ async def _check_audit_gaps(_settings: Settings, console: Console) -> None:
     try:
         from ctpool._cli_check_audit_impl import run_check_audit_gaps
 
-        await run_check_audit_gaps(console=console)
+        await run_check_audit_gaps(dry_run=False, console=console)
     except ImportError:
         _logger.debug("Audit gap check skipped: module not available")
