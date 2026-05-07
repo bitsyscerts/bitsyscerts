@@ -40,12 +40,12 @@ def test_missing_database_url_raises_validation_error(
         Settings.model_validate({})
 
 
-def test_default_backfill_days_is_180() -> None:
-    """CT_BACKFILL_DAYS defaults to 180."""
+def test_default_backfill_days_is_30() -> None:
+    """CT_BACKFILL_DAYS defaults to 30 (current-osint retention profile)."""
     s = Settings.model_validate(
         {"database_url": "postgresql+psycopg://u:p@localhost:5432/db"}
     )
-    assert s.ct_backfill_days == 180
+    assert s.ct_backfill_days == 30
 
 
 def test_default_tail_interval_is_300() -> None:

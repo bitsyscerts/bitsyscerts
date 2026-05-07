@@ -119,6 +119,37 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
         "tail_freshness_summary",
         _make_freshness_row(),
     )
+    repo.entry_outcome_counts.return_value = overrides.get(
+        "entry_outcome_counts",
+        {
+            "stored": 0,
+            "parse_error": 0,
+            "unsupported_entry_type": 0,
+            "skipped_by_policy": 0,
+        },
+    )
+    repo.backfill_range_status_counts.return_value = overrides.get(
+        "backfill_range_status_counts",
+        {
+            "pending": 0,
+            "in_progress": 0,
+            "stale_in_progress": 0,
+            "completed": 0,
+            "failed": 0,
+        },
+    )
+    repo.ingestion_metrics_summary.return_value = overrides.get(
+        "ingestion_metrics_summary",
+        {
+            "row_count": 0,
+            "oldest_at": None,
+        },
+    )
+    repo.audit_health_counts.return_value = overrides.get(
+        "audit_health_counts",
+        {"critical": 0, "error": 0, "warning": 0, "info": 0},
+    )
+    repo._ctpool_settings = None
     return repo
 
 
@@ -324,6 +355,31 @@ class TestStatsService:
         result = await StatsService(repo).get_stats()
         assert result.logs[0].tail_freshness_lag_seconds is None
 
+    async def test_entry_outcomes_defaults_to_zero(self) -> None:
+        """When repository returns all-zero outcome counts, response reflects zeros."""
+        repo = _repo_with_defaults()
+        result = await StatsService(repo).get_stats()
+        assert result.entry_outcomes.stored == 0
+        assert result.entry_outcomes.parse_error == 0
+        assert result.entry_outcomes.unsupported_entry_type == 0
+        assert result.entry_outcomes.skipped_by_policy == 0
+
+    async def test_entry_outcomes_populated_from_repository(self) -> None:
+        """StatsService maps repository outcome counts into EntryOutcomeStats."""
+        repo = _repo_with_defaults(
+            entry_outcome_counts={
+                "stored": 12345,
+                "parse_error": 7,
+                "unsupported_entry_type": 3,
+                "skipped_by_policy": 1,
+            }
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.entry_outcomes.stored == 12345
+        assert result.entry_outcomes.parse_error == 7
+        assert result.entry_outcomes.unsupported_entry_type == 3
+        assert result.entry_outcomes.skipped_by_policy == 1
+
 
 # ---------------------------------------------------------------------------
 # _build_ingestion_rate_stats (pure function)
@@ -382,3 +438,163 @@ class TestBuildTailFreshnessStats:
         result = _build_tail_freshness_stats(row, stale_threshold_seconds=300)
         assert result.oldest_lag_seconds is None
         assert result.median_lag_seconds is None
+
+
+# ---------------------------------------------------------------------------
+# BackfillRangeStats
+# ---------------------------------------------------------------------------
+
+
+class TestBackfillRangeStats:
+    async def test_backfill_ranges_defaults_to_zero(self) -> None:
+        """backfill_ranges fields default to zero when repository returns zeros."""
+        repo = _repo_with_defaults()
+        result = await StatsService(repo).get_stats()
+        assert result.backfill_ranges.pending == 0
+        assert result.backfill_ranges.in_progress == 0
+        assert result.backfill_ranges.stale_in_progress == 0
+        assert result.backfill_ranges.completed == 0
+        assert result.backfill_ranges.failed == 0
+
+    async def test_backfill_ranges_populated_from_repository(self) -> None:
+        """backfill_ranges mirrors values returned by the repository."""
+        repo = _repo_with_defaults(
+            backfill_range_status_counts={
+                "pending": 10,
+                "in_progress": 2,
+                "stale_in_progress": 1,
+                "completed": 500,
+                "failed": 3,
+            }
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.backfill_ranges.pending == 10
+        assert result.backfill_ranges.in_progress == 2
+        assert result.backfill_ranges.stale_in_progress == 1
+        assert result.backfill_ranges.completed == 500
+        assert result.backfill_ranges.failed == 3
+
+    async def test_backfill_range_status_counts_called_with_default_timeout(
+        self,
+    ) -> None:
+        """backfill_range_status_counts is called with 1800 when no ctpool settings."""
+        repo = _repo_with_defaults()
+        repo._ctpool_settings = None
+        await StatsService(repo).get_stats()
+        repo.backfill_range_status_counts.assert_awaited_once_with(1800)
+
+    async def test_backfill_health_ok_when_no_failures(self) -> None:
+        """backfill_health.status is 'ok' when no failed or stale ranges."""
+        repo = _repo_with_defaults()
+        result = await StatsService(repo).get_stats()
+        assert result.backfill_health is not None
+        assert result.backfill_health.status == "ok"
+        assert result.backfill_health.failed_ranges == 0
+        assert result.backfill_health.stale_ranges == 0
+
+    async def test_backfill_health_warning_when_failed_ranges(self) -> None:
+        """backfill_health.status is 'warning' when failed > 0."""
+        repo = _repo_with_defaults(
+            backfill_range_status_counts={
+                "pending": 0,
+                "in_progress": 0,
+                "stale_in_progress": 0,
+                "completed": 10,
+                "failed": 3,
+            }
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.backfill_health is not None
+        assert result.backfill_health.status == "warning"
+        assert result.backfill_health.failed_ranges == 3
+
+    async def test_backfill_health_warning_when_stale_ranges(self) -> None:
+        """backfill_health.status is 'warning' when stale_in_progress > 0."""
+        repo = _repo_with_defaults(
+            backfill_range_status_counts={
+                "pending": 0,
+                "in_progress": 2,
+                "stale_in_progress": 1,
+                "completed": 10,
+                "failed": 0,
+            }
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.backfill_health is not None
+        assert result.backfill_health.status == "warning"
+        assert result.backfill_health.stale_ranges == 1
+
+    async def test_metrics_retention_populated(self) -> None:
+        """metrics_retention reflects ingestion_metrics_summary and settings."""
+        from datetime import timedelta
+
+        oldest = datetime.now(UTC) - timedelta(days=20)
+        repo = _repo_with_defaults(
+            ingestion_metrics_summary={
+                "row_count": 150,
+                "oldest_at": oldest,
+            }
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.metrics_retention is not None
+        assert result.metrics_retention.ingestion_metrics_rows == 150
+        assert result.metrics_retention.oldest_ingestion_metric_at == oldest
+        assert result.metrics_retention.metrics_retention_days == 30
+
+    async def test_metrics_retention_null_oldest_when_no_rows(self) -> None:
+        """metrics_retention.oldest_ingestion_metric_at is None when table is empty."""
+        repo = _repo_with_defaults()
+        result = await StatsService(repo).get_stats()
+        assert result.metrics_retention is not None
+        assert result.metrics_retention.oldest_ingestion_metric_at is None
+        assert result.metrics_retention.ingestion_metrics_rows == 0
+
+    async def test_audit_health_ok_when_no_open_findings(self) -> None:
+        """audit_health.status is 'ok' when all severity counts are zero."""
+        repo = _repo_with_defaults(
+            audit_health_counts={"critical": 0, "error": 0, "warning": 0, "info": 0}
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.audit_health is not None
+        assert result.audit_health.status == "ok"
+        assert result.audit_health.total_open == 0
+
+    async def test_audit_health_attention_when_critical_findings(self) -> None:
+        """audit_health.status is 'attention_needed' when critical count > 0."""
+        repo = _repo_with_defaults(
+            audit_health_counts={"critical": 2, "error": 0, "warning": 0, "info": 0}
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.audit_health is not None
+        assert result.audit_health.status == "attention_needed"
+        assert result.audit_health.open_critical == 2
+        assert result.audit_health.total_open == 2
+
+    async def test_audit_health_attention_when_error_findings(self) -> None:
+        """audit_health.status is 'attention_needed' when error count > 0."""
+        repo = _repo_with_defaults(
+            audit_health_counts={"critical": 0, "error": 1, "warning": 0, "info": 0}
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.audit_health is not None
+        assert result.audit_health.status == "attention_needed"
+        assert result.audit_health.open_error == 1
+
+    async def test_audit_health_ok_when_only_info_findings(self) -> None:
+        """audit_health.status is 'ok' when only info-severity findings are open."""
+        repo = _repo_with_defaults(
+            audit_health_counts={"critical": 0, "error": 0, "warning": 0, "info": 3}
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.audit_health is not None
+        assert result.audit_health.status == "ok"
+        assert result.audit_health.total_open == 3
+
+    async def test_audit_health_total_open_sums_all_severities(self) -> None:
+        """audit_health.total_open is the sum of all per-severity counts."""
+        repo = _repo_with_defaults(
+            audit_health_counts={"critical": 1, "error": 2, "warning": 3, "info": 4}
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.audit_health is not None
+        assert result.audit_health.total_open == 10

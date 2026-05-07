@@ -190,3 +190,42 @@ class TestStatsRepository:
 
         assert snapshot.status == "throttling"
         assert snapshot.effective_batch_size_cap == 16
+
+    async def test_audit_health_counts_returns_zeros_when_empty(
+        self, empty_session: AsyncSession
+    ) -> None:
+        """audit_health_counts returns zeroes when ct_audit_findings is empty."""
+        repo = StatsRepository(empty_session)
+        counts = await repo.audit_health_counts()
+        assert counts == {"critical": 0, "error": 0, "warning": 0, "info": 0}
+
+    async def test_audit_health_counts_returns_correct_counts(
+        self, db_session: AsyncSession
+    ) -> None:
+        """audit_health_counts groups open findings by severity correctly."""
+        from ctpool.models.audit_finding import CtAuditFinding
+
+        for sev in ("critical", "error", "warning"):
+            db_session.add(
+                CtAuditFinding(
+                    finding_type="stale_backfill_claim",
+                    severity=sev,
+                    status="open",
+                )
+            )
+        # Add a resolved finding — should NOT be counted
+        db_session.add(
+            CtAuditFinding(
+                finding_type="failed_backfill_range",
+                severity="error",
+                status="resolved",
+            )
+        )
+        await db_session.flush()
+
+        repo = StatsRepository(db_session)
+        counts = await repo.audit_health_counts()
+        assert counts["critical"] == 1
+        assert counts["error"] == 1
+        assert counts["warning"] == 1
+        assert counts["info"] == 0

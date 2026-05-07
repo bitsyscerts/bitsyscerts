@@ -1,7 +1,8 @@
-"""Tests for ctpool.metrics — LogMetricsAccumulator.
+"""Tests for ctpool.metrics — LogMetricsAccumulator, prune_ingestion_metrics,
+MetricsPruneState, and maybe_prune_metrics.
 
-Covers counter increments, snapshot calculation, and DB persistence.
-DB tests use the real ``ctpool_test`` database via ``db_session`` fixture.
+Covers counter increments, snapshot calculation, DB persistence, and retention
+pruning.  DB tests use the real ``ctpool_test`` database via ``db_session``.
 """
 
 from __future__ import annotations
@@ -13,7 +14,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ctpool.metrics import LogMetricsAccumulator
+from ctpool.metrics import (
+    LogMetricsAccumulator,
+    MetricsPruneState,
+    maybe_prune_metrics,
+    prune_ingestion_metrics,
+)
 from ctpool.models.ingestion_metric import IngestionMetric
 from ctpool.models.log_source import CtLogSource
 
@@ -190,3 +196,133 @@ async def test_persist_snapshot_twice_writes_two_rows(
     )
     rows = result.scalars().all()
     assert len(rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# prune_ingestion_metrics tests
+# ---------------------------------------------------------------------------
+
+
+async def test_prune_deletes_old_rows(db_session: AsyncSession) -> None:
+    """Rows older than retention_days are deleted and the count returned."""
+    from datetime import timedelta
+
+    source = _make_log_source()
+    db_session.add(source)
+    await db_session.flush()
+
+    # Insert one old row and one fresh row.
+    old_row = IngestionMetric(
+        id=uuid.uuid4(),
+        log_source_id=source.id,
+        snapshot_at=datetime.now(UTC) - timedelta(days=40),
+        entries_fetched=1,
+        entries_parsed=1,
+        certs_upserted=0,
+        hostnames_upserted=0,
+        parse_errors=0,
+        http_429_count=0,
+        http_5xx_count=0,
+        window_seconds=60,
+    )
+    fresh_row = IngestionMetric(
+        id=uuid.uuid4(),
+        log_source_id=source.id,
+        snapshot_at=datetime.now(UTC) - timedelta(days=1),
+        entries_fetched=1,
+        entries_parsed=1,
+        certs_upserted=0,
+        hostnames_upserted=0,
+        parse_errors=0,
+        http_429_count=0,
+        http_5xx_count=0,
+        window_seconds=60,
+    )
+    db_session.add_all([old_row, fresh_row])
+    await db_session.flush()
+
+    deleted = await prune_ingestion_metrics(db_session, retention_days=30)
+    assert deleted == 1
+
+
+async def test_prune_dry_run_does_not_delete(db_session: AsyncSession) -> None:
+    """dry_run=True counts rows without deleting them."""
+    from datetime import timedelta
+
+    source = _make_log_source()
+    db_session.add(source)
+    await db_session.flush()
+
+    old_row = IngestionMetric(
+        id=uuid.uuid4(),
+        log_source_id=source.id,
+        snapshot_at=datetime.now(UTC) - timedelta(days=40),
+        entries_fetched=1,
+        entries_parsed=1,
+        certs_upserted=0,
+        hostnames_upserted=0,
+        parse_errors=0,
+        http_429_count=0,
+        http_5xx_count=0,
+        window_seconds=60,
+    )
+    db_session.add(old_row)
+    await db_session.flush()
+
+    count = await prune_ingestion_metrics(db_session, retention_days=30, dry_run=True)
+    assert count == 1
+
+    # Row should still exist.
+    result = await db_session.execute(
+        select(IngestionMetric).where(IngestionMetric.id == old_row.id)
+    )
+    assert result.scalar_one_or_none() is not None
+
+
+async def test_prune_no_rows_returns_zero(db_session: AsyncSession) -> None:
+    """prune_ingestion_metrics returns 0 when no rows match the cutoff."""
+    source = _make_log_source()
+    db_session.add(source)
+    await db_session.flush()
+
+    deleted = await prune_ingestion_metrics(db_session, retention_days=30)
+    assert deleted == 0
+
+
+# ---------------------------------------------------------------------------
+# MetricsPruneState / maybe_prune_metrics tests (unit — no DB needed)
+# ---------------------------------------------------------------------------
+
+
+def test_prune_state_default_last_pruned_at_is_zero() -> None:
+    """MetricsPruneState initialises last_pruned_at to 0.0."""
+    state = MetricsPruneState()
+    assert state.last_pruned_at == 0.0
+
+
+async def test_maybe_prune_skips_when_interval_not_elapsed(
+    db_session: AsyncSession,
+) -> None:
+    """maybe_prune_metrics returns 0 without calling prune when interval not met."""
+    import time
+
+    state = MetricsPruneState(last_pruned_at=time.monotonic())
+    result = await maybe_prune_metrics(
+        state, db_session, retention_days=30, prune_interval_seconds=3600
+    )
+    assert result == 0
+
+
+async def test_maybe_prune_calls_prune_when_interval_elapsed(
+    db_session: AsyncSession,
+) -> None:
+    """maybe_prune_metrics prunes and updates last_pruned_at when interval elapsed."""
+    import time
+
+    state = MetricsPruneState(last_pruned_at=0.0)
+    before = time.monotonic()
+    result = await maybe_prune_metrics(
+        state, db_session, retention_days=30, prune_interval_seconds=1
+    )
+    assert result == 0  # No rows old enough to prune.
+    assert state.last_pruned_at >= before

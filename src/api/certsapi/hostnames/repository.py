@@ -17,6 +17,7 @@ from certsapi.hostnames.cursor import PageCursor
 from certsapi.hostnames.filter_builder import build_where_clause
 from certsapi.hostnames.models import (
     CertEmbedResponse,
+    HostnameLatestCertSummary,
     HostnameResult,
     HostnameSearchParams,
     SortField,
@@ -71,6 +72,27 @@ def _cert_embed(cert: Certificate | None, sans: list[str]) -> CertEmbedResponse 
     )
 
 
+def _latest_cert_summary(hostname: Hostname) -> HostnameLatestCertSummary | None:
+    """Build a HostnameLatestCertSummary from stored hostname columns, or None."""
+    if hostname.latest_cert_fingerprint_sha256 is None:
+        return None
+    if (
+        hostname.latest_cert_not_before is None
+        or hostname.latest_cert_not_after is None
+    ):
+        return None
+    return HostnameLatestCertSummary(
+        fingerprint_sha256=hostname.latest_cert_fingerprint_sha256,
+        not_before=hostname.latest_cert_not_before,
+        not_after=hostname.latest_cert_not_after,
+        issuer_cn=hostname.latest_cert_issuer_cn,
+        issuer_org=hostname.latest_cert_issuer_org,
+        subject_cn=hostname.latest_cert_subject_cn,
+        is_precert=bool(hostname.latest_cert_is_precert),
+        seen_at=hostname.latest_cert_seen_at,
+    )
+
+
 def _to_result(
     hostname: Hostname,
     cert: Certificate | None,
@@ -87,6 +109,7 @@ def _to_result(
         last_seen_ct=hostname.last_seen_ct,
         latest_cert_not_before=hostname.latest_cert_not_before,
         latest_cert_not_after=hostname.latest_cert_not_after,
+        latest_cert_summary=_latest_cert_summary(hostname),
         latest_cert=_cert_embed(cert, sans or []) if embed else None,
     )
 

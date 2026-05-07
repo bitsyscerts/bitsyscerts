@@ -7,10 +7,15 @@ from datetime import UTC, datetime
 from sqlalchemy.engine import RowMapping
 
 from certsapi.stats.models import (
+    AuditHealth,
+    BackfillHealth,
+    BackfillRangeStats,
     DbContentionStats,
+    EntryOutcomeStats,
     IngestionRateStats,
     IngestionRateWindow,
     LogStatsItem,
+    MetricsRetentionStats,
     StatsResponse,
     StorageStats,
     TableStorageItem,
@@ -82,6 +87,43 @@ def _build_tail_freshness_stats(
     )
 
 
+def _build_audit_health(counts: dict[str, int]) -> AuditHealth:
+    """Build an AuditHealth summary from per-severity open finding counts."""
+    total = sum(counts.values())
+    actionable = counts.get("critical", 0) + counts.get("error", 0)
+    status = "attention_needed" if actionable > 0 else "ok"
+    return AuditHealth(
+        open_critical=counts.get("critical", 0),
+        open_error=counts.get("error", 0),
+        open_warning=counts.get("warning", 0),
+        open_info=counts.get("info", 0),
+        total_open=total,
+        status=status,  # type: ignore[arg-type]
+    )
+
+
+def _build_backfill_health(failed: int, stale: int) -> BackfillHealth:
+    """Derive a BackfillHealth summary from range status counts."""
+    if failed > 0 and stale > 0:
+        msg = (
+            f"{failed} backfill range(s) have failed and require retry or inspection. "
+            f"{stale} range(s) are stale in-progress."
+        )
+    elif failed > 0:
+        msg = f"{failed} backfill range(s) have failed and require retry or inspection."
+    elif stale > 0:
+        msg = f"{stale} range(s) are stuck in_progress with no recent heartbeat."
+    else:
+        msg = ""
+    status: str = "warning" if (failed > 0 or stale > 0) else "ok"
+    return BackfillHealth(
+        status=status,  # type: ignore[arg-type]
+        failed_ranges=failed,
+        stale_ranges=stale,
+        message=msg,
+    )
+
+
 class StatsService:
     """Runs all stats queries sequentially and assembles the StatsResponse."""
 
@@ -103,6 +145,23 @@ class StatsService:
         rate_rows = await self._repository.ingestion_rate_stats(_INGESTION_RATE_WINDOWS)
         freshness_row = await self._repository.tail_freshness_summary(
             _TAIL_STALE_THRESHOLD_SECONDS
+        )
+        outcome_counts = await self._repository.entry_outcome_counts()
+        ctpool_settings = self._repository._ctpool_settings
+        claim_timeout = (
+            ctpool_settings.ct_backfill_claim_timeout_seconds
+            if ctpool_settings is not None
+            else 1800
+        )
+        backfill_counts = await self._repository.backfill_range_status_counts(
+            claim_timeout
+        )
+        metrics_summary = await self._repository.ingestion_metrics_summary()
+        audit_counts = await self._repository.audit_health_counts()
+        retention_days = (
+            ctpool_settings.ct_metrics_retention_days
+            if ctpool_settings is not None
+            else 30
         )
         total_size_bytes = int(storage_data["total"]["total_size_bytes"])
         storage = StorageStats(
@@ -154,5 +213,28 @@ class StatsService:
             tail_freshness=_build_tail_freshness_stats(
                 freshness_row, _TAIL_STALE_THRESHOLD_SECONDS
             ),
+            entry_outcomes=EntryOutcomeStats(
+                stored=outcome_counts.get("stored", 0),
+                parse_error=outcome_counts.get("parse_error", 0),
+                unsupported_entry_type=outcome_counts.get("unsupported_entry_type", 0),
+                skipped_by_policy=outcome_counts.get("skipped_by_policy", 0),
+            ),
+            backfill_ranges=BackfillRangeStats(
+                pending=backfill_counts["pending"],
+                in_progress=backfill_counts["in_progress"],
+                stale_in_progress=backfill_counts["stale_in_progress"],
+                completed=backfill_counts["completed"],
+                failed=backfill_counts["failed"],
+            ),
+            backfill_health=_build_backfill_health(
+                failed=backfill_counts["failed"],
+                stale=backfill_counts["stale_in_progress"],
+            ),
+            metrics_retention=MetricsRetentionStats(
+                ingestion_metrics_rows=int(metrics_summary["row_count"]),
+                oldest_ingestion_metric_at=metrics_summary["oldest_at"],
+                metrics_retention_days=retention_days,
+            ),
+            audit_health=_build_audit_health(audit_counts),
             logs=[_row_to_log_item(row, now) for row in per_log],
         )

@@ -743,7 +743,7 @@ async def test_tail_worker_applies_shared_db_pacing_before_processing_log() -> N
         ) as sleep_mock,
         patch(
             "ctpool.tail_worker._tail_one_log",
-            AsyncMock(return_value=(1, False, False, observation)),
+            AsyncMock(return_value=(1, False, False, observation, None)),
         ) as tail_one_log_mock,
         patch(
             "ctpool.tail_worker.submit_db_contention_observation",

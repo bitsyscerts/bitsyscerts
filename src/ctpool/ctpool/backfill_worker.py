@@ -41,14 +41,22 @@ from ctpool.dispatcher import (
     mark_range_complete,
     mark_range_failed,
     mark_range_pending,
+    reap_stale_backfill_claims,
+    update_range_heartbeat,
 )
-from ctpool.entry_persistence import persist_entry_with_retry
-from ctpool.exceptions import FetchError, ParseError, RateLimitError
+from ctpool.entry_persistence import persist_entry_with_retry, persist_failure_outcome
+from ctpool.exceptions import (
+    FetchError,
+    ParseError,
+    RateLimitError,
+    UnsupportedEntryTypeError,
+)
 from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
+from ctpool.outcome_constants import OUTCOME_PARSE_ERROR, OUTCOME_UNSUPPORTED_ENTRY_TYPE
 from ctpool.parser import parse_leaf_entry
 
 _logger = logging.getLogger(__name__)
@@ -241,6 +249,21 @@ async def _process_range_batch(
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
             )
             count += 1
+        except UnsupportedEntryTypeError as exc:
+            _logger.warning(
+                "unsupported entry type backfill range=%s index=%d: %s",
+                claimed.id,
+                entry_index,
+                exc,
+            )
+            metrics.record_parse_error()
+            await persist_failure_outcome(
+                session,
+                claimed.log_source_id,
+                entry_index,
+                OUTCOME_UNSUPPORTED_ENTRY_TYPE,
+                exc,
+            )
         except ParseError as exc:
             _logger.warning(
                 "parse error backfill range=%s index=%d: %s",
@@ -249,6 +272,13 @@ async def _process_range_batch(
                 exc,
             )
             metrics.record_parse_error()
+            await persist_failure_outcome(
+                session,
+                claimed.log_source_id,
+                entry_index,
+                OUTCOME_PARSE_ERROR,
+                exc,
+            )
         except Exception as exc:  # pragma: no cover
             _logger.warning(
                 "unexpected cert error backfill range=%s index=%d type=%s detail=%r",
@@ -271,17 +301,20 @@ async def _run_one_range(
     settings: Settings,
     batch_size: int,
     limit_remaining: int | None,
-) -> tuple[int, str, bool, DbContentionObservation]:
+) -> tuple[int, str, bool, DbContentionObservation, int | None]:
     """Process *claimed* range; mark complete or failed.
 
     Returns:
-        ``(entries_written, log_url, was_rate_limited)``.
+        ``(entries_written, log_url, was_rate_limited, contention,
+        retry_after_seconds)``.
     """
     metrics = LogMetricsAccumulator()
     try:
         async with session_factory() as session:
             async with session.begin():
                 log_url = await _resolve_log_url(session, claimed)
+            async with session.begin():
+                await update_range_heartbeat(session, claimed.id)
             count, observation = await _process_range_batch(
                 claimed,
                 log_url,
@@ -300,19 +333,30 @@ async def _run_one_range(
             async with session.begin():
                 await mark_range_complete(session, claimed.id)
 
-        return count, log_url, False, observation
+        return count, log_url, False, observation, None
     except RateLimitError as exc:
         _logger.warning("rate limited backfill range=%s: %s", claimed.id, exc)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_pending(session, claimed.id)
-        return 0, "", True, DbContentionObservation(0, 0)
+        return 0, "", True, DbContentionObservation(0, 0), exc.retry_after_seconds
     except FetchError as exc:
         _logger.error("fetch error backfill range=%s: %s", claimed.id, exc)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_failed(session, claimed.id, str(exc))
-        return 0, "", False, DbContentionObservation(0, 0)
+        return 0, "", False, DbContentionObservation(0, 0), None
+    except Exception as exc:
+        _logger.error(
+            "unexpected error backfill range=%s type=%s: %s",
+            claimed.id,
+            exc.__class__.__name__,
+            exc,
+        )
+        async with session_factory() as session:
+            async with session.begin():
+                await mark_range_failed(session, claimed.id, str(exc))
+        return 0, "", False, DbContentionObservation(0, 0), None
 
 
 async def run_backfill(
@@ -391,6 +435,23 @@ async def run_backfill(
             excluded_log_ids = {
                 lid for lid, until in rate_limited_until.items() if now < until
             }
+
+            async with session_factory() as session:
+                async with session.begin():
+                    reaped = await reap_stale_backfill_claims(
+                        session,
+                        settings.ct_backfill_claim_timeout_seconds,
+                    )
+            if reaped:
+                _logger.info("backfill reaper: reset %d stale claims", len(reaped))
+                for r in reaped:
+                    _logger.debug(
+                        "backfill reaper: range=%s log=%s next_index=%d",
+                        r.id,
+                        r.log_source_id,
+                        r.next_index,
+                    )
+
             directive = await get_db_contention_directive(
                 session_factory,
                 settings,
@@ -429,7 +490,13 @@ async def run_backfill(
                     f"Fetching [{claimed.start_index:,}–{claimed.end_index:,}]"
                     f" ({claimed.end_index - claimed.start_index + 1:,} entries)…"
                 )
-            batch_count, log_url, was_rate_limited, observation = await _run_one_range(
+            (
+                batch_count,
+                log_url,
+                was_rate_limited,
+                observation,
+                retry_after,
+            ) = await _run_one_range(
                 claimed,
                 session_factory,
                 client,
@@ -440,10 +507,15 @@ async def run_backfill(
             if was_rate_limited:
                 hit_count = rate_limit_hits.get(claimed.log_source_id, 0) + 1
                 rate_limit_hits[claimed.log_source_id] = hit_count
-                backoff_seconds = min(
-                    settings.ct_rate_limit_backoff_max_seconds,
-                    settings.ct_rate_limit_backoff_seconds * (2 ** (hit_count - 1)),
-                )
+                if retry_after is not None:
+                    backoff_seconds: float = min(
+                        settings.ct_retry_after_max_seconds, retry_after
+                    )
+                else:
+                    backoff_seconds = min(
+                        settings.ct_rate_limit_backoff_max_seconds,
+                        settings.ct_rate_limit_backoff_seconds * (2 ** (hit_count - 1)),
+                    )
                 rate_limited_until[claimed.log_source_id] = now + float(backoff_seconds)
                 if on_status is not None:
                     on_status(

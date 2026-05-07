@@ -1,6 +1,8 @@
 import { Accordion, Alert, Stack, Text } from "@mantine/core";
 import { IconChartBar, IconAlertTriangle } from "@tabler/icons-react";
 import { useStats } from "@/hooks/useStats";
+import { AuditHealthCard } from "./AuditHealthCard";
+import { BackfillRangesCard } from "./BackfillRangesCard";
 import { StatsSummary } from "./StatsSummary";
 import { StorageTable } from "./StorageTable";
 import { LogStatsList } from "./LogStatsList";
@@ -38,6 +40,10 @@ export function StatsPanel() {
         />
         <IngestionRateCard ingestionRate={data.ingestion_rate} />
         <TailFreshnessCard tailFreshness={data.tail_freshness} />
+        <BackfillRangesCard backfillRanges={data.backfill_ranges} />
+        {data.audit_health && (
+          <AuditHealthCard auditHealth={data.audit_health} />
+        )}
         <Text size="sm" fw={600}>
           Database Storage
         </Text>

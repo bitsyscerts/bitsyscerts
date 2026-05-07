@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import struct
 
-from ctpool.exceptions import ParseError
+from ctpool.exceptions import ParseError, UnsupportedEntryTypeError
 
 # RFC 6962 entry type constants
 _X509_ENTRY: int = 0x0000
@@ -65,7 +65,7 @@ def decode_merkle_leaf(leaf_input_b64: str) -> tuple[int, bytes]:
 
     (entry_type,) = struct.unpack_from(">H", raw, _ENTRY_TYPE_OFFSET)
     if entry_type not in (_X509_ENTRY, _PRECERT_ENTRY):
-        raise ParseError(f"Unknown LogEntryType: {entry_type:#06x}")
+        raise UnsupportedEntryTypeError(f"Unknown LogEntryType: {entry_type:#06x}")
 
     return entry_type, _extract_cert_der(raw, entry_type)
 

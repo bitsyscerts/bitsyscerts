@@ -11,10 +11,16 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ctpool.hostname_latest_cert import (
+    IncomingCertSummary,
+    StoredCertSummary,
+    build_latest_cert_fields,
+    should_update_latest_cert,
+)
 from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
 from ctpool.models.hostname import Hostname
@@ -98,67 +104,80 @@ async def upsert_hostname(
     session: AsyncSession,
     hostname: str,
     certificate: ParsedCertificate,
+    *,
+    observed_at: datetime,
 ) -> uuid.UUID:
     """Upsert a ``Hostname`` row and return its ``id``.
 
-    On conflict the ``last_seen_ct`` and latest certificate metadata are updated
-    when the certificate's ``not_before`` is newer than what's stored.
+    Uses a two-step SELECT + Python ranking approach so that all five
+    deterministic ranking rules are applied without a complex SQL expression.
+    The hostname is first inserted/touched (updating ``last_seen_ct`` only),
+    then the stored cert summary is compared against the incoming cert.  If
+    the incoming cert wins the ranking, all ten ``latest_cert_*`` fields are
+    updated in a second statement.
 
     Args:
         session:     Active async database session.
         hostname:    Normalized hostname string (lowercase, no trailing dot).
         certificate: Parsed certificate that contains this hostname.
+        observed_at: Timestamp at which this entry was processed.
 
     Returns:
         The ``id`` of the upserted hostname.
     """
-    now = datetime.now(UTC)
     reg_domain = extract_registrable_domain(hostname)
     is_wildcard = hostname.startswith("*.")
 
+    # Step 1: upsert presence fields; DO UPDATE only touches last_seen_ct so
+    # that RETURNING always reflects the stored cert fields (not overwritten).
     stmt = (
         pg_insert(Hostname)
         .values(
             hostname=hostname,
             registrable_domain=reg_domain,
             is_wildcard=is_wildcard,
-            first_seen_ct=now,
-            last_seen_ct=now,
-            latest_cert_fingerprint_sha256=certificate.fingerprint_sha256,
-            latest_cert_not_before=certificate.not_before,
-            latest_cert_not_after=certificate.not_after,
+            first_seen_ct=observed_at,
+            last_seen_ct=observed_at,
         )
         .on_conflict_do_update(
             index_elements=["hostname"],
-            set_={
-                "last_seen_ct": now,
-                "latest_cert_fingerprint_sha256": certificate.fingerprint_sha256,
-                "latest_cert_not_before": certificate.not_before,
-                "latest_cert_not_after": certificate.not_after,
-            },
-            where=or_(
-                Hostname.latest_cert_fingerprint_sha256.is_distinct_from(
-                    certificate.fingerprint_sha256
-                ),
-                Hostname.latest_cert_not_before.is_distinct_from(
-                    certificate.not_before
-                ),
-                Hostname.latest_cert_not_after.is_distinct_from(certificate.not_after),
-            ),
+            set_={"last_seen_ct": observed_at},
         )
-        .returning(Hostname.id)
+        .returning(
+            Hostname.id,
+            Hostname.latest_cert_fingerprint_sha256,
+            Hostname.latest_cert_not_before,
+            Hostname.latest_cert_not_after,
+            Hostname.latest_cert_seen_at,
+        )
     )
-    result = await session.execute(stmt)
-    inserted_or_updated_id = result.scalar_one_or_none()
-    if inserted_or_updated_id is not None:
-        return uuid.UUID(str(inserted_or_updated_id))
+    row = (await session.execute(stmt)).one()
+    hostname_id = uuid.UUID(str(row[0]))
 
-    # No row is returned when conflict occurred but DO UPDATE ... WHERE
-    # evaluated false (no-op update). Fetch the existing hostname id.
-    existing_result = await session.execute(
-        select(Hostname.id).where(Hostname.hostname == hostname)
+    # Step 2: apply ranking and conditionally update the latest-cert summary.
+    stored = StoredCertSummary(
+        fingerprint_sha256=row[1],
+        not_before=row[2],
+        not_after=row[3],
+        seen_at=row[4],
     )
-    return uuid.UUID(str(existing_result.scalar_one()))
+    incoming = IncomingCertSummary(
+        fingerprint_sha256=certificate.fingerprint_sha256,
+        not_before=certificate.not_before,
+        not_after=certificate.not_after,
+        issuer_cn=certificate.issuer_common_name,
+        issuer_org=certificate.issuer_organization,
+        subject_cn=certificate.subject_common_name,
+        is_precert=certificate.is_precertificate,
+        observed_at=observed_at,
+    )
+    if should_update_latest_cert(stored, incoming):
+        fields = build_latest_cert_fields(incoming)
+        await session.execute(
+            update(Hostname).where(Hostname.id == hostname_id).values(**fields)
+        )
+
+    return hostname_id
 
 
 async def upsert_certificate_hostname(

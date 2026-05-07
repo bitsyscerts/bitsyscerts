@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     database_admin_url: PostgresDsn | None = None
 
     # Ingestion behavior
-    ct_backfill_days: int = 180
+    ct_backfill_days: int = 30
     """Days of CT log history to seed on first encounter.
 
     The backfill worker estimates a pivot index from the log's STH timestamp
@@ -54,6 +54,25 @@ class Settings(BaseSettings):
     ct_db_contention_enable_batch_cap: bool = True
     ct_rate_limit_backoff_seconds: int = 30
     ct_rate_limit_backoff_max_seconds: int = 300
+    ct_retry_after_max_seconds: int = 3600
+    """Maximum number of seconds to honour from a ``Retry-After`` header.
+
+    If the server requests a longer delay it will be clamped to this value.
+    """
+
+    # Metrics retention
+    ct_metrics_retention_days: int = 14
+    """Days of ingestion_metrics rows to retain.  Older rows are pruned."""
+    ct_metrics_prune_interval_seconds: int = 3600
+    """Minimum seconds between automatic ingestion_metrics prune runs."""
+
+    # Backfill claim durability
+    ct_backfill_claim_timeout_seconds: int = 1800
+    """Seconds after which an in_progress backfill range with no recent
+    heartbeat is considered stale and eligible for reaping.
+    """
+    ct_backfill_heartbeat_seconds: int = 60
+    """Interval in seconds at which active backfill workers refresh heartbeat_at."""
 
     # Disk safety thresholds (GiB)
     ct_min_free_disk_gb: int = 50
@@ -76,8 +95,74 @@ class Settings(BaseSettings):
     # (SSRF prevention: CT log URLs originate from this trusted source only)
     ct_log_list_url: str = "https://www.gstatic.com/ct/log_list/v3/log_list.json"
 
+    # Certificate retention
+    ct_expired_cert_retention_days: int = 30
+    """Days after a certificate's not_after before it is eligible for pruning.
+
+    Only certificates that are not the latest cert for any hostname are pruned.
+    Set to 0 to make all expired certs immediately eligible.
+    """
+
+    # Doctor health-check thresholds
+    ct_doctor_tail_lag_warning_seconds: int = 3600
+    """Tail-cursor lag above this threshold is a doctor warning."""
+    ct_doctor_tail_lag_critical_seconds: int = 86400
+    """Tail-cursor lag above this threshold is a doctor critical finding."""
+    ct_doctor_disk_warning_pct: float = 80.0
+    """Disk usage above this percentage triggers a doctor warning."""
+    ct_doctor_disk_critical_pct: float = 90.0
+    """Disk usage above this percentage triggers a doctor critical finding."""
+    ct_doctor_http_error_warning: int = 1
+    """HTTP error count above this triggers a doctor warning."""
+    ct_doctor_http_error_critical: int = 100
+    """HTTP error count above this triggers a doctor critical finding."""
+    ct_doctor_metrics_stale_warning_seconds: int = 900
+    """Age of most-recent ingestion_metrics row above this is a warning."""
+
+    # Storage profiles (T9)
+    ct_storage_profile: str = "lite"
+    """Active storage profile.  One of: lite, standard, research, archive, custom."""
+    ct_cert_storage_mode: str = "none"
+    """Certificate storage mode.
+
+    none             — hostnames + observations only; no durable cert rows.
+    metadata         — cert metadata fields; no raw binary blobs.
+    metadata_spki    — cert metadata; semantically equivalent to 'metadata' in
+                       the current schema (spki_sha256 is always stored).
+    metadata_public_key — metadata + public_key_der BYTEA (requires migration).
+    full_der         — metadata + public_key_der + raw_der BYTEA.
+    """
+    ct_hostname_retention_mode: str = "forever"
+    """Hostname retention policy.  'forever' keeps all hostnames indefinitely.
+    'window' applies ct_cert_retention_days as a rolling window.
+    """
+    ct_cert_retention_days: int = 7
+    """Days to retain certificate rows (when cert storage mode is not 'none')."""
+    ct_observation_retention_days: int = 7
+    """Days to retain ct_log_observations rows."""
+    ct_entry_outcome_retention_days: int = 7
+    """Days to retain ct_entry_outcomes rows."""
+    ct_archive_explicit_optin: bool = False
+    """Must be True to activate the 'archive' storage profile.
+
+    The archive profile retains full DER and extended history; it is TB-scale
+    storage.  Setting this to True is an explicit acknowledgement of that cost.
+    """
+
     # Logging
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def validate_archive_guard(self) -> Settings:
+        """Prevent accidental activation of the archive storage profile."""
+        if self.ct_storage_profile == "archive" and not self.ct_archive_explicit_optin:
+            raise ValueError(
+                "ct_storage_profile='archive' requires "
+                "ct_archive_explicit_optin=true. "
+                "The archive profile is TB-scale storage. "
+                "Set CT_ARCHIVE_EXPLICIT_OPTIN=true to confirm."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_db_contention_settings(self) -> Settings:

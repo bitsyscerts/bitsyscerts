@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ctpool.dispatcher import (
@@ -23,7 +23,10 @@ from ctpool.dispatcher import (
     has_backfill_ranges,
     mark_range_complete,
     mark_range_failed,
+    mark_range_pending,
+    reap_stale_backfill_claims,
     reset_tail_cursor,
+    update_range_heartbeat,
 )
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -466,3 +469,277 @@ async def test_reset_tail_cursor_raises_when_no_cursor(
     # No cursor created — reset should fail loudly.
     with pytest.raises(ValueError, match="No tail cursor found"):
         await reset_tail_cursor(db_session, source.id, 999)
+
+
+# ---------------------------------------------------------------------------
+# claim_backfill_range — heartbeat_at
+# ---------------------------------------------------------------------------
+
+
+async def test_claim_sets_heartbeat_at(db_session: AsyncSession) -> None:
+    """claim_backfill_range sets heartbeat_at equal to claimed_at."""
+    source = _make_source(url="https://hb1.example.com/", log_id="aGIx")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:1")
+    await db_session.flush()
+
+    assert claimed is not None
+    assert claimed.heartbeat_at is not None
+    assert claimed.claimed_at is not None
+    # heartbeat_at and claimed_at are set in the same call so they should be equal.
+    assert claimed.heartbeat_at == claimed.claimed_at
+
+
+# ---------------------------------------------------------------------------
+# update_range_heartbeat
+# ---------------------------------------------------------------------------
+
+
+async def test_update_range_heartbeat_advances_heartbeat_at(
+    db_session: AsyncSession,
+) -> None:
+    """update_range_heartbeat updates heartbeat_at to a newer timestamp."""
+    source = _make_source(url="https://hb2.example.com/", log_id="aGIy")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:2")
+    await db_session.flush()
+    assert claimed is not None
+
+    # Backdate heartbeat_at so we can detect an update.
+    await db_session.execute(
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.id == claimed.id)
+        .values(heartbeat_at=datetime(2000, 1, 1, tzinfo=UTC))
+    )
+    await db_session.flush()
+
+    await update_range_heartbeat(db_session, claimed.id)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(CtLogBackfillRange).where(CtLogBackfillRange.id == claimed.id)
+    )
+    row = result.scalars().first()
+    assert row is not None
+    assert row.heartbeat_at is not None
+    assert row.heartbeat_at > datetime(2000, 1, 2, tzinfo=UTC)
+
+
+async def test_update_range_heartbeat_no_op_on_non_in_progress(
+    db_session: AsyncSession,
+) -> None:
+    """update_range_heartbeat does not update a completed range."""
+    source = _make_source(url="https://hb3.example.com/", log_id="aGIz")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:3")
+    await db_session.flush()
+    assert claimed is not None
+
+    await mark_range_complete(db_session, claimed.id)
+    await db_session.flush()
+
+    # Heartbeat should not raise, but should not change the range.
+    await update_range_heartbeat(db_session, claimed.id)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(CtLogBackfillRange).where(CtLogBackfillRange.id == claimed.id)
+    )
+    row = result.scalars().first()
+    assert row is not None
+    assert row.status == "complete"
+
+
+# ---------------------------------------------------------------------------
+# mark_range_pending — clears heartbeat_at
+# ---------------------------------------------------------------------------
+
+
+async def test_mark_range_pending_clears_heartbeat_at(
+    db_session: AsyncSession,
+) -> None:
+    """mark_range_pending clears claimed_at and heartbeat_at."""
+    source = _make_source(url="https://hb4.example.com/", log_id="aGI0")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:4")
+    await db_session.flush()
+    assert claimed is not None
+    assert claimed.heartbeat_at is not None
+
+    await mark_range_pending(db_session, claimed.id)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(CtLogBackfillRange).where(CtLogBackfillRange.id == claimed.id)
+    )
+    row = result.scalars().first()
+    assert row is not None
+    assert row.status == "pending"
+    assert row.claimed_by is None
+    assert row.claimed_at is None
+    assert row.heartbeat_at is None
+
+
+# ---------------------------------------------------------------------------
+# reap_stale_backfill_claims
+# ---------------------------------------------------------------------------
+
+
+async def test_reap_stale_backfill_claims_resets_stale_range(
+    db_session: AsyncSession,
+) -> None:
+    """reap_stale_backfill_claims resets a range whose heartbeat has expired."""
+    source = _make_source(url="https://reap1.example.com/", log_id="cmVhcDE=")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:5")
+    await db_session.flush()
+    assert claimed is not None
+
+    # Backdate both claimed_at and heartbeat_at to well beyond any timeout.
+    old_time = datetime(2000, 1, 1, tzinfo=UTC)
+    await db_session.execute(
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.id == claimed.id)
+        .values(claimed_at=old_time, heartbeat_at=old_time)
+    )
+    await db_session.flush()
+
+    reaped = await reap_stale_backfill_claims(db_session, 1800)
+    await db_session.flush()
+
+    assert len(reaped) == 1
+    assert reaped[0].id == claimed.id
+
+    result = await db_session.execute(
+        select(CtLogBackfillRange).where(CtLogBackfillRange.id == claimed.id)
+    )
+    row = result.scalars().first()
+    assert row is not None
+    assert row.status == "pending"
+    assert row.claimed_by is None
+    assert row.claimed_at is None
+    assert row.heartbeat_at is None
+
+
+async def test_reap_preserves_next_index(db_session: AsyncSession) -> None:
+    """reap_stale_backfill_claims preserves next_index (partial progress)."""
+    source = _make_source(url="https://reap2.example.com/", log_id="cmVhcDI=")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 999)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:6")
+    await db_session.flush()
+    assert claimed is not None
+
+    # Simulate partial progress: advance next_index and backdate heartbeat.
+    await db_session.execute(
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.id == claimed.id)
+        .values(
+            next_index=512,
+            claimed_at=datetime(2000, 1, 1, tzinfo=UTC),
+            heartbeat_at=datetime(2000, 1, 1, tzinfo=UTC),
+        )
+    )
+    await db_session.flush()
+
+    reaped = await reap_stale_backfill_claims(db_session, 1800)
+    assert len(reaped) == 1
+    assert reaped[0].next_index == 512
+
+
+async def test_reap_does_not_reset_fresh_range(db_session: AsyncSession) -> None:
+    """reap_stale_backfill_claims does not reset a recently heartbeated range."""
+    source = _make_source(url="https://reap3.example.com/", log_id="cmVhcDM=")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:7")
+    await db_session.flush()
+    assert claimed is not None
+    # claimed_at / heartbeat_at are set to now() — well within any timeout.
+
+    reaped = await reap_stale_backfill_claims(db_session, 1800)
+    assert len(reaped) == 0
+
+
+async def test_reap_uses_claimed_at_when_heartbeat_null(
+    db_session: AsyncSession,
+) -> None:
+    """reap falls back to claimed_at when heartbeat_at is NULL."""
+    source = _make_source(url="https://reap4.example.com/", log_id="cmVhcDQ=")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:8")
+    await db_session.flush()
+    assert claimed is not None
+
+    # NULL out heartbeat_at but backdate claimed_at.
+    await db_session.execute(
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.id == claimed.id)
+        .values(claimed_at=datetime(2000, 1, 1, tzinfo=UTC), heartbeat_at=None)
+    )
+    await db_session.flush()
+
+    reaped = await reap_stale_backfill_claims(db_session, 1800)
+    assert len(reaped) == 1
+
+
+async def test_reap_idempotent_on_already_pending_range(
+    db_session: AsyncSession,
+) -> None:
+    """reap_stale_backfill_claims is idempotent: running twice yields
+    no extra resets."""
+    source = _make_source(url="https://reap5.example.com/", log_id="cmVhcDU=")
+    db_session.add(source)
+    await db_session.flush()
+    await create_backfill_ranges(db_session, source, 0, 99)
+    await db_session.flush()
+
+    claimed = await claim_backfill_range(db_session, source.id, "worker:9")
+    await db_session.flush()
+    assert claimed is not None
+
+    old_time = datetime(2000, 1, 1, tzinfo=UTC)
+    await db_session.execute(
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.id == claimed.id)
+        .values(claimed_at=old_time, heartbeat_at=old_time)
+    )
+    await db_session.flush()
+
+    first = await reap_stale_backfill_claims(db_session, 1800)
+    await db_session.flush()
+    assert len(first) == 1
+
+    # Second reap should find nothing new (range is now pending, not in_progress).
+    second = await reap_stale_backfill_claims(db_session, 1800)
+    assert len(second) == 0

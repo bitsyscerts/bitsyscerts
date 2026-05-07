@@ -1,15 +1,27 @@
-"""Per-log ingestion metrics accumulator.
+"""Per-log ingestion metrics accumulator and retention pruning.
+
+# File consolidation rationale (201-500 lines warning zone):
+# All exports here serve a single concern: tracking and pruning per-log
+# ingestion metrics.  LogMetricsAccumulator and the prune helpers share the
+# IngestionMetric ORM model and are always used together.  Splitting into two
+# modules would add an artificial boundary with no domain separation benefit.
+# Consolidation is justified until a third distinct metrics concern is added.
 
 Exports:
     LogMetricsAccumulator — Thread-safe counter bag with snapshot persistence.
+    MetricsPruneState     — Monotonic-clock gate for interval-bounded pruning.
+    prune_ingestion_metrics — Delete old ingestion_metrics rows.
+    maybe_prune_metrics   — Call prune at most once per configured interval.
 """
 
 from __future__ import annotations
 
 import time
 import uuid
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ctpool.models.ingestion_metric import IngestionMetric
@@ -124,3 +136,76 @@ class LogMetricsAccumulator:
         self._http_429_count = 0
         self._http_5xx_count = 0
         self._window_start = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# Retention pruning
+# ---------------------------------------------------------------------------
+
+
+async def prune_ingestion_metrics(
+    session: AsyncSession,
+    retention_days: int,
+    *,
+    dry_run: bool = False,
+) -> int:
+    """Delete ``ingestion_metrics`` rows older than *retention_days*.
+
+    Args:
+        session:        Active async database session (no transaction needed;
+                        the function opens its own if not dry-run).
+        retention_days: Rows with ``snapshot_at`` older than this many days
+                        will be deleted.
+        dry_run:        If True, count rows that *would* be deleted without
+                        actually deleting them.
+
+    Returns:
+        Number of rows deleted (or that would be deleted on dry-run).
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    if dry_run:
+        result = await session.execute(
+            select(func.count()).where(IngestionMetric.snapshot_at < cutoff)
+        )
+        return int(result.scalar_one())
+    result = await session.execute(
+        delete(IngestionMetric)
+        .where(IngestionMetric.snapshot_at < cutoff)
+        .returning(IngestionMetric.id)
+    )
+    return len(result.all())
+
+
+@dataclass
+class MetricsPruneState:
+    """Monotonic-clock state for at-most-once-per-interval pruning.
+
+    One instance per worker process.  Reset between test runs.
+    """
+
+    last_pruned_at: float = field(default_factory=lambda: 0.0)
+
+
+async def maybe_prune_metrics(
+    state: MetricsPruneState,
+    session: AsyncSession,
+    retention_days: int,
+    prune_interval_seconds: int,
+) -> int:
+    """Prune old metrics rows if the configured interval has elapsed.
+
+    Args:
+        state:                 Mutable prune-state object shared by the worker.
+        session:               Active async database session.
+        retention_days:        Passed through to :func:`prune_ingestion_metrics`.
+        prune_interval_seconds: Minimum seconds between automatic prune runs.
+
+    Returns:
+        Number of rows deleted, or 0 if the interval has not elapsed yet.
+    """
+    now = time.monotonic()
+    if now - state.last_pruned_at < prune_interval_seconds:
+        return 0
+    deleted = await prune_ingestion_metrics(session, retention_days)
+    state.last_pruned_at = now
+    return deleted

@@ -24,9 +24,12 @@ from sqlalchemy.orm import selectinload
 
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
 from ctpool.models.certificate import Certificate
+from ctpool.models.entry_outcome import CtEntryOutcome
 from ctpool.models.hostname import Hostname
 from ctpool.models.ingestion_metric import IngestionMetric
+from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
+from ctpool.outcome_constants import ALL_OUTCOMES
 from ctpool.stats_contention import render_db_contention_panel
 
 _THROUGHPUT_WINDOW_MINUTES: int = 10
@@ -198,6 +201,86 @@ def _build_stats_table(
     return table
 
 
+async def _query_outcome_counts(session: AsyncSession) -> dict[str, int]:
+    """Return per-outcome row counts from ``ct_entry_outcomes``."""
+    stmt = select(CtEntryOutcome.outcome, func.count().label("cnt")).group_by(
+        CtEntryOutcome.outcome
+    )
+    result = await session.execute(stmt)
+    counts: dict[str, int] = dict.fromkeys(ALL_OUTCOMES, 0)
+    for row in result:
+        counts[row.outcome] = int(row.cnt)
+    return counts
+
+
+def _build_outcomes_panel(counts: dict[str, int]) -> Panel:
+    """Build a Rich Panel showing per-outcome totals from ``ct_entry_outcomes``."""
+    lines: list[str] = []
+    for outcome in sorted(counts.keys()):
+        lines.append(f"  {outcome:<30} {counts[outcome]:>12,}")
+    body = "\n".join(lines) if lines else "  No outcomes recorded yet."
+    return Panel(body, title="Entry Outcomes", border_style="dim", expand=False)
+
+
+async def _query_backfill_range_counts(
+    session: AsyncSession, claim_timeout_seconds: int
+) -> dict[str, int]:
+    """Return backfill range status counts, distinguishing stale in_progress claims."""
+    cutoff = datetime.now(UTC) - timedelta(seconds=claim_timeout_seconds)
+    stale_cond = (
+        func.coalesce(CtLogBackfillRange.heartbeat_at, CtLogBackfillRange.claimed_at)
+        < cutoff
+    )
+    stmt = select(
+        func.count().filter(CtLogBackfillRange.status == "pending").label("pending"),
+        func.count()
+        .filter(CtLogBackfillRange.status == "in_progress", ~stale_cond)
+        .label("in_progress"),
+        func.count()
+        .filter(CtLogBackfillRange.status == "in_progress", stale_cond)
+        .label("stale"),
+        func.count().filter(CtLogBackfillRange.status == "complete").label("complete"),
+        func.count().filter(CtLogBackfillRange.status == "failed").label("failed"),
+    ).select_from(CtLogBackfillRange)
+    result = await session.execute(stmt)
+    row = result.one()
+    return {
+        "pending": int(row.pending),
+        "in_progress": int(row.in_progress),
+        "stale": int(row.stale),
+        "complete": int(row.complete),
+        "failed": int(row.failed),
+    }
+
+
+def _build_backfill_ranges_panel(counts: dict[str, int]) -> Panel:
+    """Build a Rich Panel showing backfill range status counts."""
+    stale = counts.get("stale", 0)
+    failed = counts.get("failed", 0)
+    stale_style = "[red]" if stale > 0 else ""
+    stale_end = "[/red]" if stale > 0 else ""
+    failed_style = "[bold red]" if failed > 0 else ""
+    failed_end = "[/bold red]" if failed > 0 else ""
+    lines = [
+        f"  {'pending':<20} {counts.get('pending', 0):>12,}",
+        f"  {'in_progress (fresh)':<20} {counts.get('in_progress', 0):>12,}",
+        f"  {stale_style}{'in_progress (stale)':<20} {stale:>12,}{stale_end}",
+        f"  {'complete':<20} {counts.get('complete', 0):>12,}",
+        f"  {failed_style}{'failed':<20} {failed:>12,}{failed_end}",
+    ]
+    if failed > 0:
+        lines.append(
+            f"\n  [bold red]WARNING: {failed:,} range(s) failed and will not be "
+            "retried automatically.[/bold red]"
+        )
+    return Panel(
+        "\n".join(lines),
+        title="Backfill Range Status",
+        border_style="dim",
+        expand=False,
+    )
+
+
 async def render_stats(session: AsyncSession, console: Console) -> None:
     """Render a one-shot statistics table to *console*.
 
@@ -205,15 +288,24 @@ async def render_stats(session: AsyncSession, console: Console) -> None:
         session: Active async database session.
         console: Rich Console to print to.
     """
+    from ctpool.config import get_settings
+
+    settings = get_settings()
     cert_count, hostname_count = await _query_totals(session)
     logs = await _query_log_rows(session)
     total_size, table_rows = await _query_db_size(session)
     throughputs = await _query_recent_throughputs(session)
     contention_snapshot = await read_db_contention_operator_snapshot(session)
+    outcome_counts = await _query_outcome_counts(session)
+    backfill_counts = await _query_backfill_range_counts(
+        session, settings.ct_backfill_claim_timeout_seconds
+    )
     table = _build_stats_table(logs, cert_count, hostname_count, throughputs)
     console.print(table)
     console.print(render_db_contention_panel(contention_snapshot))
     console.print(_build_size_panel(total_size, table_rows))
+    console.print(_build_outcomes_panel(outcome_counts))
+    console.print(_build_backfill_ranges_panel(backfill_counts))
 
 
 async def render_stats_watch(

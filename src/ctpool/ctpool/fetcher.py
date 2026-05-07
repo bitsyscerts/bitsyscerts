@@ -11,6 +11,7 @@ import httpx
 
 from ctpool.ct_api_schemas import CtEntriesResponse, SignedTreeHead
 from ctpool.exceptions import FetchError, RateLimitError
+from ctpool.retry_after import clamp_retry_after, parse_retry_after
 
 
 async def fetch_entries(
@@ -40,8 +41,10 @@ async def fetch_entries(
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 429:
+            _retry = _extract_retry_after(exc.response)
             raise RateLimitError(
-                f"HTTP 429 fetching entries from {log_url} indices {start}-{end}"
+                f"HTTP 429 fetching entries from {log_url} indices {start}-{end}",
+                retry_after_seconds=_retry,
             ) from exc
         raise FetchError(
             f"HTTP {exc.response.status_code} fetching entries from {log_url} "
@@ -80,7 +83,11 @@ async def fetch_sth(
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 429:
-            raise RateLimitError(f"HTTP 429 fetching STH from {log_url}") from exc
+            _retry = _extract_retry_after(exc.response)
+            raise RateLimitError(
+                f"HTTP 429 fetching STH from {log_url}",
+                retry_after_seconds=_retry,
+            ) from exc
         raise FetchError(
             f"HTTP {exc.response.status_code} fetching STH from {log_url}"
         ) from exc
@@ -91,3 +98,31 @@ async def fetch_sth(
         return SignedTreeHead.model_validate(response.json())
     except Exception as exc:
         raise FetchError(f"Invalid STH response from {log_url}: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_retry_after(response: httpx.Response) -> int | None:
+    """Extract and parse the ``Retry-After`` header from a 429 response.
+
+    Clamped to a default of 3600 s maximum.  Callers with access to the full
+    ``Settings`` object may apply a further clamp from config.
+    """
+    import logging
+
+    _max_retry_after = 3600
+    header = response.headers.get("retry-after")
+    parsed = parse_retry_after(header)
+    if parsed is None:
+        return None
+    clamped = clamp_retry_after(parsed, _max_retry_after)
+    if clamped != parsed:
+        logging.getLogger(__name__).warning(
+            "Retry-After header value %d s exceeds maximum %d s; clamping.",
+            parsed,
+            _max_retry_after,
+        )
+    return clamped

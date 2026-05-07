@@ -10,7 +10,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Text, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,6 +56,9 @@ class CtLogBackfillRange(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -56,4 +67,30 @@ class CtLogBackfillRange(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    # Audit / repair columns added in migration d1e2f3a4b5c6
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    range_kind: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'backfill'")
+    )
+    # Circular FK to ct_audit_findings — use_alter so Alembic can resolve the
+    # dependency order; the FK constraint is created by the migration directly.
+    repair_for_finding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "ct_audit_findings.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_ct_log_backfill_ranges_repair_for_finding_id",
+        ),
+        nullable=True,
+    )
+    # Storage profile reconciliation columns added in migration b4c5d6e7f8a9
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconcile_for_settings_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconcile_target_settings_hash: Mapped[str | None] = mapped_column(
+        Text, nullable=True
     )

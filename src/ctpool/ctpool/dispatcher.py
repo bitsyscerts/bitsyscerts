@@ -1,26 +1,28 @@
 """Dispatcher: eligibility checks, cursor management, and range claiming.
 
 Exports:
-    get_eligible_tail_logs     — Query logs eligible for tail ingestion.
-    get_eligible_backfill_logs — Query logs eligible for backfill.
-    try_claim_tail_log         — Acquire a transaction-scoped lease for one log.
-    ensure_tail_cursor         — Get-or-create a tail cursor for a log (caller
-                                 supplies init_index; returns (cursor, was_created)).
-    advance_tail_cursor        — Advance the cursor's next_index.
-    reset_tail_cursor          — Overwrite next_index and return the old value.
-    has_backfill_ranges        — Return True if any ranges already exist for a log.
-    create_backfill_ranges     — Partition an index range into work chunks.
-    claim_backfill_range       — Atomically claim one pending range (SKIP LOCKED).
-    mark_range_complete        — Mark a range as complete.
-    mark_range_failed          — Mark a range as failed with a reason.
-    mark_range_pending         — Return a claimed range back to pending.
+    get_eligible_tail_logs        — Query logs eligible for tail ingestion.
+    get_eligible_backfill_logs    — Query logs eligible for backfill.
+    try_claim_tail_log            — Acquire a transaction-scoped lease for one log.
+    ensure_tail_cursor            — Get-or-create a tail cursor for a log (caller
+                                    supplies init_index; returns (cursor, was_created)).
+    advance_tail_cursor           — Advance the cursor's next_index.
+    reset_tail_cursor             — Overwrite next_index and return the old value.
+    has_backfill_ranges           — Return True if any ranges already exist for a log.
+    create_backfill_ranges        — Partition an index range into work chunks.
+    claim_backfill_range          — Atomically claim one pending range (SKIP LOCKED).
+    update_range_heartbeat        — Refresh heartbeat_at for an in-progress range.
+    reap_stale_backfill_claims    — Reset in_progress ranges with stale heartbeats.
+    mark_range_complete           — Mark a range as complete.
+    mark_range_failed             — Mark a range as failed with a reason.
+    mark_range_pending            — Return a claimed range back to pending.
 """
 
 from __future__ import annotations
 
 import inspect
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import exists, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -317,6 +319,7 @@ async def claim_backfill_range(
     row.status = "in_progress"
     row.claimed_by = worker_id
     row.claimed_at = now
+    row.heartbeat_at = now
     row.updated_at = now
     return row
 
@@ -376,6 +379,77 @@ async def mark_range_pending(
             status="pending",
             claimed_by=None,
             claimed_at=None,
+            heartbeat_at=None,
             updated_at=now,
         )
     )
+
+
+async def update_range_heartbeat(
+    session: AsyncSession,
+    range_id: uuid.UUID,
+) -> None:
+    """Refresh ``heartbeat_at`` for an in-progress backfill range.
+
+    Should be called periodically by the backfill worker so the stale-claim
+    reaper does not reset a range that is still being actively processed.
+
+    Args:
+        session:  Active async database session (must be inside a transaction).
+        range_id: PK of the :class:`CtLogBackfillRange` to update.
+    """
+    now = datetime.now(UTC)
+    await session.execute(
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.id == range_id)
+        .where(CtLogBackfillRange.status == "in_progress")
+        .values(heartbeat_at=now, updated_at=now)
+    )
+
+
+async def reap_stale_backfill_claims(
+    session: AsyncSession,
+    claim_timeout_seconds: int,
+) -> list[CtLogBackfillRange]:
+    """Reset in_progress ranges whose heartbeat has not been refreshed recently.
+
+    A range is considered stale when
+    ``COALESCE(heartbeat_at, claimed_at) < now() - timeout``.
+    Stale ranges are returned to ``pending`` status so they can be
+    re-claimed.  ``next_index`` is preserved so partial progress is retained.
+
+    Args:
+        session:               Active async database session (must be inside a
+                               transaction).
+        claim_timeout_seconds: Seconds of silence before a claim is declared stale.
+
+    Returns:
+        List of :class:`CtLogBackfillRange` rows that were reset to pending.
+    """
+    cutoff = datetime.now(UTC) - timedelta(seconds=claim_timeout_seconds)
+    stmt = (
+        update(CtLogBackfillRange)
+        .where(CtLogBackfillRange.status == "in_progress")
+        .where(
+            func.coalesce(
+                CtLogBackfillRange.heartbeat_at, CtLogBackfillRange.claimed_at
+            )
+            < cutoff
+        )
+        .values(
+            status="pending",
+            claimed_by=None,
+            claimed_at=None,
+            heartbeat_at=None,
+            updated_at=func.now(),
+        )
+        .returning(
+            CtLogBackfillRange.id,
+            CtLogBackfillRange.log_source_id,
+            CtLogBackfillRange.start_index,
+            CtLogBackfillRange.end_index,
+            CtLogBackfillRange.next_index,
+        )
+    )
+    result = await session.execute(stmt)
+    return list(result.all())

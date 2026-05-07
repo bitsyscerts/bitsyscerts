@@ -14,7 +14,7 @@ _runner = CliRunner()
 
 def test_init_db_command_invokes_orchestrator() -> None:
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
         patch(
             "ctpool.database_init.run_init_db",
             new_callable=AsyncMock,
@@ -29,7 +29,7 @@ def test_init_db_command_invokes_orchestrator() -> None:
 
 def test_init_db_force_passes_force_flag() -> None:
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
         patch(
             "ctpool.database_init.run_init_db",
             new_callable=AsyncMock,
@@ -45,7 +45,7 @@ def test_init_db_force_passes_force_flag() -> None:
 
 def test_init_db_command_exits_nonzero_for_database_init_error() -> None:
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
         patch(
             "ctpool.database_init.run_init_db",
             new_callable=AsyncMock,

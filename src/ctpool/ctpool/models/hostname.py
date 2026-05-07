@@ -44,3 +44,10 @@ class Hostname(Base):
     latest_cert_not_after: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    latest_cert_issuer_cn: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latest_cert_issuer_org: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latest_cert_subject_cn: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latest_cert_is_precert: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    latest_cert_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

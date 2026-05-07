@@ -11,7 +11,9 @@ from httpx import ASGITransport, AsyncClient
 from certsapi.app import create_app
 from certsapi.config import Settings
 from certsapi.stats.models import (
+    BackfillRangeStats,
     DbContentionStats,
+    EntryOutcomeStats,
     IngestionRateStats,
     LogStatsItem,
     StatsResponse,
@@ -76,6 +78,19 @@ def _make_stats(**kwargs: object) -> StatsResponse:
             stale_log_count=0,
             oldest_lag_seconds=None,
             median_lag_seconds=None,
+        ),
+        "entry_outcomes": EntryOutcomeStats(
+            stored=0,
+            parse_error=0,
+            unsupported_entry_type=0,
+            skipped_by_policy=0,
+        ),
+        "backfill_ranges": BackfillRangeStats(
+            pending=0,
+            in_progress=0,
+            stale_in_progress=0,
+            completed=0,
+            failed=0,
         ),
         "logs": [],
     }

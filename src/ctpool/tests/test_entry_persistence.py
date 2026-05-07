@@ -37,10 +37,13 @@ async def test_persist_entry_with_retry_uses_short_transaction() -> None:
     session = _session_with_begin()
     entry = MagicMock()
 
-    with patch(
-        "ctpool.entry_persistence.write_normalized_entry",
-        AsyncMock(),
-    ) as write_mock:
+    with (
+        patch(
+            "ctpool.entry_persistence.write_normalized_entry",
+            AsyncMock(),
+        ) as write_mock,
+        patch("ctpool.entry_persistence.upsert_entry_outcome", AsyncMock()),
+    ):
         await persist_entry_with_retry(
             session,
             entry,
@@ -65,6 +68,7 @@ async def test_persist_entry_with_retry_retries_with_new_transaction() -> None:
             "ctpool.entry_persistence.write_normalized_entry",
             write_mock,
         ),
+        patch("ctpool.entry_persistence.upsert_entry_outcome", AsyncMock()),
         patch("ctpool.retry.asyncio.sleep", AsyncMock()),
     ):
         await persist_entry_with_retry(

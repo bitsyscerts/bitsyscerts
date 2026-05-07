@@ -72,6 +72,19 @@ class CertEmbedResponse(BaseModel):
     subject_alternative_names: list[str]
 
 
+class HostnameLatestCertSummary(BaseModel):
+    """Compact latest-cert summary stored directly on the hostname row."""
+
+    fingerprint_sha256: str
+    not_before: datetime
+    not_after: datetime
+    issuer_cn: str | None
+    issuer_org: str | None
+    subject_cn: str | None
+    is_precert: bool
+    seen_at: datetime | None
+
+
 class HostnameResult(BaseModel):
     """A single hostname record returned by the search endpoint."""
 
@@ -83,6 +96,7 @@ class HostnameResult(BaseModel):
     last_seen_ct: datetime | None
     latest_cert_not_before: datetime | None
     latest_cert_not_after: datetime | None
+    latest_cert_summary: HostnameLatestCertSummary | None = None
     latest_cert: CertEmbedResponse | None
 
 

@@ -39,10 +39,10 @@ class CtLogObservation(Base):
         nullable=False,
     )
     log_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    certificate_id: Mapped[uuid.UUID] = mapped_column(
+    certificate_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("certificates.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")

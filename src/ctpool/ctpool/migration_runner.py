@@ -4,6 +4,7 @@ Exports:
     run_upgrade_head     — Apply all pending migrations to the target database.
     get_current_revision — Return the current Alembic revision string (or None).
     get_missing_core_tables — Return core tables expected but absent.
+    get_alembic_head     — Return the compiled head revision ID from scripts.
 """
 
 from __future__ import annotations
@@ -153,4 +154,44 @@ async def get_missing_core_tables(settings: Settings) -> tuple[str, ...]:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _missing_core_tables, str(settings.database_url)
+    )
+
+
+def _fetch_head_revision_sync(url: str) -> str:
+    """Return the head revision ID from the compiled Alembic scripts.
+
+    Reads the migration script tree; does NOT need a live database.
+    Raises ``SchemaStateError`` if the head cannot be determined.
+    """
+    cfg = AlembicConfig()
+    cfg.set_main_option("script_location", str(_resolve_migration_root()))
+    cfg.set_main_option("sqlalchemy.url", url)
+    from alembic.script import ScriptDirectory  # local import to avoid top-level cycle
+
+    scripts = ScriptDirectory.from_config(cfg)
+    heads = scripts.get_heads()
+    if len(heads) != 1:
+        raise SchemaStateError(
+            f"Expected exactly one Alembic head, found {len(heads)}: {heads}"
+        )
+    return heads[0]
+
+
+async def get_alembic_head(settings: Settings) -> str:
+    """Return the compiled head revision ID from the migration scripts.
+
+    Compares against ``get_current_revision`` to detect pending migrations.
+
+    Args:
+        settings: Application settings (provides DB URL for Alembic config).
+
+    Returns:
+        The head revision string (e.g., ``"b4c5d6e7f8a9"``).
+
+    Raises:
+        SchemaStateError: If the head cannot be determined.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, _fetch_head_revision_sync, str(settings.database_url)
     )

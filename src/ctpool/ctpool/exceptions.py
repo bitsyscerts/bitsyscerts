@@ -17,6 +17,15 @@ class ParseError(CtPoolError):
     """Raised when a CT log entry cannot be decoded or parsed."""
 
 
+class UnsupportedEntryTypeError(ParseError):
+    """Raised when a CT log entry has an unknown or unsupported entry type.
+
+    Subclass of :class:`ParseError` so existing callers that catch ``ParseError``
+    continue to work, while workers that want to distinguish unsupported-type
+    entries from genuine parse failures can catch this class first.
+    """
+
+
 class DatabaseError(CtPoolError):
     """Raised when a database operation fails unexpectedly."""
 
@@ -27,6 +36,10 @@ class DiskGuardError(CtPoolError):
 
 class RateLimitError(FetchError):
     """Raised when a CT log responds with HTTP 429 Too Many Requests."""
+
+    def __init__(self, message: str, retry_after_seconds: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds: int | None = retry_after_seconds
 
 
 class ConfigurationError(CtPoolError):

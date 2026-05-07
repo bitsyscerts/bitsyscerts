@@ -118,7 +118,9 @@ async def test_upsert_certificate_updates_on_conflict(db_session: AsyncSession) 
 async def test_upsert_hostname_inserts_row(db_session: AsyncSession) -> None:
     """First call inserts a hostname and returns a valid UUID."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(db_session, "example.com", parsed)
+    h_id = await upsert_hostname(
+        db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
+    )
 
     assert isinstance(h_id, uuid.UUID)
     row = await db_session.get(Hostname, h_id)
@@ -129,15 +131,24 @@ async def test_upsert_hostname_inserts_row(db_session: AsyncSession) -> None:
 async def test_upsert_hostname_idempotent(db_session: AsyncSession) -> None:
     """Second call with same hostname returns the same UUID."""
     parsed = _make_parsed()
-    id1 = await upsert_hostname(db_session, "example.com", parsed)
-    id2 = await upsert_hostname(db_session, "example.com", parsed)
+    id1 = await upsert_hostname(
+        db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
+    )
+    id2 = await upsert_hostname(
+        db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
+    )
     assert id1 == id2
 
 
 async def test_upsert_hostname_wildcard_detected(db_session: AsyncSession) -> None:
     """Wildcard hostname sets is_wildcard=True."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(db_session, "*.example.com", parsed)
+    h_id = await upsert_hostname(
+        db_session,
+        "*.example.com",
+        parsed,
+        observed_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
     row = await db_session.get(Hostname, h_id)
     assert row is not None
     assert row.is_wildcard is True
@@ -146,7 +157,9 @@ async def test_upsert_hostname_wildcard_detected(db_session: AsyncSession) -> No
 async def test_upsert_hostname_non_wildcard(db_session: AsyncSession) -> None:
     """Non-wildcard hostname sets is_wildcard=False."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(db_session, "example.com", parsed)
+    h_id = await upsert_hostname(
+        db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
+    )
     row = await db_session.get(Hostname, h_id)
     assert row is not None
     assert row.is_wildcard is False
@@ -155,7 +168,12 @@ async def test_upsert_hostname_non_wildcard(db_session: AsyncSession) -> None:
 async def test_upsert_hostname_registrable_domain(db_session: AsyncSession) -> None:
     """Registrable domain is extracted correctly."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(db_session, "sub.example.com", parsed)
+    h_id = await upsert_hostname(
+        db_session,
+        "sub.example.com",
+        parsed,
+        observed_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
     row = await db_session.get(Hostname, h_id)
     assert row is not None
     assert row.registrable_domain == "example.com"
@@ -172,7 +190,9 @@ async def test_upsert_certificate_hostname_inserts_join_row(
     """Join row is created between a certificate and hostname."""
     parsed = _make_parsed()
     cert_id = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
-    h_id = await upsert_hostname(db_session, "example.com", parsed)
+    h_id = await upsert_hostname(
+        db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
+    )
 
     await upsert_certificate_hostname(db_session, cert_id, h_id)
 
@@ -189,7 +209,9 @@ async def test_upsert_certificate_hostname_idempotent(db_session: AsyncSession) 
     """Inserting the same join row twice does not raise an error."""
     parsed = _make_parsed()
     cert_id = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
-    h_id = await upsert_hostname(db_session, "example.com", parsed)
+    h_id = await upsert_hostname(
+        db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
+    )
 
     await upsert_certificate_hostname(db_session, cert_id, h_id)
     await upsert_certificate_hostname(db_session, cert_id, h_id)  # must not raise

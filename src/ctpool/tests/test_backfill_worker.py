@@ -105,6 +105,21 @@ def _make_session_factory() -> MagicMock:
 
 
 # ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _patch_reap_stale():
+    """Prevent reap_stale_backfill_claims from hitting the mock session."""
+    with patch(
+        "ctpool.backfill_worker.reap_stale_backfill_claims",
+        AsyncMock(return_value=[]),
+    ):
+        yield
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -478,7 +493,7 @@ async def test_backfill_worker_applies_shared_db_pacing_before_processing() -> N
         ),
         patch(
             "ctpool.backfill_worker._run_one_range",
-            AsyncMock(return_value=(1, log.url, False, observation)),
+            AsyncMock(return_value=(1, log.url, False, observation, None)),
         ) as run_range_mock,
         patch(
             "ctpool.backfill_worker.submit_db_contention_observation",

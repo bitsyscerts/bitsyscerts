@@ -13,6 +13,8 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from ctpool.backfill_worker import run_backfill
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import SignedTreeHead
@@ -73,6 +75,21 @@ def _make_session_factory() -> MagicMock:
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
     return factory
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _patch_reap_stale():
+    """Prevent reap_stale_backfill_claims from hitting the mock session."""
+    with patch(
+        "ctpool.backfill_worker.reap_stale_backfill_claims",
+        AsyncMock(return_value=[]),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from ctpool.models.base import Base
 from ctpool.models.certificate import Certificate  # noqa: F401
 from ctpool.models.certificate_hostname import CertificateHostname  # noqa: F401
 from ctpool.models.db_contention_state import CtDbContentionState  # noqa: F401
+from ctpool.models.entry_outcome import CtEntryOutcome  # noqa: F401
 from ctpool.models.hostname import Hostname  # noqa: F401
 from ctpool.models.ingestion_error import IngestionError  # noqa: F401
 from ctpool.models.ingestion_metric import IngestionMetric  # noqa: F401

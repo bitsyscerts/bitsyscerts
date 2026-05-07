@@ -95,6 +95,47 @@ export interface TailFreshnessStats {
   median_lag_seconds: number | null;
 }
 
+export interface EntryOutcomeStats {
+  stored: number;
+  parse_error: number;
+  unsupported_entry_type: number;
+  skipped_by_policy: number;
+}
+
+export interface BackfillRangeStats {
+  pending: number;
+  in_progress: number;
+  stale_in_progress: number;
+  completed: number;
+  failed: number;
+}
+
+export type BackfillHealthStatus = "ok" | "warning";
+
+export interface BackfillHealth {
+  status: BackfillHealthStatus;
+  failed_ranges: number;
+  stale_ranges: number;
+  message: string;
+}
+
+export interface MetricsRetentionStats {
+  ingestion_metrics_rows: number;
+  oldest_ingestion_metric_at: string | null;
+  metrics_retention_days: number;
+}
+
+export type AuditHealthStatus = "ok" | "attention_needed";
+
+export interface AuditHealth {
+  open_critical: number;
+  open_error: number;
+  open_warning: number;
+  open_info: number;
+  total_open: number;
+  status: AuditHealthStatus;
+}
+
 export interface StatsResponse {
   total_hostnames: number;
   total_certificates: number;
@@ -104,5 +145,10 @@ export interface StatsResponse {
   db_contention: DbContentionStats;
   ingestion_rate: IngestionRateStats;
   tail_freshness: TailFreshnessStats;
+  entry_outcomes: EntryOutcomeStats;
+  backfill_ranges: BackfillRangeStats;
+  backfill_health: BackfillHealth | null;
+  metrics_retention: MetricsRetentionStats | null;
+  audit_health: AuditHealth | null;
   logs: LogStatsItem[];
 }

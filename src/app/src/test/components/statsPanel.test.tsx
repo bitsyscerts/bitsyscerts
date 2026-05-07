@@ -30,6 +30,19 @@ const MOCK_DATA = {
     oldest_lag_seconds: null,
     median_lag_seconds: null,
   },
+  entry_outcomes: {
+    stored: 100,
+    parse_error: 2,
+    unsupported_entry_type: 1,
+    skipped_by_policy: 0,
+  },
+  backfill_ranges: {
+    pending: 5,
+    in_progress: 1,
+    stale_in_progress: 0,
+    completed: 200,
+    failed: 0,
+  },
   logs: [
     {
       id: 1,
@@ -113,5 +126,43 @@ describe("StatsPanel with data", () => {
       </AllProviders>,
     );
     expect(screen.getByText("Ingestion Statistics")).toBeInTheDocument();
+  });
+
+  it("does not show stale warning when stale_in_progress is zero", () => {
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+    expect(
+      screen.queryByText(/stale backfill claims detected/i),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("StatsPanel with stale backfill claims", () => {
+  it("shows stale warning when stale_in_progress > 0", () => {
+    mockUseStats.mockReturnValue({
+      data: {
+        ...MOCK_DATA,
+        backfill_ranges: {
+          pending: 0,
+          in_progress: 2,
+          stale_in_progress: 3,
+          completed: 100,
+          failed: 0,
+        },
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useStats>);
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+    expect(
+      screen.getByText(/stale backfill claims detected/i),
+    ).toBeInTheDocument();
   });
 });

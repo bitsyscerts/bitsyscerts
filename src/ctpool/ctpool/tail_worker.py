@@ -37,12 +37,18 @@ from ctpool.dispatcher import (
     reset_tail_cursor,
     try_claim_tail_log,
 )
-from ctpool.entry_persistence import persist_entry_with_retry
-from ctpool.exceptions import FetchError, ParseError, RateLimitError
+from ctpool.entry_persistence import persist_entry_with_retry, persist_failure_outcome
+from ctpool.exceptions import (
+    FetchError,
+    ParseError,
+    RateLimitError,
+    UnsupportedEntryTypeError,
+)
 from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
+from ctpool.outcome_constants import OUTCOME_PARSE_ERROR, OUTCOME_UNSUPPORTED_ENTRY_TYPE
 from ctpool.parser import parse_leaf_entry
 
 _logger = logging.getLogger(__name__)
@@ -141,9 +147,23 @@ async def _process_log_batch(
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
             )
             count += 1
+        except UnsupportedEntryTypeError as exc:
+            _logger.warning(
+                "unsupported entry type log=%s index=%d: %s",
+                log.id,
+                entry_index,
+                exc,
+            )
+            metrics.record_parse_error()
+            await persist_failure_outcome(
+                session, log.id, entry_index, OUTCOME_UNSUPPORTED_ENTRY_TYPE, exc
+            )
         except ParseError as exc:
             _logger.warning("parse error log=%s index=%d: %s", log.id, entry_index, exc)
             metrics.record_parse_error()
+            await persist_failure_outcome(
+                session, log.id, entry_index, OUTCOME_PARSE_ERROR, exc
+            )
         except Exception as exc:  # pragma: no cover
             _logger.warning(
                 "unexpected cert error log=%s index=%d type=%s detail=%r",
@@ -173,11 +193,12 @@ async def _tail_one_log(
     batch_size: int,
     limit_remaining: int | None,
     init_from_end: int = 0,
-) -> tuple[int, bool, bool, DbContentionObservation]:
+) -> tuple[int, bool, bool, DbContentionObservation, int | None]:
     """Run one tail batch for *log* in its own session/transaction.
 
     Returns:
-        ``(entries_processed, is_empty, was_rate_limited)``
+        ``(entries_processed, is_empty, was_rate_limited, contention,
+        retry_after_seconds)``
     """
     async with session_factory() as session:
         async with session.begin():
@@ -197,13 +218,13 @@ async def _tail_one_log(
             if count > 0:
                 async with session.begin():
                     await metrics.persist_snapshot(session, log.id)
-            return count, is_empty, False, observation
+            return count, is_empty, False, observation, None
         except RateLimitError as exc:
             _logger.warning("rate limited tail log=%s: %s", log.id, exc)
-            return 0, True, True, DbContentionObservation(0, 0)
+            return 0, True, True, DbContentionObservation(0, 0), exc.retry_after_seconds
         except FetchError as exc:
             _logger.error("fetch error tail log=%s: %s", log.id, exc)
-            return 0, False, False, DbContentionObservation(0, 0)
+            return 0, False, False, DbContentionObservation(0, 0), None
 
 
 async def run_tail(
@@ -300,6 +321,7 @@ async def run_tail(
                     is_empty,
                     was_rate_limited,
                     observation,
+                    retry_after,
                 ) = await _tail_one_log(
                     log,
                     session_factory,
@@ -314,10 +336,16 @@ async def run_tail(
                 if was_rate_limited:
                     hit_count = rate_limit_hits.get(log.id, 0) + 1
                     rate_limit_hits[log.id] = hit_count
-                    backoff_seconds = min(
-                        settings.ct_rate_limit_backoff_max_seconds,
-                        settings.ct_rate_limit_backoff_seconds * (2 ** (hit_count - 1)),
-                    )
+                    if retry_after is not None:
+                        backoff_seconds: float = min(
+                            settings.ct_retry_after_max_seconds, retry_after
+                        )
+                    else:
+                        backoff_seconds = min(
+                            settings.ct_rate_limit_backoff_max_seconds,
+                            settings.ct_rate_limit_backoff_seconds
+                            * (2 ** (hit_count - 1)),
+                        )
                     rate_limited_until[log.id] = now + float(backoff_seconds)
                     if on_status is not None:
                         on_status(

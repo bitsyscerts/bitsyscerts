@@ -24,11 +24,11 @@ _runner = CliRunner()
 def test_apply_migrations_command_invokes_migration_runner() -> None:
     """apply-migrations delegates to run_upgrade_head and exits zero."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
         patch("ctpool.migration_runner.run_upgrade_head", new_callable=AsyncMock),
     ):
         # Patch inside cli module's local import
-        with patch("ctpool.cli.asyncio.run") as mock_run:
+        with patch("ctpool.cli_db_commands.asyncio.run") as mock_run:
             mock_run.return_value = None
             result = _runner.invoke(app, ["apply-migrations"])
 
@@ -39,10 +39,10 @@ def test_apply_migrations_command_invokes_migration_runner() -> None:
 def test_db_init_alias_invokes_migration_runner() -> None:
     """db-init remains as a compatibility alias for apply-migrations."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
         patch("ctpool.migration_runner.run_upgrade_head", new_callable=AsyncMock),
     ):
-        with patch("ctpool.cli.asyncio.run") as mock_run:
+        with patch("ctpool.cli_db_commands.asyncio.run") as mock_run:
             mock_run.return_value = None
             result = _runner.invoke(app, ["db-init"])
 
@@ -53,7 +53,7 @@ def test_db_init_alias_invokes_migration_runner() -> None:
 def test_apply_migrations_exits_nonzero_for_incomplete_schema() -> None:
     """apply-migrations surfaces schema-state mismatches as a CLI failure."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
         patch(
             "ctpool.migration_runner.run_upgrade_head",
             new_callable=AsyncMock,
@@ -74,8 +74,8 @@ def test_apply_migrations_exits_nonzero_for_incomplete_schema() -> None:
 def test_db_status_command_shows_revision() -> None:
     """db-status shows the current revision when the schema is initialised."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run", return_value="abc123def456"),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_db_commands.asyncio.run", return_value="abc123def456"),
     ):
         result = _runner.invoke(app, ["db-status"])
 
@@ -86,8 +86,8 @@ def test_db_status_command_shows_revision() -> None:
 def test_db_status_shows_uninitialised_message_when_no_revision() -> None:
     """db-status shows a clear message when no migrations are applied."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run", return_value=None),
+        patch("ctpool.config.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_db_commands.asyncio.run", return_value=None),
     ):
         result = _runner.invoke(app, ["db-status"])
 
@@ -106,8 +106,8 @@ def test_db_status_shows_uninitialised_message_when_no_revision() -> None:
 def test_sync_logs_command_invokes_discovery_and_prober() -> None:
     """sync-logs calls fetch_log_list, sync_log_sources, and probe_log."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["sync-logs"])
@@ -124,10 +124,13 @@ def test_sync_logs_command_invokes_discovery_and_prober() -> None:
 def test_tail_command_invokes_tail_worker() -> None:
     """tail delegates to run_tail via asyncio.run."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["tail"])
@@ -146,10 +149,13 @@ def test_tail_command_passes_once_flag() -> None:
         captured.append(coro)
 
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run", side_effect=capture_run),
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run", side_effect=capture_run),
         patch("ctpool.tail_worker.run_tail", wraps=run_tail),
     ):
         _runner.invoke(app, ["tail", "--once"])
@@ -167,10 +173,13 @@ def test_tail_command_passes_limit() -> None:
         captured.append(coro)
 
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run", side_effect=capture_run),
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run", side_effect=capture_run),
     ):
         result = _runner.invoke(app, ["tail", "--limit", "100"])
 
@@ -186,10 +195,13 @@ def test_tail_command_passes_limit() -> None:
 def test_backfill_command_invokes_backfill_worker() -> None:
     """backfill delegates to run_backfill via asyncio.run."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["backfill"])
@@ -206,10 +218,13 @@ def test_backfill_command_passes_once_flag() -> None:
         captured.append(coro)
 
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run", side_effect=capture_run),
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run", side_effect=capture_run),
     ):
         result = _runner.invoke(app, ["backfill", "--once"])
 
@@ -225,10 +240,13 @@ def test_backfill_command_passes_once_flag() -> None:
 def test_stats_command_invokes_stats_display() -> None:
     """stats calls render_stats via asyncio.run."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["stats"])
@@ -256,10 +274,13 @@ def test_unknown_subcommand_exits_nonzero() -> None:
 def test_tail_progress_flag_is_accepted() -> None:
     """tail --progress exits zero (flag is wired up and accepted)."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["tail", "--once", "--progress"])
@@ -271,10 +292,13 @@ def test_tail_progress_flag_is_accepted() -> None:
 def test_backfill_progress_flag_is_accepted() -> None:
     """backfill --progress exits zero (flag is wired up and accepted)."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["backfill", "--once", "--progress"])
@@ -286,10 +310,13 @@ def test_backfill_progress_flag_is_accepted() -> None:
 def test_tail_init_from_end_flag_is_accepted() -> None:
     """tail --init-from-end N is accepted and forwarded to run_tail."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["tail", "--once", "--init-from-end", "10000"])
@@ -307,9 +334,12 @@ def test_tail_init_from_end_flag_is_accepted() -> None:
 def test_reset_tail_cursors_requires_to_current_flag() -> None:
     """reset-tail-cursors without --to-current exits non-zero."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
     ):
         result = _runner.invoke(app, ["reset-tail-cursors"])
 
@@ -320,13 +350,78 @@ def test_reset_tail_cursors_requires_to_current_flag() -> None:
 def test_reset_tail_cursors_with_to_current_calls_worker() -> None:
     """reset-tail-cursors --to-current invokes reset_tail_cursors and exits zero."""
     with (
-        patch("ctpool.cli.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli.create_engine", return_value=MagicMock()),
-        patch("ctpool.cli.create_session_factory", return_value=MagicMock()),
-        patch("ctpool.cli.asyncio.run") as mock_run,
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
         mock_run.return_value = None
         result = _runner.invoke(app, ["reset-tail-cursors", "--to-current"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# reap-stale-backfill-claims
+# ---------------------------------------------------------------------------
+
+
+def test_reap_stale_backfill_claims_dry_run_exits_zero() -> None:
+    """reap-stale-backfill-claims --dry-run exits zero without calling reap."""
+    with (
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
+    ):
+        mock_run.return_value = None
+        result = _runner.invoke(app, ["reap-stale-backfill-claims", "--dry-run"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+def test_reap_stale_backfill_claims_default_exits_zero() -> None:
+    """reap-stale-backfill-claims without flags exits zero."""
+    with (
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
+    ):
+        mock_run.return_value = None
+        result = _runner.invoke(app, ["reap-stale-backfill-claims"])
+
+    assert result.exit_code == 0
+    mock_run.assert_called_once()
+
+
+def test_reap_stale_backfill_claims_timeout_flag_accepted() -> None:
+    """reap-stale-backfill-claims --timeout-seconds is accepted without error."""
+    with (
+        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
+        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
+        patch(
+            "ctpool.cli_ingestion_commands.create_session_factory",
+            return_value=MagicMock(),
+        ),
+        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
+    ):
+        mock_run.return_value = None
+        result = _runner.invoke(
+            app,
+            ["reap-stale-backfill-claims", "--timeout-seconds", "600"],
+        )
 
     assert result.exit_code == 0
     mock_run.assert_called_once()

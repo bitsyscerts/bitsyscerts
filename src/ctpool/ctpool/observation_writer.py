@@ -18,18 +18,21 @@ async def upsert_observation(
     session: AsyncSession,
     log_source_id: uuid.UUID,
     log_index: int,
-    certificate_id: uuid.UUID,
+    certificate_id: uuid.UUID | None,
 ) -> None:
     """Upsert a ``CtLogObservation`` row idempotently.
 
     On conflict (``(log_source_id, log_index)`` already exists) the row is
     left unchanged — the observation timestamp must not be overwritten.
 
+    ``certificate_id`` may be ``None`` when the storage profile is set to
+    ``CertStorageMode.NONE`` and no Certificate row is persisted.
+
     Args:
         session:        Active async database session.
         log_source_id:  UUID of the CT log this entry was fetched from.
         log_index:      Index of this entry in the CT log.
-        certificate_id: UUID of the upserted certificate.
+        certificate_id: UUID of the upserted certificate, or None.
     """
     stmt = (
         pg_insert(CtLogObservation)

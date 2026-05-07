@@ -118,6 +118,53 @@ class TailFreshnessStats(BaseModel):
     median_lag_seconds: int | None
 
 
+class EntryOutcomeStats(BaseModel):
+    """Terminal outcome counts for all processed CT log indices."""
+
+    stored: int
+    parse_error: int
+    unsupported_entry_type: int
+    skipped_by_policy: int
+
+
+class BackfillRangeStats(BaseModel):
+    """Status counts for ct_log_backfill_ranges rows."""
+
+    pending: int
+    in_progress: int
+    stale_in_progress: int
+    completed: int
+    failed: int
+
+
+class AuditHealth(BaseModel):
+    """Counts of open audit findings grouped by severity."""
+
+    open_critical: int
+    open_error: int
+    open_warning: int
+    open_info: int
+    total_open: int
+    status: Literal["ok", "attention_needed"]
+
+
+class BackfillHealth(BaseModel):
+    """Computed backfill health summary derived from range status counts."""
+
+    status: Literal["ok", "warning"]
+    failed_ranges: int
+    stale_ranges: int
+    message: str
+
+
+class MetricsRetentionStats(BaseModel):
+    """ingestion_metrics table health and retention configuration."""
+
+    ingestion_metrics_rows: int
+    oldest_ingestion_metric_at: datetime | None
+    metrics_retention_days: int
+
+
 class StatsResponse(BaseModel):
     """Global ingestion statistics."""
 
@@ -129,4 +176,9 @@ class StatsResponse(BaseModel):
     db_contention: DbContentionStats
     ingestion_rate: IngestionRateStats
     tail_freshness: TailFreshnessStats
+    entry_outcomes: EntryOutcomeStats
+    backfill_ranges: BackfillRangeStats
+    backfill_health: BackfillHealth | None = None
+    metrics_retention: MetricsRetentionStats | None = None
+    audit_health: AuditHealth | None = None
     logs: list[LogStatsItem]

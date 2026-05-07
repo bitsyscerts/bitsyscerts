@@ -7,6 +7,7 @@ Exports:
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,11 +37,17 @@ async def write_normalized_entry(
         session: Active async database session.
         entry:   Normalized CT log entry ready for persistence.
     """
+    observed_at = datetime.now(UTC)
     certificate_id = await upsert_certificate(
         session, entry.parsed_certificate, entry.is_wildcard_present
     )
     for hostname in entry.hostnames:
-        hostname_id = await upsert_hostname(session, hostname, entry.parsed_certificate)
+        hostname_id = await upsert_hostname(
+            session,
+            hostname,
+            entry.parsed_certificate,
+            observed_at=observed_at,
+        )
         await upsert_certificate_hostname(session, certificate_id, hostname_id)
     await upsert_observation(
         session,

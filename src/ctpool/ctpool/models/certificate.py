@@ -9,7 +9,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Integer,
+    LargeBinary,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -58,3 +66,5 @@ class Certificate(Base):
     last_seen_ct: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    public_key_der: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    raw_der: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)

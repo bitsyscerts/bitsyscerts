@@ -11,17 +11,27 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from ctpool.audit_constants import (
+    SEVERITY_CRITICAL,
+    SEVERITY_ERROR,
+    SEVERITY_INFO,
+    SEVERITY_WARNING,
+    STATUS_OPEN,
+)
 from ctpool.config import Settings as CtPoolSettings
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
 from ctpool.db_contention_types import DbContentionOperatorSnapshot
+from ctpool.models.audit_finding import CtAuditFinding
 from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
+from ctpool.models.entry_outcome import CtEntryOutcome
 from ctpool.models.hostname import Hostname
 from ctpool.models.ingestion_metric import IngestionMetric
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
 from ctpool.models.observation import CtLogObservation
+from ctpool.outcome_constants import ALL_OUTCOMES
 from sqlalchemy import case, func, select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -216,3 +226,99 @@ class StatsRepository:
             .mappings()
             .one()
         )
+
+    async def entry_outcome_counts(self) -> dict[str, int]:
+        """Return per-outcome row counts from ``ct_entry_outcomes``."""
+        stmt = select(CtEntryOutcome.outcome, func.count().label("cnt")).group_by(
+            CtEntryOutcome.outcome
+        )
+        result = await self._session.execute(stmt)
+        counts: dict[str, int] = dict.fromkeys(ALL_OUTCOMES, 0)
+        for row in result:
+            counts[row.outcome] = int(row.cnt)
+        return counts
+
+    async def backfill_range_status_counts(
+        self, claim_timeout_seconds: int
+    ) -> dict[str, int]:
+        """Return backfill range status counts, splitting stale in_progress separately.
+
+        A range is considered stale when
+        ``COALESCE(heartbeat_at, claimed_at) < now() - claim_timeout_seconds``.
+        """
+        cutoff = datetime.now(UTC) - timedelta(seconds=claim_timeout_seconds)
+        stale_condition = (
+            func.coalesce(
+                CtLogBackfillRange.heartbeat_at, CtLogBackfillRange.claimed_at
+            )
+            < cutoff
+        )
+
+        stmt = select(
+            func.count()
+            .filter(CtLogBackfillRange.status == "pending")
+            .label("pending"),
+            func.count()
+            .filter(
+                CtLogBackfillRange.status == "in_progress",
+                ~stale_condition,
+            )
+            .label("in_progress"),
+            func.count()
+            .filter(
+                CtLogBackfillRange.status == "in_progress",
+                stale_condition,
+            )
+            .label("stale_in_progress"),
+            func.count()
+            .filter(CtLogBackfillRange.status == "complete")
+            .label("completed"),
+            func.count().filter(CtLogBackfillRange.status == "failed").label("failed"),
+        ).select_from(CtLogBackfillRange)
+        result = await self._session.execute(stmt)
+        row = result.one()
+        return {
+            "pending": int(row.pending),
+            "in_progress": int(row.in_progress),
+            "stale_in_progress": int(row.stale_in_progress),
+            "completed": int(row.completed),
+            "failed": int(row.failed),
+        }
+
+    async def ingestion_metrics_summary(self) -> dict[str, object]:
+        """Return ingestion_metrics row count and oldest snapshot timestamp."""
+        stmt = select(
+            func.count().label("row_count"),
+            func.min(IngestionMetric.snapshot_at).label("oldest_at"),
+        ).select_from(IngestionMetric)
+        result = await self._session.execute(stmt)
+        row = result.one()
+        return {
+            "row_count": int(row.row_count),
+            "oldest_at": row.oldest_at,
+        }
+
+    async def audit_health_counts(self) -> dict[str, int]:
+        """Return count of open audit findings per severity."""
+        stmt = select(
+            func.count(case((CtAuditFinding.severity == SEVERITY_CRITICAL, 1))).label(
+                "critical"
+            ),
+            func.count(case((CtAuditFinding.severity == SEVERITY_ERROR, 1))).label(
+                "error"
+            ),
+            func.count(case((CtAuditFinding.severity == SEVERITY_WARNING, 1))).label(
+                "warning"
+            ),
+            func.count(case((CtAuditFinding.severity == SEVERITY_INFO, 1))).label(
+                "info"
+            ),
+        ).where(CtAuditFinding.status == STATUS_OPEN)
+        result = await self._session.execute(stmt)
+        row = result.one()
+        return {
+            "critical": int(row.critical or 0),
+            "error": int(row.error or 0),
+            "warning": int(row.warning or 0),
+            "info": int(row.info or 0),
+        }
