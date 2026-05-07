@@ -1,7 +1,7 @@
 import { Badge, Group, Progress, Stack, Text } from "@mantine/core";
 import type { LogStatsItem } from "@/types";
-import { formatDate, formatNumber, formatPct } from "@/utils/format";
-import { LogStaleBadge } from "./LogStaleBadge";
+import { formatDate, formatNumber } from "@/utils/format";
+import { LogSyncStatus } from "./LogSyncStatus";
 
 interface LogStatsListProps {
   logs: LogStatsItem[];
@@ -37,7 +37,10 @@ export function LogStatsList({ logs }: LogStatsListProps) {
               {log.description || log.url}
             </Text>
             <Group gap={4} wrap="nowrap">
-              <LogStaleBadge lagSeconds={log.tail_freshness_lag_seconds} />
+              <LogSyncStatus
+                backfillPct={log.backfill_complete_pct}
+                lagSeconds={log.tail_freshness_lag_seconds}
+              />
               <Badge size="xs" color={STATE_COLOR[log.log_state] ?? "gray"}>
                 {log.log_state}
               </Badge>
@@ -49,17 +52,12 @@ export function LogStatsList({ logs }: LogStatsListProps) {
             </Text>
           )}
           {log.backfill_complete_pct !== null && (
-            <Stack gap={2}>
-              <Text size="xs" c="dimmed">
-                Backfill: {formatPct(log.backfill_complete_pct)}
-              </Text>
-              <Progress
-                value={log.backfill_complete_pct}
-                size="xs"
-                radius="xl"
-                color={backfillColor(log.backfill_complete_pct)}
-              />
-            </Stack>
+            <Progress
+              value={log.backfill_complete_pct}
+              size="xs"
+              radius="xl"
+              color={backfillColor(log.backfill_complete_pct)}
+            />
           )}
           {log.last_tail_sync && (
             <Text size="xs" c="dimmed">

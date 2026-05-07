@@ -24,8 +24,14 @@ function tailPositionScore(log: LogStatsItem): number {
   return log.tail_position ?? -1;
 }
 
+const TAIL_STALE_THRESHOLD_SECONDS = 300;
+
 function isSynced(log: LogStatsItem): boolean {
-  return (log.backfill_complete_pct ?? -1) >= 100;
+  const backfillDone = (log.backfill_complete_pct ?? -1) >= 100;
+  const tailLive =
+    log.tail_freshness_lag_seconds !== null &&
+    log.tail_freshness_lag_seconds < TAIL_STALE_THRESHOLD_SECONDS;
+  return backfillDone && tailLive;
 }
 
 /**

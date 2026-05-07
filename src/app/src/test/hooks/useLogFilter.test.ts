@@ -39,19 +39,21 @@ describe("useLogFilter", () => {
     expect(result.current.filtered[0].log_state).toBe("usable");
   });
 
-  it("hides fully synced logs by default", () => {
+  it("hides logs that are fully synced (backfill 100% AND tail live) by default", () => {
     const syncedLogs: LogStatsItem[] = [
       makeLog({
         log_id: "u1",
         description: "Synced usable",
         log_state: "usable",
         backfill_complete_pct: 100,
+        tail_freshness_lag_seconds: 60,
       }),
       makeLog({
         log_id: "u2",
         description: "In-progress usable",
         log_state: "usable",
         backfill_complete_pct: 88,
+        tail_freshness_lag_seconds: 60,
       }),
     ];
 
@@ -61,6 +63,36 @@ describe("useLogFilter", () => {
     expect(result.current.hideSynced).toBe(true);
   });
 
+  it("does not hide a log with backfill 100% but stale tail", () => {
+    const logs: LogStatsItem[] = [
+      makeLog({
+        log_id: "u1",
+        description: "Stale tail",
+        log_state: "usable",
+        backfill_complete_pct: 100,
+        tail_freshness_lag_seconds: 600,
+      }),
+    ];
+
+    const { result } = renderHook(() => useLogFilter(logs));
+    expect(result.current.filtered).toHaveLength(1);
+  });
+
+  it("does not hide a log with backfill 100% but unseen tail", () => {
+    const logs: LogStatsItem[] = [
+      makeLog({
+        log_id: "u1",
+        description: "Unseen tail",
+        log_state: "usable",
+        backfill_complete_pct: 100,
+        tail_freshness_lag_seconds: null,
+      }),
+    ];
+
+    const { result } = renderHook(() => useLogFilter(logs));
+    expect(result.current.filtered).toHaveLength(1);
+  });
+
   it("can show synced logs when hideSynced is disabled", () => {
     const syncedLogs: LogStatsItem[] = [
       makeLog({
@@ -68,12 +100,14 @@ describe("useLogFilter", () => {
         description: "Synced usable",
         log_state: "usable",
         backfill_complete_pct: 100,
+        tail_freshness_lag_seconds: 60,
       }),
       makeLog({
         log_id: "u2",
         description: "In-progress usable",
         log_state: "usable",
         backfill_complete_pct: 88,
+        tail_freshness_lag_seconds: 60,
       }),
     ];
 
