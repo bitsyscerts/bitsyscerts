@@ -66,7 +66,7 @@ async def run_fix_audit_findings(
     )
 
     settings = get_settings()
-    engine = create_engine(str(settings.database_url))
+    engine = create_engine(settings)
     session_factory = create_session_factory(engine)
 
     processed = 0
@@ -98,7 +98,7 @@ async def run_mark_ignored(
         True when the finding was found and updated; False when not found.
     """
     settings = get_settings()
-    engine = create_engine(str(settings.database_url))
+    engine = create_engine(settings)
     session_factory = create_session_factory(engine)
 
     async with session_factory() as session:
