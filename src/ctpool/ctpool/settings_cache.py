@@ -51,7 +51,7 @@ class SettingsCache:
 
     async def refresh_if_stale(
         self,
-        session: "AsyncSession",
+        session: AsyncSession,
     ) -> CtInstanceSettings | None:
         """Refresh from DB only when the TTL has elapsed.
 
@@ -76,7 +76,7 @@ class SettingsCache:
 
     async def force_refresh(
         self,
-        session: "AsyncSession",
+        session: AsyncSession,
     ) -> CtInstanceSettings | None:
         """Unconditionally refresh from DB and reset the TTL.
 

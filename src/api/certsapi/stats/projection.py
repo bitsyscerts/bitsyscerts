@@ -54,7 +54,7 @@ def progress_statuses() -> tuple[str, ...]:
 def compute_storage_projection(
     inputs: ProjectionInputs,
     disk_snapshot: DiskSnapshot | None = None,
-    active_settings: "CtInstanceSettings | None" = None,
+    active_settings: CtInstanceSettings | None = None,
 ) -> StorageProjection:
     """Build a conservative storage projection from current counts.
 
@@ -93,7 +93,7 @@ def compute_storage_projection(
 
 def _profile_aware_fields(
     inputs: ProjectionInputs,
-    active_settings: "CtInstanceSettings | None",
+    active_settings: CtInstanceSettings | None,
 ) -> dict[str, object]:
     """Return profile_basis, profile, and category_breakdown fields.
 

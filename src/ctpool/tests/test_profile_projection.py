@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from ctpool.profile_projection import (
     ProfileAwareProjectionResult,
     bytes_per_observation_range,
@@ -15,13 +13,13 @@ from ctpool.storage_modes import CertStorageMode, StorageProfile
 
 def test_lite_projection_far_smaller_than_archive() -> None:
     """Lite mode estimate must be < 1/10 of archive mode for same inputs."""
-    shared = dict(
-        hostname_count=100_000,
-        cert_count=50_000,
-        obs_count=500_000,
-        cert_hostname_count=200_000,
-        backfill_days=30,
-    )
+    shared = {
+        "hostname_count": 100_000,
+        "cert_count": 50_000,
+        "obs_count": 500_000,
+        "cert_hostname_count": 200_000,
+        "backfill_days": 30,
+    }
     lite = compute_profile_aware_projection(
         profile=StorageProfile.LITE,
         cert_storage_mode=CertStorageMode.NONE,

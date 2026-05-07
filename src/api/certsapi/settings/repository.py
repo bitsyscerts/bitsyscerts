@@ -6,11 +6,10 @@ ct_storage_profile_history.
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from ctpool.models.instance_settings import CtInstanceSettings
 from ctpool.models.storage_profile_history import CtStorageProfileHistory
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class SettingsRepository:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from ctpool.profile_defaults import PROFILE_DEFAULTS, defaults_for_profile
 from ctpool.storage_modes import StorageProfile
 

@@ -6,11 +6,11 @@ and response assembly.
 
 from __future__ import annotations
 
-from typing import Literal
+import uuid
+from datetime import UTC, datetime
 
 from ctpool.models.instance_settings import CtInstanceSettings
 from ctpool.models.storage_profile_history import CtStorageProfileHistory
-from ctpool.profile_defaults import defaults_for_profile
 from ctpool.storage_modes import StorageProfile
 from ctpool.storage_settings_history import (
     compute_settings_hash_from_dict,
@@ -24,9 +24,6 @@ from certsapi.settings.models import (
     UpdateStorageSettingsResult,
 )
 from certsapi.settings.repository import SettingsRepository
-
-import uuid
-from datetime import UTC, datetime
 
 
 class SettingsService:

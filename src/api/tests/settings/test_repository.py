@@ -5,10 +5,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-from certsapi.settings.repository import SettingsRepository
 from ctpool.models.instance_settings import CtInstanceSettings
 from ctpool.models.storage_profile_history import CtStorageProfileHistory
+
+from certsapi.settings.repository import SettingsRepository
 
 
 def _make_session() -> AsyncMock:

@@ -15,13 +15,13 @@ import typer
 _console_lazy: object = None
 
 
-def _console() -> "Console":  # type: ignore[name-defined]  # noqa: F821
+def _console() -> Console:  # type: ignore[name-defined]  # noqa: F821
     """Lazy-import rich.Console to avoid module-level heavy imports."""
     global _console_lazy
     if _console_lazy is None:
-        from rich.console import Console as _C
+        from rich.console import Console
 
-        _console_lazy = _C()
+        _console_lazy = Console()
     return _console_lazy  # type: ignore[return-value]
 
 
@@ -47,7 +47,7 @@ def show_profile(
     settings = get_settings()
 
     async def _fetch() -> object:
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
         engine = create_async_engine(str(settings.database_url), echo=False)
         factory = async_sessionmaker(engine, expire_on_commit=False)
