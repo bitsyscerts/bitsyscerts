@@ -29,6 +29,7 @@ from ctpool.audit_constants import (
     SEVERITY_ERROR,
     SEVERITY_WARNING,
     STATUS_OPEN,
+    STATUS_REPAIR_ATTEMPTED,
 )
 from ctpool.audit_queries import (
     query_failed_backfill_ranges,
@@ -66,7 +67,12 @@ async def _existing_open_keys(
     finding_type: str,
 ) -> set[tuple[str | None, str | None, int | None, int | None]]:
     """Return a set of (log_source_id, range_id, start_index, end_index) tuples
-    for all open findings of the given type, used for deduplication."""
+    for all non-terminal findings of the given type, used for deduplication.
+
+    Both STATUS_OPEN and STATUS_REPAIR_ATTEMPTED are treated as non-terminal so
+    that re-running check-audit-gaps on a persistently broken system does not
+    create unbounded duplicate findings for the same gap.
+    """
     rows = await session.execute(
         select(
             CtAuditFinding.log_source_id,
@@ -75,7 +81,7 @@ async def _existing_open_keys(
             CtAuditFinding.end_index,
         ).where(
             CtAuditFinding.finding_type == finding_type,
-            CtAuditFinding.status == STATUS_OPEN,
+            CtAuditFinding.status.in_([STATUS_OPEN, STATUS_REPAIR_ATTEMPTED]),
         )
     )
     return {

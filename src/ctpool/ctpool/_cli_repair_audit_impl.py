@@ -81,11 +81,15 @@ async def run_fix_audit_findings(
                 console.print("[green]No repairable findings found.[/green]")
                 return 0
             for finding in findings:
+                # Snapshot identity fields NOW while the object is guaranteed
+                # loaded — before any savepoint flush/rollback can expire them.
+                snap_id = finding.id
+                snap_type = finding.finding_type
                 sp = await session.begin_nested()
                 try:
                     updated = await apply_repair(finding, session)
-                    # Snapshot display values NOW, before sp.commit() expires
-                    # the ORM object (which would trigger a sync lazy-load crash).
+                    # Snapshot display values before sp.commit() expires the
+                    # ORM object (which would trigger a sync lazy-load crash).
                     display = (
                         updated.id,
                         updated.finding_type,
@@ -100,8 +104,8 @@ async def run_fix_audit_findings(
                     await sp.rollback()
                     _logger.warning(
                         "Repair failed for finding %s (%s): %s",
-                        finding.id,
-                        finding.finding_type,
+                        snap_id,
+                        snap_type,
                         exc,
                     )
                     errors += 1
@@ -131,6 +135,7 @@ async def run_mark_ignored(
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
 
+    found = False
     try:
         async with session_factory() as session:
             async with session.begin():

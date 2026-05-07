@@ -41,6 +41,7 @@ async def query_stale_backfill_claims(
             WHERE status = 'in_progress'
               AND COALESCE(heartbeat_at, claimed_at) < :cutoff
             ORDER BY COALESCE(heartbeat_at, claimed_at) ASC
+            LIMIT 500
             """
         ),
         {"cutoff": cutoff},
@@ -64,6 +65,7 @@ async def query_failed_backfill_ranges(
             FROM ct_log_backfill_ranges r
             WHERE r.status = 'failed'
             ORDER BY r.created_at ASC
+            LIMIT 500
             """
         ),
     )
