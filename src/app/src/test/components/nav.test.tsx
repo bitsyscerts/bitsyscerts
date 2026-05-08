@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider, AppShell as MantineAppShell } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactNode } from "react";
@@ -77,8 +76,7 @@ describe("navigation components smoke tests", () => {
     expect(screen.getByRole("button", { name: /vdev/ })).toBeInTheDocument();
   });
 
-  it("clicking version string opens About modal", async () => {
-    const user = userEvent.setup();
+  it("clicking version string opens About modal", () => {
     render(
       <AllProviders>
         <AppShell>
@@ -88,8 +86,8 @@ describe("navigation components smoke tests", () => {
     );
     const versionButton = screen.getByRole("button", { name: /vdev/ });
     expect(versionButton).toBeInTheDocument();
-    // Button is interactive — click should not throw
-    await user.click(versionButton);
+    // Smoke: clicking the button must not throw
+    fireEvent.click(versionButton);
   });
 
   it("renders ThemeToggle without crash", () => {
