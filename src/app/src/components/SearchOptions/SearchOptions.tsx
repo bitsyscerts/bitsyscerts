@@ -43,9 +43,7 @@ export function SearchOptions({
     <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="md">
       <Stack gap="xs" justify="flex-start">
         <RecursiveToggle value={recursive} onChange={onRecursiveChange} />
-        {recursive && (
-          <DepthInput value={depth} onChange={onDepthChange} />
-        )}
+        {recursive && <DepthInput value={depth} onChange={onDepthChange} />}
       </Stack>
       <SortSelect value={sort} onChange={onSortChange} />
       <LimitInput value={limit} onChange={onLimitChange} />
