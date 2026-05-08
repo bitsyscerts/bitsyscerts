@@ -10,6 +10,7 @@ from ctpool.outcome_constants import (
     OUTCOME_SKIPPED_BY_POLICY,
     OUTCOME_STORED,
     OUTCOME_UNSUPPORTED_ENTRY_TYPE,
+    OUTCOME_WRITE_ERROR,
 )
 
 
@@ -19,11 +20,12 @@ def test_all_outcomes_contains_all_constants() -> None:
     assert OUTCOME_PARSE_ERROR in ALL_OUTCOMES
     assert OUTCOME_UNSUPPORTED_ENTRY_TYPE in ALL_OUTCOMES
     assert OUTCOME_SKIPPED_BY_POLICY in ALL_OUTCOMES
+    assert OUTCOME_WRITE_ERROR in ALL_OUTCOMES
 
 
-def test_all_outcomes_has_exactly_four_entries() -> None:
-    """ALL_OUTCOMES must have exactly four entries — no accidental extras."""
-    assert len(ALL_OUTCOMES) == 4
+def test_all_outcomes_has_exactly_five_entries() -> None:
+    """ALL_OUTCOMES must have exactly five entries — no accidental extras."""
+    assert len(ALL_OUTCOMES) == 5
 
 
 @pytest.mark.parametrize(
@@ -33,6 +35,7 @@ def test_all_outcomes_has_exactly_four_entries() -> None:
         (OUTCOME_PARSE_ERROR, "parse_error"),
         (OUTCOME_UNSUPPORTED_ENTRY_TYPE, "unsupported_entry_type"),
         (OUTCOME_SKIPPED_BY_POLICY, "skipped_by_policy"),
+        (OUTCOME_WRITE_ERROR, "write_error"),
     ],
 )
 def test_constant_values(constant: str, expected: str) -> None:

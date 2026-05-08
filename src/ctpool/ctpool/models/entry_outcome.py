@@ -2,7 +2,7 @@
 
 One row per unique (log_source_id, log_index) pair.  Records the terminal
 outcome for every processed CT log index: stored, parse_error,
-unsupported_entry_type, or skipped_by_policy.
+unsupported_entry_type, skipped_by_policy, or write_error.
 
 This table is the durable accounting layer.  A tail cursor or backfill range
 may only advance after every index in the processed span has a row here.

@@ -56,7 +56,11 @@ from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
-from ctpool.outcome_constants import OUTCOME_PARSE_ERROR, OUTCOME_UNSUPPORTED_ENTRY_TYPE
+from ctpool.outcome_constants import (
+    OUTCOME_PARSE_ERROR,
+    OUTCOME_UNSUPPORTED_ENTRY_TYPE,
+    OUTCOME_WRITE_ERROR,
+)
 from ctpool.parser import parse_leaf_entry
 
 _logger = logging.getLogger(__name__)
@@ -281,12 +285,19 @@ async def _process_range_batch(
                 OUTCOME_PARSE_ERROR,
                 exc,
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             _logger.warning(
                 "unexpected cert error backfill range=%s index=%d type=%s detail=%r",
                 claimed.id,
                 entry_index,
                 exc.__class__.__name__,
+                exc,
+            )
+            await persist_failure_outcome(
+                session,
+                claimed.log_source_id,
+                entry_index,
+                OUTCOME_WRITE_ERROR,
                 exc,
             )
 
