@@ -310,9 +310,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── GitHub Release ───────────────────────────────────────────────────────────
-  # Creates a versioned release on every successful main build. The release tag
-  # is also the container image tag pushed to GHCR in the build-push-* jobs.
+  # ── GitHub Release (main) ────────────────────────────────────────────────────
+  # Creates a versioned stable release on every successful main build.
+  # Tag format: v{version_core}  e.g. v26.508.1542
   release:
     name: "GitHub Release"
     runs-on: ubuntu-latest
@@ -327,11 +327,53 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.version.outputs.version_core }}
-          name: "${{ needs.version.outputs.version_core }}"
+          tag_name: "v${{ needs.version.outputs.version_core }}"
+          name: "v${{ needs.version.outputs.version_core }}"
           generate_release_notes: true
           make_latest: true
           body: |
+            ### Container images
+
+            ```
+            docker pull ghcr.io/bitsyscerts/bitsyscerts-api:${{ needs.version.outputs.version_docker }}
+            docker pull ghcr.io/bitsyscerts/bitsyscerts-app:${{ needs.version.outputs.version_docker }}
+            ```
+
+            See the [README](https://github.com/bitsyscerts/bitsyscerts#quick-start-self-hosted) for setup instructions.
+
+  # ── GitHub Pre-Release (staging / develop / release/*) ──────────────────────
+  # Creates a pre-release on every successful build from integration branches.
+  # Tag format: v{version_docker}  e.g. v26.508.1542-staging-abc1234
+  # A new pre-release is created per push (unique tag via commit SHA).
+  pre-release:
+    name: "GitHub Pre-Release"
+    runs-on: ubuntu-latest
+    needs: [version, build-push-api, build-push-app]
+    if: |
+      github.event_name == 'push' && (
+        github.ref_name == 'staging' ||
+        github.ref_name == 'develop' ||
+        startsWith(github.ref_name, 'release/')
+      )
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Pre-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ needs.version.outputs.version_docker }}"
+          name: "v${{ needs.version.outputs.version_docker }}"
+          prerelease: true
+          generate_release_notes: true
+          make_latest: false
+          body: |
+            > [!NOTE]
+            > This is a pre-release build from the `${{ github.ref_name }}` branch.
+            > It is not recommended for production use.
+
             ### Container images
 
             ```
