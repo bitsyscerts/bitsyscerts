@@ -22,10 +22,13 @@ async def search_hostnames(
     params: Annotated[HostnameSearchParams, Depends(get_hostname_params)],
     service: Annotated[HostnameService, Depends(get_hostname_service)],
 ) -> HostnameListResponse:
-    """Search hostnames observed in Certificate Transparency logs.
+    """Search CT-observed hostnames from locally indexed Certificate Transparency data.
 
     Supports exact match, wildcard (`*.example.com`), regex (`re:pattern`),
     and registrable-domain search (`recursive=true`). Results are
     cursor-paginated using keyset pagination on certificate timestamps.
+
+    Results reflect CT observations — they are not a complete DNS inventory
+    and do not indicate that a hostname currently resolves or is reachable.
     """
     return await service.search(params)
