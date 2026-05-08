@@ -25,7 +25,10 @@ def register(app: typer.Typer) -> None:
     def check_audit_gaps(
         dry_run: Annotated[
             bool,
-            typer.Option("--dry-run", help="Report findings without persisting them."),
+            typer.Option(
+                "--dry-run",
+                help="Report findings without persisting them.",
+            ),
         ] = False,
     ) -> None:
         """Detect CT ingestion audit gaps and persist new audit findings."""
@@ -37,8 +40,11 @@ def register(app: typer.Typer) -> None:
     def fix_audit_findings(
         dry_run: Annotated[
             bool,
-            typer.Option("--dry-run", help="Annotate findings without committing."),
-        ] = True,
+            typer.Option(
+                "--dry-run",
+                help="Annotate findings without committing repairs.",
+            ),
+        ] = False,
         finding_id: Annotated[
             uuid.UUID | None,
             typer.Option("--finding-id", help="Target a specific finding UUID."),

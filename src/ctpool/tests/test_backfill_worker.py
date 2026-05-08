@@ -508,3 +508,82 @@ async def test_backfill_worker_applies_shared_db_pacing_before_processing() -> N
     assert await_args is not None
     assert await_args.args[4] == 1
     submit_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Hostname metrics recording
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_worker_records_hostnames_upserted_per_batch() -> None:
+    """record_hostnames_upserted is called with the sum of hostnames across entries."""
+    from ctpool.metrics import LogMetricsAccumulator
+
+    log = _make_log()
+    settings = _make_settings()
+    claimed = _make_range(log.id, start=0, end=9)
+
+    # Two entries: 3 hostnames and 2 hostnames → total 5
+    normalized_a = MagicMock()
+    normalized_a.hostnames = ["a.example.com", "b.example.com", "c.example.com"]
+    normalized_b = MagicMock()
+    normalized_b.hostnames = ["d.example.com", "e.example.com"]
+
+    recorded_counts: list[int] = []
+    original_record = LogMetricsAccumulator.record_hostnames_upserted
+
+    def capture_record_hostnames(self: LogMetricsAccumulator, count: int) -> None:
+        recorded_counts.append(count)
+        original_record(self, count)
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch(
+            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+        ),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges",
+            AsyncMock(side_effect=[True, False]),
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(return_value=claimed),
+        ),
+        patch(
+            "ctpool.backfill_worker._resolve_log_url",
+            AsyncMock(return_value="https://ct.example.com/log/"),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(2)),
+        ),
+        patch(
+            "ctpool.backfill_worker.parse_leaf_entry",
+            MagicMock(side_effect=lambda _: MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.build_normalized_entry",
+            MagicMock(side_effect=[normalized_a, normalized_b]),
+        ),
+        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
+        patch(
+            "ctpool.backfill_worker.LogMetricsAccumulator.persist_snapshot",
+            AsyncMock(),
+        ),
+        patch(
+            "ctpool.backfill_worker.LogMetricsAccumulator.record_hostnames_upserted",
+            capture_record_hostnames,
+        ),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        await run_backfill(_make_session_factory(), settings, once=True)
+
+    assert sum(recorded_counts) == 5

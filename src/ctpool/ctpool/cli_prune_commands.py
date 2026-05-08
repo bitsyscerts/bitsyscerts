@@ -49,11 +49,11 @@ def register(app: typer.Typer) -> None:
 
     @app.command("prune-expired-certs")
     def prune_expired_certs(
-        execute: Annotated[
+        dry_run: Annotated[
             bool,
             typer.Option(
-                "--execute",
-                help="Execute deletions (default is dry-run).",
+                "--dry-run",
+                help="Count candidates without deleting.",
             ),
         ] = False,
         retention_days: Annotated[
@@ -76,14 +76,14 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Prune expired certificate rows not referenced as a hostname's latest cert.
 
-        Runs in dry-run mode by default. Pass --execute to perform deletions.
         Only certificates that are not the latest cert for any hostname are removed.
+        Pass --dry-run to count candidates without deleting.
         """
         from ctpool._cli_prune_impl import run_prune_expired_certs
 
         asyncio.run(
             run_prune_expired_certs(
-                execute=execute,
+                execute=not dry_run,
                 retention_days=retention_days,
                 batch_size=batch_size,
                 limit=limit,
@@ -93,9 +93,9 @@ def register(app: typer.Typer) -> None:
 
     @app.command("prune-observations")
     def prune_observations(
-        execute: Annotated[
+        dry_run: Annotated[
             bool,
-            typer.Option("--execute", help="Execute deletions (default is dry-run)."),
+            typer.Option("--dry-run", help="Count rows that would be deleted."),
         ] = False,
         retention_days: Annotated[
             int | None,
@@ -115,13 +115,13 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Delete old ct_log_observations rows beyond the retention window.
 
-        Runs in dry-run mode by default. Pass --execute to perform deletions.
+        Pass --dry-run to count candidates without deleting.
         """
         from ctpool._cli_prune_observations_impl import run_prune_observations
 
         asyncio.run(
             run_prune_observations(
-                dry_run=not execute,
+                dry_run=dry_run,
                 retention_days=retention_days,
                 batch_size=batch_size,
                 limit=limit,
@@ -131,9 +131,9 @@ def register(app: typer.Typer) -> None:
 
     @app.command("prune-entry-outcomes")
     def prune_entry_outcomes(
-        execute: Annotated[
+        dry_run: Annotated[
             bool,
-            typer.Option("--execute", help="Execute deletions (default is dry-run)."),
+            typer.Option("--dry-run", help="Count rows that would be deleted."),
         ] = False,
         retention_days: Annotated[
             int | None,
@@ -153,13 +153,13 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Delete old ct_entry_outcomes rows beyond the retention window.
 
-        Runs in dry-run mode by default. Pass --execute to perform deletions.
+        Pass --dry-run to count candidates without deleting.
         """
         from ctpool._cli_prune_entry_outcomes_impl import run_prune_entry_outcomes
 
         asyncio.run(
             run_prune_entry_outcomes(
-                dry_run=not execute,
+                dry_run=dry_run,
                 retention_days=retention_days,
                 batch_size=batch_size,
                 limit=limit,
@@ -169,9 +169,9 @@ def register(app: typer.Typer) -> None:
 
     @app.command("prune-for-storage-profile")
     def prune_for_storage_profile(
-        execute: Annotated[
+        dry_run: Annotated[
             bool,
-            typer.Option("--execute", help="Execute deletions (default is dry-run)."),
+            typer.Option("--dry-run", help="Count rows that would be deleted."),
         ] = False,
     ) -> None:
         """Run all prune operations appropriate for the active storage profile.
@@ -180,10 +180,12 @@ def register(app: typer.Typer) -> None:
         Certificate pruning is not included here — use prune-expired-certs
         separately as it has additional safety checks.
 
-        Runs in dry-run mode by default. Pass --execute to perform deletions.
+        Pass --dry-run to count candidates without deleting.
         """
         from ctpool._cli_prune_storage_profile_impl import (
             run_prune_for_storage_profile,
         )
 
-        asyncio.run(run_prune_for_storage_profile(execute=execute, console=_console))
+        asyncio.run(
+            run_prune_for_storage_profile(execute=not dry_run, console=_console)
+        )

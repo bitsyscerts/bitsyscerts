@@ -114,6 +114,7 @@ async def _process_log_batch(
         return 0, True, DbContentionObservation(0, 0)
 
     count = 0
+    hostname_count = 0
     retry_accumulator = DbRetryPressureAccumulator()
     for i, raw_entry in enumerate(entries):
         entry_index = start + i
@@ -147,6 +148,7 @@ async def _process_log_batch(
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
             )
             count += 1
+            hostname_count += len(normalized.hostnames)
         except UnsupportedEntryTypeError as exc:
             _logger.warning(
                 "unsupported entry type log=%s index=%d: %s",
@@ -176,6 +178,7 @@ async def _process_log_batch(
     metrics.record_entries_fetched(len(entries))
     metrics.record_entries_parsed(count)
     metrics.record_certs_upserted(count)
+    metrics.record_hostnames_upserted(hostname_count)
 
     next_index = start + len(entries)
     async with session.begin():

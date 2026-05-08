@@ -757,3 +757,117 @@ async def test_tail_worker_applies_shared_db_pacing_before_processing_log() -> N
     assert tail_one_log_mock.await_count == 1
     assert tail_one_log_mock.await_args_list[0].kwargs["batch_size"] == 1
     submit_mock.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Hostname metrics recording
+# ---------------------------------------------------------------------------
+
+
+async def test_tail_worker_records_hostnames_upserted_per_batch() -> None:
+    """record_hostnames_upserted is called with the sum of hostnames across entries."""
+    from ctpool.metrics import LogMetricsAccumulator
+
+    log = _make_log()
+    settings = _make_settings()
+
+    # Two entries, one with 3 hostnames and one with 2 → total 5
+    normalized_a = MagicMock()
+    normalized_a.hostnames = ["a.example.com", "b.example.com", "c.example.com"]
+    normalized_b = MagicMock()
+    normalized_b.hostnames = ["d.example.com", "e.example.com"]
+
+    build_side_effects = [normalized_a, normalized_b]
+
+    recorded_counts: list[int] = []
+    original_record = LogMetricsAccumulator.record_hostnames_upserted
+
+    def capture_record_hostnames(self: LogMetricsAccumulator, count: int) -> None:
+        recorded_counts.append(count)
+        original_record(self, count)
+
+    async def mock_ensure(
+        session: object, lid: object, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
+        return _make_cursor(log.id, next_index=0), False
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
+        patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(2)),
+        ),
+        patch(
+            "ctpool.tail_worker.parse_leaf_entry",
+            MagicMock(side_effect=lambda _: MagicMock()),
+        ),
+        patch(
+            "ctpool.tail_worker.build_normalized_entry",
+            MagicMock(side_effect=build_side_effects),
+        ),
+        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
+        patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
+        patch("ctpool.tail_worker.LogMetricsAccumulator.persist_snapshot", AsyncMock()),
+        patch(
+            "ctpool.tail_worker.LogMetricsAccumulator.record_hostnames_upserted",
+            capture_record_hostnames,
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        await run_tail(_make_session_factory([log], {}), settings, once=True)
+
+    assert recorded_counts == [5]
+
+
+async def test_tail_worker_hostname_not_recorded_when_no_entries() -> None:
+    """When the batch returns no entries, record_hostnames_upserted is not called.
+
+    The tail worker returns early before reaching the metric-recording block
+    when the server returns an empty entries list.  The accumulated counter
+    stays at 0 naturally and is written on the next non-empty snapshot.
+    """
+    from ctpool.metrics import LogMetricsAccumulator
+
+    log = _make_log()
+    settings = _make_settings()
+    recorded_counts: list[int] = []
+    original_record = LogMetricsAccumulator.record_hostnames_upserted
+
+    def capture_record_hostnames(self: LogMetricsAccumulator, count: int) -> None:
+        recorded_counts.append(count)
+        original_record(self, count)
+
+    async def mock_ensure(
+        session: object, lid: object, *, init_index: int
+    ) -> tuple[CtLogTailCursor, bool]:
+        return _make_cursor(log.id, next_index=0), False
+
+    with (
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(10))),
+        patch("ctpool.tail_worker.ensure_tail_cursor", mock_ensure),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(0)),
+        ),
+        patch("ctpool.tail_worker.LogMetricsAccumulator.persist_snapshot", AsyncMock()),
+        patch(
+            "ctpool.tail_worker.LogMetricsAccumulator.record_hostnames_upserted",
+            capture_record_hostnames,
+        ),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        await run_tail(_make_session_factory([log], {}), settings, once=True)
+
+    # Empty entries → the worker returns before the metric block; no call expected
+    assert recorded_counts == []
