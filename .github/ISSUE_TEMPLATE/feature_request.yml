@@ -1,0 +1,78 @@
+name: Feature Request
+description: Propose a net-new capability for BitsysCerts
+title: "feat: <short description>"
+labels: ["feature-request", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!IMPORTANT]
+        > Before filing, check the [PRD Non-Goals](../docs/PRD.md) and the
+        > [AGENTS.md scope guardrails](../AGENTS.md). Requests that are explicitly
+        > out of scope will be closed without extended discussion.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Target Component
+      options:
+        - API (new endpoint or query capability)
+        - Frontend (new UI page or feature)
+        - Ingestion (ctpool — new data sourcing)
+        - CLI (new ctpool command)
+        - Infrastructure / deployment
+        - Cross-cutting / other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: >
+        What problem does this feature solve? Who experiences it and how often?
+        Use concrete, specific language.
+      placeholder: >
+        When investigating a suspicious domain, I cannot currently see all hostnames
+        that share a certificate with a given fingerprint — I have to cross-reference
+        manually, which takes significant time.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed Solution
+      description: >
+        Describe the feature you have in mind. Be as specific as possible about
+        inputs, outputs, and behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: >
+        What workarounds exist today? What other approaches did you consider and
+        why do you prefer this one?
+
+  - type: dropdown
+    id: scope_check
+    attributes:
+      label: Scope Check
+      description: >
+        Does this feature fall within the current-osint or research retention profile?
+      options:
+        - "Yes — fits current-osint profile"
+        - "Yes — fits research profile"
+        - "No — archive/TB-class; I understand this requires an ADR"
+        - "Unsure — needs discussion"
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Mockups, examples from similar tools, API sketches, etc.

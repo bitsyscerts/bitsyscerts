@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Vulnerability
+    url: https://github.com/bitsyscerts/bitsyscerts/security/advisories/new
+    about: >
+      Report a security vulnerability privately using GitHub's security advisory flow.
+      Do not open a public issue for security reports.
+  - name: Questions and Discussion
+    url: https://github.com/bitsyscerts/bitsyscerts/discussions
+    about: >
+      Ask questions, share configurations, or discuss ideas that are not yet
+      ready to be filed as a bug or feature request.

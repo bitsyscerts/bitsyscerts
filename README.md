@@ -1,99 +1,61 @@
-# bitsyscerts
+# BitsysCerts
 
-A self-hostable Certificate Transparency intelligence service for current hostname discovery,
-certificate metadata lookup, and OSINT pivot support.
+[![CI](https://github.com/bitsyscerts/bitsyscerts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/bitsyscerts/bitsyscerts/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/bitsyscerts/bitsyscerts/branch/main/graph/badge.svg)](https://codecov.io/gh/bitsyscerts/bitsyscerts)
+[![Latest release](https://img.shields.io/github/v/release/bitsyscerts/bitsyscerts?label=latest)](https://github.com/bitsyscerts/bitsyscerts/releases/latest)
+[![Open issues](https://img.shields.io/github/issues/bitsyscerts/bitsyscerts)](https://github.com/bitsyscerts/bitsyscerts/issues)
+[![Open PRs](https://img.shields.io/github/issues-pr/bitsyscerts/bitsyscerts)](https://github.com/bitsyscerts/bitsyscerts/pulls)
 
----
+[![bitsyscerts-api](https://img.shields.io/github/v/release/bitsyscerts/bitsyscerts?label=bitsyscerts-api&logo=docker&color=0ea5e9)](https://github.com/bitsyscerts/bitsyscerts/pkgs/container/bitsyscerts-api)
+[![bitsyscerts-app](https://img.shields.io/github/v/release/bitsyscerts/bitsyscerts?label=bitsyscerts-app&logo=docker&color=0ea5e9)](https://github.com/bitsyscerts/bitsyscerts/pkgs/container/bitsyscerts-app)
 
-## What BitsysCerts is
-
-BitsysCerts is a **current, query-oriented** Certificate Transparency (CT) intelligence
-service. It ingests CT log data, normalises it, and exposes it through a queryable API and
-lightweight reference UI designed to answer practical OSINT and reconnaissance questions.
-
-BitsysCerts is **not** a full historical mirror of the public CT ecosystem. Its default
-purpose is to retain the latest useful CT signal — not every historical raw certificate,
-duplicate log entry, or full certificate chain forever.
+A self-hostable [Certificate Transparency](https://certificate.transparency.dev/) intelligence
+service. Run your own CT hostname discovery and certificate lookup service — no third-party
+APIs required.
 
 ---
 
-## Product purpose
+## What it does
 
-BitsysCerts exists to answer practical questions such as:
+BitsysCerts continuously ingests public Certificate Transparency log streams, normalises the
+data, and makes it queryable through a REST API and a lightweight web UI.
 
-- **Hostname discovery:** What hostnames and subdomains have recently appeared for a domain?
-- **Current exposure:** What names appear to be active or recently issued?
-- **Certificate metadata:** What issuer, validity period, Subject Alternative Name
-  relationships, and fingerprints are associated with observed names?
-- **Pivot support:** What hostnames, registered domains, certificate fingerprints, and Subject
-  Alternative Name relationships can be used by BitsysTools and BitsysTrace?
-- **Fresh signal:** What new Certificate Transparency observations have appeared recently?
+**Ask it questions like:**
 
----
+- What hostnames and subdomains have recently appeared for `example.com`?
+- What certificates has `api.example.com` been seen on?
+- What does the full metadata for certificate fingerprint `abc123…` look like?
+- What new CT observations have appeared in the last 24 hours?
 
-## Default retention mode: `current-osint`
+**Search modes supported:**
 
-BitsysCerts defaults to the `current-osint` retention profile, optimised for current OSINT,
-reconnaissance, and hostname discovery.
-
-| Data class | Default retention |
+| Query | Meaning |
 |---|---|
-| Hostname state (durable summary) | Indefinite |
-| Recent certificate observations | Rolling 12 months |
-| SAN co-occurrence relationships | Rolling 12 months |
-| Raw CT entry metadata | 30 – 180 days |
-| Parsed raw certificate payload | 30 – 180 days (optional) |
-| Full raw certificates / chains | **Not retained by default** |
-| Public key material | **Not retained by default** |
-| Duplicate log sightings | 30 – 180 days |
+| `example.com` | Exact hostname match |
+| `*.example.com` | All subdomains |
+| `re:^api\..*\.example\.com$` | Regex match |
+| `example.com` + recursive | All hostnames sharing the same registered domain |
 
-Additional retention profiles (`research`, `archive`) are available for longer lookback
-windows or full archival use cases. The `archive` profile must be explicitly configured and
-is a TB-class deployment mode. It is **never the default**.
+> [!NOTE]
+> BitsysCerts is **not** a full historical CT mirror. Its default `current-osint` retention
+> profile keeps a rolling window of recent signal — not every certificate ever issued.
+> This is a deliberate design choice. See [docs/PRD.md](docs/PRD.md) for the full scope.
 
 ---
 
-## Integration boundaries
+## Quick start (self-hosted)
 
-BitsysCerts is a data source for other Bitsys projects. It does not absorb their
-functionality.
-
-```
-BitsysCerts  →  CT ingestion, normalisation, indexing, querying, reference UI
-BitsysTools  →  consumes BitsysCerts CT intelligence for public diagnostics
-BitsysTrace  →  consumes BitsysCerts CT intelligence for pivot workflows
-```
-
----
-
-## Non-goals
-
-The following are explicit non-goals for the default BitsysCerts product:
-
-- Mirroring every CT log forever.
-- Retaining every certificate ever observed.
-- Retaining every duplicate CT log entry.
-- Reconstructing the full historical certificate state of the internet.
-- Storing full public key material by default.
-- Becoming a general-purpose internet archive.
-- Replacing every historical feature of `crt.sh`.
-
----
-
-## Self-hosting: getting started
-
-BitsysCerts is deployed as a set of Docker images pulled from GHCR. You do not need the
-source repository on your server.
+BitsysCerts ships as a Docker Compose stack. You do not need the source repository on
+your server — just three files.
 
 ### Requirements
 
-- Ubuntu 22.04+ (or any Linux with Docker Engine 25+ and the Compose plugin)
-- `docker compose version` must succeed — install with `apt install docker-compose-plugin`
-- Ports 80 (or your chosen `FRONTEND_PORT`) open to your network
+- Linux host with [Docker Engine 25+](https://docs.docker.com/engine/install/) and the
+  Compose plugin (`docker compose version` must succeed)
+- Outbound HTTPS to public CT log URLs
+- Port 80 (or your chosen `FRONTEND_PORT`) reachable from your browser
 
-### First-time setup
-
-**1. Download the three runtime files into a directory of your choice:**
+### 1 — Download the runtime files
 
 ```sh
 mkdir bitsyscerts && cd bitsyscerts
@@ -105,77 +67,118 @@ curl -sSfO "${BASE}/server-deploy.sh"
 chmod +x server-deploy.sh
 ```
 
-**2. Configure your environment:**
+### 2 — Configure
 
 ```sh
 cp .env.example .env
-$EDITOR .env          # set POSTGRES_PASSWORD, DATABASE_URL, IMAGE_TAG, etc.
+$EDITOR .env
 ```
 
-Minimum required values in `.env`:
+| Variable | Required | Description |
+|---|---|---|
+| `POSTGRES_PASSWORD` | Yes | Password for the bundled PostgreSQL service |
+| `DATABASE_URL` | Yes | Async DSN — use `postgres` as the host; password must match above |
+| `IMAGE_TAG` | Yes | GHCR image tag, e.g. `latest` or a pinned version like `26.504.913` |
+| `CT_BACKFILL_DAYS` | No | Days of history to backfill on first run (default: `30`) |
+| `FRONTEND_PORT` | No | Host port for the web UI (default: `80`) |
 
-| Variable | Description |
-|---|---|
-| `POSTGRES_PASSWORD` | Password for the bundled PostgreSQL service |
-| `DATABASE_URL` | Must match `POSTGRES_PASSWORD` — use `postgres` as the host |
-| `IMAGE_TAG` | Tag to pull from GHCR, e.g. `latest` or `26.504.913` |
+> [!NOTE]
+> Using the bundled PostgreSQL service? The one-role setup is sufficient. Set
+> `DATABASE_ADMIN_URL` only if you are connecting to an external PostgreSQL server
+> where the application role does not have database-create privileges.
 
-For the bundled PostgreSQL service, the default one-role setup is sufficient:
-the role referenced by `DATABASE_URL` is also the bootstrap role created by the
-official `postgres` image, so `ctpool init-db --force` can reset the app DB
-without a second DSN. Set `DATABASE_ADMIN_URL` only when using an external or
-locked-down PostgreSQL server where the app role does not have database-create
-privileges.
-
-**3. Deploy:**
+### 3 — Deploy
 
 ```sh
 ./server-deploy.sh
 ```
 
-This script:
+The script:
 1. Pulls all images from GHCR
 2. Starts PostgreSQL and waits until it is healthy
-3. Runs the compose-native `migrate` service to initialise / migrate the schema
-4. Runs `ctpool sync-logs` to fetch the current CT log list
-5. Brings up the full stack (API, frontend, backfill worker, tail worker)
+3. Runs schema migrations
+4. Fetches the current CT log list (`ctpool sync-logs`)
+5. Brings up the full stack: API, web UI, backfill worker, tail worker
 
-If you need to rerun migrations manually outside the wrapper script, use the
-compose service directly:
+Once it completes, open `http://<your-host>/` in a browser. The dashboard shows ingestion
+progress — backfill will run in the background for the configured lookback window.
+
+### Updating
 
 ```sh
-docker compose up --abort-on-container-exit --exit-code-from migrate migrate
+# Edit IMAGE_TAG in .env if you want to pin a new version, then:
+./server-deploy.sh
 ```
 
-If you need to destructively reset the configured application database, run the
-same image through the `migrate` service rather than trying to `exec` into a
-nonexistent `ctpool` service:
+Pass `--skip-migrate` if you know the schema is already current. Pass `--skip-sync-logs`
+if the CT log list was recently synced.
+
+---
+
+## API
+
+The REST API is available at `http://<your-host>/v1/`. Interactive documentation (Scalar)
+is at `http://<your-host>/docs`.
+
+| Endpoint | Description |
+|---|---|
+| `GET /v1/hostnames` | Search hostnames with cursor pagination |
+| `GET /v1/certificates/{sha256}` | Full certificate detail by SHA-256 fingerprint |
+| `GET /v1/stats` | Ingestion and storage statistics |
+| `GET /v1/settings/storage` | Read active retention profile |
+| `PUT /v1/settings/storage` | Update retention profile |
+| `GET /health` | Liveness probe |
+
+The API follows the OpenAPI 3.1 specification. The schema is available at `/openapi.json`.
+
+---
+
+## Retention profiles
+
+| Profile | Storage class | Notes |
+|---|---|---|
+| `current-osint` | GB-class | **Default.** Rolling retention windows; fresh OSINT focus |
+| `research` | GB–TB-class | Longer lookback; richer metadata |
+| `archive` | TB-class+ | Full CT archival; **must be explicitly configured** |
+
+The active profile can be changed at runtime via `PUT /v1/settings/storage` or the
+Settings page in the UI. Switching profiles does not delete existing data — the next
+prune cycle enforces the new retention windows.
+
+> [!CAUTION]
+> The `archive` profile requires explicit configuration and significant storage capacity.
+> It is never activated by default.
+
+---
+
+## What BitsysCerts is not
+
+- A complete replacement for `crt.sh` or a full historical CT archive
+- A tool that retains every certificate or every duplicate log entry ever seen
+- A TB-class deployment by default (that requires the `archive` profile)
+
+---
+
+## Manual operations (CLI)
+
+The `ctpool` CLI is available inside the running `api` container for maintenance tasks:
 
 ```sh
+# View ingestion statistics
+docker compose exec api ctpool stats
+
+# Run a data integrity audit
+docker compose exec api ctpool check-audit-gaps
+
+# Repair audit findings
+docker compose exec api ctpool fix-audit-findings
+
+# Manually prune data to the active retention profile
+docker compose exec api ctpool prune-for-storage-profile
+
+# Reset migrations and reinitialise (destructive)
 docker compose run --rm migrate ctpool init-db --force
 ```
-
-### Re-deploying / updating
-
-```sh
-# Update IMAGE_TAG in .env if pinning a specific version, then:
-./server-deploy.sh --skip-migrate
-```
-
-Pass `--skip-sync-logs` as well if you only changed application config and the CT log list
-is already current.
-
-### Pinning to a specific version
-
-Set `IMAGE_TAG` in `.env` to a specific version tag from GHCR, e.g.:
-
-```sh
-IMAGE_TAG=26.504.913        # production build from main
-IMAGE_TAG=26.504.913-staging-abc1234   # a specific branch build
-```
-
-`latest` always points to the most recent `main` build. Branch builds produce a
-`latest-<branch>` tag (e.g. `latest-staging`) for convenience.
 
 ---
 
@@ -183,10 +186,30 @@ IMAGE_TAG=26.504.913-staging-abc1234   # a specific branch build
 
 ```
 src/
-  api/      # Python · FastAPI · PostgreSQL — query and pivot API
-  app/      # React · Vite · Mantine — reference UI
-  ctpool/   # Python CLI — CT log ingestion pipeline
+  api/      # Python · FastAPI · PostgreSQL — REST API
+  app/      # React · Vite · Mantine — web UI
+  ctpool/   # Python · Typer — CT ingestion pipeline and CLI
+docs/
+  PRD.md          # Product requirements and scope
+  ARCHITECTURE.md # System architecture, data flow, deployment topology
+  STYLE_GUIDE.md  # Code style reference
 ```
 
-See [AGENTS.md](AGENTS.md) for repository-wide coding mandates and engineering guardrails.
-See [INITIAL_PLAN.md](INITIAL_PLAN.md) for the full architecture, schema, and implementation plan.
+---
+
+## Contributing
+
+See [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md) for setup instructions, branching
+conventions, commit format, and the pull request process.
+
+All contributions must:
+
+- Ship with tests (75% coverage gate on all dimensions)
+- Pass `pytest` (Python) and `npm run test` (React) with no linting suppressions
+- Follow the [style guide](docs/STYLE_GUIDE.md)
+
+---
+
+## License
+
+[MIT](LICENSE) — free to use, modify, and commercialise. Provided as-is, without warranty.

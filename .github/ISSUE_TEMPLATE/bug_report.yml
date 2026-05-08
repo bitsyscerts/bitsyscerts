@@ -1,0 +1,92 @@
+name: Bug Report
+description: Report a reproducible defect in BitsysCerts
+title: "bug: <short description>"
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!IMPORTANT]
+        > Search existing issues before filing. Duplicate reports slow down triage.
+        > Do not include private hostnames, credentials, or third-party data in this report.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit SHA
+      description: >
+        Run `git rev-parse --short HEAD` in the repository root, or provide the
+        Docker image tag if using a built image.
+      placeholder: "e.g. a1b2c3d or v0.3.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      options:
+        - API (certsapi / FastAPI)
+        - Frontend (React app)
+        - Ingestion (ctpool — backfill / tail)
+        - Database / migrations
+        - Docker Compose / deployment
+        - CLI (ctpool commands)
+        - Other / unsure
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Docker version, deployment mode (Compose / bare metal / cloud)
+      placeholder: |
+        - OS: Debian 12 (Bookworm)
+        - Docker: 24.0.7 / Compose v2.23.0
+        - Mode: docker-compose, default stack
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Exact, minimal steps. Use numbered list.
+      placeholder: |
+        1. Start the stack with `docker compose up`
+        2. Query `GET /v1/hostnames?q=*.example.com`
+        3. Observe response
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behaviour
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behaviour
+      description: What actually happened? Include error messages and HTTP status codes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: >
+        Paste relevant container logs. Redact credentials, tokens, and personal data.
+        Use triple-backtick fences for formatting.
+      render: text
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Anything else that might help — screenshots, config snippets, etc.

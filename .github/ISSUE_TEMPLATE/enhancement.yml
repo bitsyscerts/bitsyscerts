@@ -1,0 +1,83 @@
+name: Enhancement
+description: Improve existing behaviour, performance, or developer experience
+title: "enhance: <short description>"
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!NOTE]
+        > Use this template for improvements to **existing** functionality — better
+        > performance, cleaner error messages, improved UX on an existing screen, etc.
+        > For a net-new capability, use the **Feature Request** template instead.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      options:
+        - API (certsapi / FastAPI)
+        - Frontend (React app)
+        - Ingestion (ctpool — backfill / tail)
+        - Database / schema / indexes
+        - CLI (ctpool commands)
+        - Docker Compose / deployment
+        - Developer tooling / CI
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Enhancement Category
+      options:
+        - Performance
+        - Reliability / resilience
+        - Usability / UX
+        - Developer experience
+        - Observability / logging / metrics
+        - Security hardening
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: Current Behaviour
+      description: Describe what happens today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: desired
+    attributes:
+      label: Desired Behaviour
+      description: Describe the improved behaviour. Be concrete and specific.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: >
+        Why does this matter? What is the impact of the current behaviour?
+        Include benchmarks, error rates, or user-facing symptoms if available.
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Notes
+      description: >
+        Optional. If you have a suggested approach, sketch it here. This is
+        not a commitment — maintainers may choose a different implementation.
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
