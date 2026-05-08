@@ -202,7 +202,7 @@ jobs:
         run: npm run typecheck
 
       - name: Run tests (coverage)
-        run: npx vitest run --coverage
+        run: npm run test:coverage
 
       - name: Coverage summary
         uses: davelosert/vitest-coverage-report-action@v2
