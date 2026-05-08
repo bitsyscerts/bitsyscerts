@@ -195,13 +195,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run tests (lint + coverage)
-        run: npm run test
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run tests (coverage)
+        run: vitest run --coverage
 
       - name: Coverage summary
         uses: davelosert/vitest-coverage-report-action@v2
         with:
           json-summary-path: src/app/coverage/coverage-summary.json
+          vite-config-path: src/app/vite.config.ts
         if: always()
 
       - name: Upload coverage to Codecov
