@@ -22,6 +22,8 @@ from os import getpid
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ctpool.audit_constants import RANGE_KIND_REPAIR
+from ctpool.audit_repair import resolve_repair_finding
 from ctpool.config import Settings
 from ctpool.db_contention_accumulator import DbRetryPressureAccumulator
 from ctpool.db_contention_coordinator import (
@@ -346,6 +348,11 @@ async def _run_one_range(
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_complete(session, claimed.id)
+                if (
+                    claimed.range_kind == RANGE_KIND_REPAIR
+                    and claimed.repair_for_finding_id is not None
+                ):
+                    await resolve_repair_finding(session, claimed.repair_for_finding_id)
 
         return count, log_url, False, observation, None
     except RateLimitError as exc:

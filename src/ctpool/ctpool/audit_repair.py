@@ -5,6 +5,8 @@ Exports:
     apply_repair       — Apply the correct strategy to a single finding.
     fetch_repairable_findings — Query open findings matching filter options.
     mark_finding_ignored      — Mark a single finding as ignored.
+    resolve_repair_finding    — Resolve a repair_attempted finding whose repair
+                                range has completed successfully.
 """
 
 from __future__ import annotations
@@ -23,9 +25,11 @@ from ctpool.audit_constants import (
     FINDING_TYPE_MISSING_ENTRY_OUTCOMES,
     FINDING_TYPE_MISSING_OBSERVATIONS_WITHOUT_OUTCOME,
     FINDING_TYPE_STALE_BACKFILL_CLAIM,
+    STATUS_FAILED,
     STATUS_IGNORED,
     STATUS_OPEN,
     STATUS_REPAIR_ATTEMPTED,
+    STATUS_RESOLVED,
 )
 from ctpool.audit_repair_strategies import (
     repair_failed_backfill_range,
@@ -133,3 +137,37 @@ async def mark_finding_ignored(
     finding.resolved_by = "operator"
     await session.flush()
     return finding
+
+
+async def resolve_repair_finding(
+    session: AsyncSession,
+    finding_id: uuid.UUID,
+) -> None:
+    """Resolve a repair_attempted finding whose repair range has now completed.
+
+    Called by the backfill worker when a RANGE_KIND_REPAIR range finishes
+    successfully.  This closes the audit finding lifecycle — without this step,
+    repair_attempted findings accumulate and are re-processed on every
+    fix-audit-findings run.
+
+    No-op if the finding is not found or is already in a terminal state
+    (resolved, ignored, failed).  This ensures the call is safe to make
+    unconditionally from the completion path.
+
+    Args:
+        session:    Active async database session with an open transaction.
+        finding_id: PK of the CtAuditFinding to resolve.
+    """
+    result = await session.execute(
+        select(CtAuditFinding).where(CtAuditFinding.id == finding_id)
+    )
+    finding = result.scalar_one_or_none()
+    if finding is None:
+        return
+    if finding.status in (STATUS_RESOLVED, STATUS_IGNORED, STATUS_FAILED):
+        return
+    now = datetime.now(UTC)
+    finding.status = STATUS_RESOLVED
+    finding.resolved_at = now
+    finding.resolved_by = "backfill-worker"
+    await session.flush()

@@ -35,6 +35,7 @@ from ctpool.audit_repair import (
     apply_repair,
     fetch_repairable_findings,
     mark_finding_ignored,
+    resolve_repair_finding,
 )
 from ctpool.models.audit_finding import CtAuditFinding
 from ctpool.models.entry_outcome import CtEntryOutcome
@@ -460,3 +461,43 @@ async def test_mark_finding_ignored_returns_none_for_unknown_id(
         db_session, uuid.uuid4(), reason="no such finding"
     )
     assert result is None
+
+
+async def test_resolve_repair_finding_sets_resolved(
+    db_session: AsyncSession,
+) -> None:
+    """resolve_repair_finding transitions a repair_attempted finding to resolved."""
+    finding = _make_finding(finding_type=FINDING_TYPE_MISSING_ENTRY_OUTCOMES)
+    finding.status = STATUS_REPAIR_ATTEMPTED
+    db_session.add(finding)
+    await db_session.flush()
+
+    await resolve_repair_finding(db_session, finding.id)
+
+    await db_session.refresh(finding)
+    assert finding.status == STATUS_RESOLVED
+    assert finding.resolved_at is not None
+    assert finding.resolved_by == "backfill-worker"
+
+
+async def test_resolve_repair_finding_noop_for_already_resolved(
+    db_session: AsyncSession,
+) -> None:
+    """resolve_repair_finding is a no-op when the finding is already resolved."""
+    finding = _make_finding(finding_type=FINDING_TYPE_MISSING_ENTRY_OUTCOMES)
+    finding.status = STATUS_RESOLVED
+    db_session.add(finding)
+    await db_session.flush()
+
+    # Should not raise and should leave the finding in its current state.
+    await resolve_repair_finding(db_session, finding.id)
+    await db_session.refresh(finding)
+    assert finding.status == STATUS_RESOLVED
+
+
+async def test_resolve_repair_finding_noop_for_unknown_id(
+    db_session: AsyncSession,
+) -> None:
+    """resolve_repair_finding is a no-op when the finding UUID does not exist."""
+    # Should not raise — the backfill worker calls this unconditionally.
+    await resolve_repair_finding(db_session, uuid.uuid4())
