@@ -32,7 +32,7 @@ export function LogSyncStatus({
           color={historyDone ? "teal" : "orange"}
           title={
             historyDone
-              ? "All historical records fetched"
+              ? "Backfill window complete — all entries in the configured lookback period have been fetched"
               : `Backfill ${formatPct(backfillPct)} complete`
           }
         >

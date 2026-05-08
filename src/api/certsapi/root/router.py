@@ -13,12 +13,12 @@ _ENDPOINTS: list[EndpointEntry] = [
     EndpointEntry(
         path="/v1/hostnames",
         method="GET",
-        description="Search CT-observed hostnames with cursor pagination",
+        description="Search CT-observed hostnames (local index) with cursor pagination",
     ),
     EndpointEntry(
         path="/v1/certificates/{fingerprint_sha256}",
         method="GET",
-        description="Retrieve a certificate by its SHA-256 fingerprint",
+        description="Retrieve a CT-observed certificate by its SHA-256 fingerprint",
     ),
     EndpointEntry(
         path="/health",

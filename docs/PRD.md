@@ -23,17 +23,24 @@
 
 ## Product Vision
 
-BitsysCerts is a **self-hostable Certificate Transparency intelligence service** for current
-hostname discovery, certificate metadata lookup, and OSINT pivot support.
+BitsysCerts is a **self-hostable Certificate Transparency indexing and enrichment platform**
+for security research, CTI, bug bounty, OSINT, and investigative workflows.
 
-It ingests Certificate Transparency (CT) log streams, normalises the data, and exposes it
-through a queryable REST API and a lightweight reference web UI. The product is designed to
-answer practical, present-tense questions about hostnames and certificates — not to mirror
-the complete historical state of the internet's public CT ecosystem.
+It ingests CT log streams, normalises the data, and exposes it through a queryable REST API
+and a lightweight reference web UI. The product is designed to answer practical questions
+about CT-observed hostnames and certificate metadata — not to mirror the complete historical
+state of the internet's public CT ecosystem, and not to provide real-time enterprise
+monitoring guarantees.
 
 > [!IMPORTANT]
-> BitsysCerts is **not** a replacement for `crt.sh` or a general-purpose CT archive.
-> Its default retention mode is `current-osint`, which retains fresh signal over deep
+> CT data is evidence that a hostname appeared in a publicly logged certificate. It is
+> **not** proof that the hostname currently resolves, is reachable, or is controlled by
+> the same party today. BitsysCerts surfaces CT-derived enrichment, not authoritative
+> DNS inventory.
+
+> [!NOTE]
+> BitsysCerts is complementary to tools like `crt.sh`, not a replacement. Its default
+> `current-osint` profile retains a rolling window of fresh signal — not complete CT
 > history. This is a deliberate design constraint, not a limitation to be worked around.
 
 ---
@@ -42,29 +49,31 @@ the complete historical state of the internet's public CT ecosystem.
 
 | User | Role | Primary Need |
 |---|---|---|
-| Security researcher | Individual / team | Discover subdomains and hostnames for a target domain; pivot on certificate relationships |
-| Red team / penetration tester | Individual / team | Enumerate attack surface; identify recently issued or expiring certificates |
-| Threat intelligence analyst | SOC / MSSP | Monitor new hostname observations for suspicious domains or issuers |
-| Platform engineer (BitsysTools / BitsysTrace) | Developer | Consume BitsysCerts as a structured CT data source for downstream tooling |
-| Self-hoster | Individual | Run a private CT intelligence service without relying on public third-party APIs |
+| Security researcher | Individual / team | CT-derived hostname discovery and certificate pivot for targets; local, private queries |
+| Bug bounty hunter | Individual | Enumerate CT-observed hostnames for in-scope registered domains |
+| Red team / penetration tester | Individual / team | Certificate-derived attack surface enrichment; recently issued certificate discovery |
+| Threat intelligence analyst | SOC / MSSP / CTI team | Enrich suspicious infrastructure indicators with CT-derived certificate metadata |
+| OSINT investigator | Individual | Pivot from a hostname or fingerprint through locally indexed CT data |
+| Platform / tooling engineer | Developer | Consume a private CT enrichment API from custom tooling without third-party rate limits |
+| Self-hoster | Individual | Run a private CT-derived index without sending queries to external services |
 
 ---
 
 ## Core Use Cases
 
-### UC-1: Hostname Discovery
+### UC-1: CT-Observed Hostname Discovery
 
 **Actor:** Security researcher  
-**Goal:** Find all recently observed hostnames for a given registered domain.
+**Goal:** Find CT-observed hostnames for a given registered domain.
 
 **Query patterns:**
 
 | Pattern | Meaning |
 |---|---|
 | `example.com` | Exact match on hostname |
-| `*.example.com` | All subdomains of `example.com` |
+| `*.example.com` | CT-observed hostnames under `example.com` |
 | `re:^api\..*\.example\.com$` | Regex match against hostname |
-| `example.com` + `recursive=true` | All hostnames sharing the same registrable domain |
+| `example.com` + `recursive=true` | All CT-observed hostnames sharing the same registrable domain |
 
 **Expected output:** Paginated list of hostnames with first/last CT observation timestamps
 and latest certificate summary.
@@ -84,15 +93,19 @@ that referenced this certificate.
 
 ---
 
-### UC-3: Subdomain Enumeration with Depth Control
+### UC-3: CT-Observed Hostname Discovery with Depth Control
 
 **Actor:** Penetration tester  
-**Goal:** Enumerate hostnames at a specific label depth under a domain.
+**Goal:** Find CT-observed hostnames at a specific label depth under a domain.
 
-**Example:** Find all third-level hostnames under `example.com` (e.g., `api.example.com`,
-`www.example.com`) without returning fourth-level names.
+**Example:** Find third-level CT-observed hostnames under `example.com` (e.g.,
+`api.example.com`, `www.example.com`) without returning fourth-level names.
 
 **Query:** `q=*.example.com&depth=3&recursive=false`
+
+> [!NOTE]
+> Results reflect CT observations. They are not a complete inventory of all DNS names
+> that exist or have ever existed for the domain.
 
 ---
 
@@ -130,13 +143,17 @@ richness without redeploying.
 
 ---
 
-### UC-6: Platform Integration (API Consumer)
+### UC-6: API Integration
 
-**Actor:** BitsysTools, BitsysTrace, or any third-party tool  
-**Goal:** Query BitsysCerts programmatically using its REST API for hostname and
-certificate data.
+**Actor:** Custom security tooling, automation pipelines, or any REST API consumer  
+**Goal:** Query BitsysCerts programmatically for CT-derived hostname and certificate
+enrichment from a private, locally-controlled index.
 
 **Interface:** OpenAPI-described REST API at `/v1/`. Interactive documentation at `/docs`.
+
+> [!NOTE]
+> BitsysCerts exposes a product API over locally indexed CT-derived data. This API is not
+> the CT log protocol itself — CT log protocol behaviour is used on the ingestion side only.
 
 ---
 
@@ -227,24 +244,29 @@ flowchart TD
 
 ## Non-Goals
 
-The following are explicitly out of scope for BitsysCerts. Proposals that conflict with
-this list will be rejected unless accompanied by an Architectural Decision Record (ADR)
-that revises the product scope.
+The following are explicitly out of scope. Proposals that conflict with this list will be
+rejected unless accompanied by an Architectural Decision Record (ADR) that revises scope.
 
-- **Mirroring every CT log forever.** BitsysCerts retains a rolling window, not a complete
-  archive.
+- **Four-nines availability or enterprise SLA guarantees.** BitsysCerts is a self-hosted
+  research tool, not a managed monitoring service.
+- **Up-to-the-second certificate alerting.** CT tail lag is expected; freshness is
+  best-effort and depends on operator configuration.
+- **Authoritative DNS or asset inventory.** CT data reflects certificate observations,
+  not current DNS state.
+- **Mirroring every CT log forever.** BitsysCerts retains a rolling window by default,
+  not a complete archive.
 - **Retaining every certificate ever observed.** Deduplication and retention pruning are
   required design constraints.
 - **Retaining every duplicate CT log entry.** Entry outcomes are bounded and pruned.
 - **Reconstructing the full historical certificate state of the internet.** This is a
-  TB-class concern that requires explicit ADR and opt-in configuration.
+  TB-class concern requiring explicit ADR and opt-in configuration.
 - **Storing full public key material by default.** Key material is not retained in the
   default profile.
 - **Becoming a general-purpose internet archive.**
-- **Absorbing BitsysTools or BitsysTrace functionality.** BitsysCerts is a data source,
-  not a consumer-facing tool.
+- **Multi-region enterprise deployment architecture.** Horizontal scale-out and HA
+  clustering are outside the project roadmap.
 - **Replacing every historical use case of `crt.sh`.** BitsysCerts is complementary and
-  current-focused.
+  present-focused.
 
 ---
 
@@ -256,13 +278,15 @@ graph LR
     ctpool -->|writes| PG[(PostgreSQL 17)]
     PG -->|reads| api[certsapi / FastAPI]
     api -->|REST /v1/| app[React App]
-    api -->|REST /v1/| tools[BitsysTools]
-    api -->|REST /v1/| trace[BitsysTrace]
-    api -->|REST /v1/| ext[External Consumers]
+    api -->|REST /v1/| ext[External Consumers / Custom Tooling]
 ```
 
-BitsysCerts exposes one interface: the REST API at `/v1/`. All consumers use the same
-interface. There is no separate internal API or shared-library integration.
+BitsysCerts exposes one interface: the REST API at `/v1/`. All consumers — the reference
+UI, automation pipelines, and any downstream tooling — use the same interface. There is no
+separate internal API or shared-library integration.
+
+BitsysCerts provides CT-derived enrichment. DNS resolution, live TLS inspection, and
+current reachability are separate evidence streams and are not part of this product.
 
 ---
 
@@ -287,14 +311,28 @@ for the full deployment topology.
 
 ---
 
+## Freshness and Completeness
+
+BitsysCerts is designed to be useful even when not perfectly caught up.
+
+Depending on storage profile, worker count, log availability, network speed, rate limits,
+and disk performance, an instance may be minutes, hours, or days behind some CT logs.
+This is expected for self-hosted deployments and is not a defect.
+
+The operator dashboard exposes tail lag, backfill progress, failed ranges, audit findings,
+storage projections, and worker health so operators can understand the quality and
+freshness of their local index. BitsysCerts should be treated as a **best-effort enrichment
+source**, not a guaranteed complete or real-time authority.
+
+---
+
 ## Success Criteria
 
 | Metric | Target |
 |---|---|
 | Hostname search response time (p95) | < 200 ms |
 | Stats endpoint response time (p95) | < 50 ms (served from snapshot cache) |
-| CT tail latency | New certificates indexed within 10 minutes of CT log commit |
-| Uptime | 99.5% for API and ingestion services |
+| CT tail freshness (best-effort) | Typically within the `CT_TAIL_INTERVAL_SECONDS` polling window of the log's current tree size |
 | Test coverage | ≥ 75% statements, branches, functions, lines (all sub-projects) |
 | Storage growth rate (`current-osint`) | Predictable GB-class; monitored via storage metrics endpoint |
 
