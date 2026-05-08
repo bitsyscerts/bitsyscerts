@@ -35,6 +35,7 @@ from ctpool.audit_repair import (
     apply_repair,
     fetch_repairable_findings,
     mark_finding_ignored,
+    resolve_orphaned_repair_findings,
     resolve_repair_finding,
 )
 from ctpool.models.audit_finding import CtAuditFinding
@@ -501,3 +502,101 @@ async def test_resolve_repair_finding_noop_for_unknown_id(
     """resolve_repair_finding is a no-op when the finding UUID does not exist."""
     # Should not raise — the backfill worker calls this unconditionally.
     await resolve_repair_finding(db_session, uuid.uuid4())
+
+
+# ---------------------------------------------------------------------------
+# resolve_orphaned_repair_findings
+# ---------------------------------------------------------------------------
+
+
+async def test_resolve_orphaned_repair_findings_resolves_completed_range(
+    db_session: AsyncSession,
+) -> None:
+    """A repair_attempted finding with a complete repair range is resolved."""
+    source = _make_source(url="https://orphan1.example.com/")
+    db_session.add(source)
+    await db_session.flush()
+
+    finding = _make_finding(finding_type=FINDING_TYPE_MISSING_ENTRY_OUTCOMES)
+    finding.status = STATUS_REPAIR_ATTEMPTED
+    db_session.add(finding)
+    await db_session.flush()
+
+    rng = _make_range(source.id, status="complete")
+    rng.range_kind = RANGE_KIND_REPAIR
+    rng.repair_for_finding_id = finding.id
+    db_session.add(rng)
+    await db_session.flush()
+
+    count = await resolve_orphaned_repair_findings(db_session)
+
+    await db_session.refresh(finding)
+    assert count == 1
+    assert finding.status == STATUS_RESOLVED
+    assert finding.resolved_by == "fix-audit-findings-cleanup"
+
+
+async def test_resolve_orphaned_repair_findings_leaves_active_range_alone(
+    db_session: AsyncSession,
+) -> None:
+    """A repair_attempted finding with a pending repair range is NOT resolved."""
+    source = _make_source(url="https://orphan2.example.com/")
+    db_session.add(source)
+    await db_session.flush()
+
+    finding = _make_finding(finding_type=FINDING_TYPE_MISSING_ENTRY_OUTCOMES)
+    finding.status = STATUS_REPAIR_ATTEMPTED
+    db_session.add(finding)
+    await db_session.flush()
+
+    rng = _make_range(source.id, status="pending")
+    rng.range_kind = RANGE_KIND_REPAIR
+    rng.repair_for_finding_id = finding.id
+    db_session.add(rng)
+    await db_session.flush()
+
+    count = await resolve_orphaned_repair_findings(db_session)
+
+    await db_session.refresh(finding)
+    assert count == 0
+    assert finding.status == STATUS_REPAIR_ATTEMPTED
+
+
+async def test_resolve_orphaned_repair_findings_resolves_no_range(
+    db_session: AsyncSession,
+) -> None:
+    """A repair_attempted finding with no repair range at all is resolved."""
+    finding = _make_finding(finding_type=FINDING_TYPE_MISSING_ENTRY_OUTCOMES)
+    finding.status = STATUS_REPAIR_ATTEMPTED
+    db_session.add(finding)
+    await db_session.flush()
+
+    count = await resolve_orphaned_repair_findings(db_session)
+
+    await db_session.refresh(finding)
+    assert count == 1
+    assert finding.status == STATUS_RESOLVED
+
+
+async def test_resolve_orphaned_repair_findings_returns_zero_when_empty(
+    db_session: AsyncSession,
+) -> None:
+    """Returns 0 when there are no repair_attempted findings."""
+    count = await resolve_orphaned_repair_findings(db_session)
+    assert count == 0
+
+
+async def test_fetch_repairable_findings_excludes_repair_attempted(
+    db_session: AsyncSession,
+) -> None:
+    """fetch_repairable_findings no longer returns repair_attempted findings."""
+    finding = _make_finding(finding_type=FINDING_TYPE_MISSING_ENTRY_OUTCOMES)
+    finding.status = STATUS_REPAIR_ATTEMPTED
+    db_session.add(finding)
+    await db_session.flush()
+
+    options = RepairOptions(dry_run=True)
+    results = await fetch_repairable_findings(db_session, options)
+
+    ids = [f.id for f in results]
+    assert finding.id not in ids
