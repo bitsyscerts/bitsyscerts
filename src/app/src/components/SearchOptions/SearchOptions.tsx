@@ -1,4 +1,4 @@
-import { SimpleGrid } from "@mantine/core";
+import { SimpleGrid, Stack } from "@mantine/core";
 import { RecursiveToggle } from "./RecursiveToggle";
 import { DepthInput } from "./DepthInput";
 import { SortSelect } from "./SortSelect";
@@ -22,6 +22,10 @@ interface SearchOptionsProps {
 /**
  * Hostname search option controls in a responsive grid. Rendered only when the
  * parent explicitly shows the options panel (controlled by a filter toggle).
+ *
+ * Layout (≥ md): [Recursive + Depth] [Sort] [Limit] [Include Certs]
+ * Depth nests below Recursive in the same cell so it never creates a
+ * gap when hidden.
  */
 export function SearchOptions({
   recursive,
@@ -36,9 +40,11 @@ export function SearchOptions({
   onIncludeCertsChange,
 }: SearchOptionsProps) {
   return (
-    <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="md">
-      <RecursiveToggle value={recursive} onChange={onRecursiveChange} />
-      <DepthInput value={depth} onChange={onDepthChange} visible={recursive} />
+    <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="md">
+      <Stack gap="xs" justify="flex-start">
+        <RecursiveToggle value={recursive} onChange={onRecursiveChange} />
+        {recursive && <DepthInput value={depth} onChange={onDepthChange} />}
+      </Stack>
       <SortSelect value={sort} onChange={onSortChange} />
       <LimitInput value={limit} onChange={onLimitChange} />
       <IncludeCertsToggle

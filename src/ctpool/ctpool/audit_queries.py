@@ -19,6 +19,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ctpool.outcome_constants import OUTCOME_WRITE_ERROR
+
 
 async def query_stale_backfill_claims(
     session: AsyncSession,
@@ -75,10 +77,13 @@ async def query_failed_backfill_ranges(
 async def query_missing_entry_outcomes(
     session: AsyncSession,
 ) -> list[RowMapping]:
-    """Find completed backfill ranges that are missing outcome rows.
+    """Find completed backfill ranges that are missing usable outcome rows.
 
     Returns one row per (log_source_id, start_index, end_index) span where
-    the count of outcome rows is less than (end_index - start_index + 1).
+    the count of *usable* outcome rows is less than
+    (end_index - start_index + 1).  ``write_error`` outcomes are excluded
+    from the usable count: they record that a parse succeeded but the write
+    failed, and must be re-fetched just like a missing row.
     """
     result = await session.execute(
         text(
@@ -88,8 +93,11 @@ async def query_missing_entry_outcomes(
                    r.start_index,
                    r.end_index,
                    (r.end_index - r.start_index + 1) AS expected_count,
-                   COUNT(o.id)::bigint AS actual_count,
-                   (r.end_index - r.start_index + 1 - COUNT(o.id))::int
+                   COUNT(o.id)
+                       FILTER (WHERE o.outcome != :write_error)::bigint
+                       AS actual_count,
+                   (r.end_index - r.start_index + 1
+                    - COUNT(o.id) FILTER (WHERE o.outcome != :write_error))::int
                        AS missing_count
             FROM ct_log_backfill_ranges r
             LEFT JOIN ct_entry_outcomes o
@@ -97,11 +105,13 @@ async def query_missing_entry_outcomes(
                   AND o.log_index BETWEEN r.start_index AND r.end_index
             WHERE r.status = 'complete'
             GROUP BY r.id, r.log_source_id, r.start_index, r.end_index
-            HAVING COUNT(o.id) < (r.end_index - r.start_index + 1)
+            HAVING COUNT(o.id) FILTER (WHERE o.outcome != :write_error)
+                   < (r.end_index - r.start_index + 1)
             ORDER BY missing_count DESC
             LIMIT 500
             """
         ),
+        {"write_error": OUTCOME_WRITE_ERROR},
     )
     return list(result.mappings())
 

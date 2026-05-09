@@ -21,6 +21,7 @@ from ctpool.audit_repair import (
     apply_repair,
     fetch_repairable_findings,
     mark_finding_ignored,
+    resolve_orphaned_repair_findings,
 )
 from ctpool.config import get_settings
 from ctpool.db import create_engine, create_session_factory
@@ -76,6 +77,13 @@ async def run_fix_audit_findings(
     errors = 0
     try:
         async with session_factory() as session:
+            async with session.begin():
+                cleaned = await resolve_orphaned_repair_findings(session)
+            if cleaned > 0:
+                console.print(
+                    f"[dim]Resolved {cleaned} orphaned repair_attempted "
+                    f"finding(s) with no active repair range.[/dim]"
+                )
             findings = await fetch_repairable_findings(session, options)
             if not findings:
                 console.print("[green]No repairable findings found.[/green]")

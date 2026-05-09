@@ -22,6 +22,8 @@ from os import getpid
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ctpool.audit_constants import RANGE_KIND_REPAIR
+from ctpool.audit_repair import resolve_repair_finding
 from ctpool.config import Settings
 from ctpool.db_contention_accumulator import DbRetryPressureAccumulator
 from ctpool.db_contention_coordinator import (
@@ -56,7 +58,11 @@ from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
-from ctpool.outcome_constants import OUTCOME_PARSE_ERROR, OUTCOME_UNSUPPORTED_ENTRY_TYPE
+from ctpool.outcome_constants import (
+    OUTCOME_PARSE_ERROR,
+    OUTCOME_UNSUPPORTED_ENTRY_TYPE,
+    OUTCOME_WRITE_ERROR,
+)
 from ctpool.parser import parse_leaf_entry
 
 _logger = logging.getLogger(__name__)
@@ -281,12 +287,19 @@ async def _process_range_batch(
                 OUTCOME_PARSE_ERROR,
                 exc,
             )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:
             _logger.warning(
                 "unexpected cert error backfill range=%s index=%d type=%s detail=%r",
                 claimed.id,
                 entry_index,
                 exc.__class__.__name__,
+                exc,
+            )
+            await persist_failure_outcome(
+                session,
+                claimed.log_source_id,
+                entry_index,
+                OUTCOME_WRITE_ERROR,
                 exc,
             )
 
@@ -335,6 +348,11 @@ async def _run_one_range(
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_complete(session, claimed.id)
+                if (
+                    claimed.range_kind == RANGE_KIND_REPAIR
+                    and claimed.repair_for_finding_id is not None
+                ):
+                    await resolve_repair_finding(session, claimed.repair_for_finding_id)
 
         return count, log_url, False, observation, None
     except RateLimitError as exc:

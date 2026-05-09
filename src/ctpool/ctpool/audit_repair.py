@@ -3,8 +3,13 @@
 Exports:
     RepairOptions      — Dataclass capturing all CLI filter/limit flags.
     apply_repair       — Apply the correct strategy to a single finding.
-    fetch_repairable_findings — Query open findings matching filter options.
-    mark_finding_ignored      — Mark a single finding as ignored.
+    fetch_repairable_findings        — Query open findings matching filter options.
+    mark_finding_ignored             — Mark a single finding as ignored.
+    resolve_repair_finding           — Resolve a repair_attempted finding whose
+                                       repair range has completed.
+    resolve_orphaned_repair_findings — Bulk-resolve repair_attempted findings
+                                       with no active repair range (backlog
+                                       cleanup pre-pass).
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ctpool.audit_constants import (
@@ -23,9 +28,11 @@ from ctpool.audit_constants import (
     FINDING_TYPE_MISSING_ENTRY_OUTCOMES,
     FINDING_TYPE_MISSING_OBSERVATIONS_WITHOUT_OUTCOME,
     FINDING_TYPE_STALE_BACKFILL_CLAIM,
+    STATUS_FAILED,
     STATUS_IGNORED,
     STATUS_OPEN,
     STATUS_REPAIR_ATTEMPTED,
+    STATUS_RESOLVED,
 )
 from ctpool.audit_repair_strategies import (
     repair_failed_backfill_range,
@@ -35,6 +42,9 @@ from ctpool.audit_repair_strategies import (
     repair_unsupported,
 )
 from ctpool.models.audit_finding import CtAuditFinding
+from ctpool.models.log_backfill_range import CtLogBackfillRange
+
+_ACTIVE_RANGE_STATUSES = frozenset(["pending", "in_progress"])
 
 _STRATEGY_MAP = {
     FINDING_TYPE_STALE_BACKFILL_CLAIM: repair_stale_backfill_claim,
@@ -45,8 +55,11 @@ _STRATEGY_MAP = {
     ),
 }
 
-# Findings that are safe to re-attempt after a previous attempt
-_REPAIRABLE_STATUSES = frozenset([STATUS_OPEN, STATUS_REPAIR_ATTEMPTED])
+# Only open findings are queued for repair.  repair_attempted findings already
+# have an active repair range being processed by the backfill worker — they
+# must not be re-queued.  Use resolve_orphaned_repair_findings() to clean up
+# any repair_attempted findings whose ranges have already completed.
+_REPAIRABLE_STATUSES = frozenset([STATUS_OPEN])
 
 
 @dataclass
@@ -66,7 +79,7 @@ async def fetch_repairable_findings(
     session: AsyncSession,
     options: RepairOptions,
 ) -> list[CtAuditFinding]:
-    """Query open (or repair_attempted) findings matching the given options."""
+    """Query open findings matching the given options."""
     stmt = select(CtAuditFinding).where(CtAuditFinding.status.in_(_REPAIRABLE_STATUSES))
     if options.finding_id is not None:
         stmt = stmt.where(CtAuditFinding.id == options.finding_id)
@@ -133,3 +146,80 @@ async def mark_finding_ignored(
     finding.resolved_by = "operator"
     await session.flush()
     return finding
+
+
+async def resolve_repair_finding(
+    session: AsyncSession,
+    finding_id: uuid.UUID,
+) -> None:
+    """Resolve a repair_attempted finding whose repair range has now completed.
+
+    Called by the backfill worker when a RANGE_KIND_REPAIR range finishes
+    successfully.  This closes the audit finding lifecycle — without this step,
+    repair_attempted findings accumulate and are re-processed on every
+    fix-audit-findings run.
+
+    No-op if the finding is not found or is already in a terminal state
+    (resolved, ignored, failed).  This ensures the call is safe to make
+    unconditionally from the completion path.
+
+    Args:
+        session:    Active async database session with an open transaction.
+        finding_id: PK of the CtAuditFinding to resolve.
+    """
+    result = await session.execute(
+        select(CtAuditFinding).where(CtAuditFinding.id == finding_id)
+    )
+    finding = result.scalar_one_or_none()
+    if finding is None:
+        return
+    if finding.status in (STATUS_RESOLVED, STATUS_IGNORED, STATUS_FAILED):
+        return
+    now = datetime.now(UTC)
+    finding.status = STATUS_RESOLVED
+    finding.resolved_at = now
+    finding.resolved_by = "backfill-worker"
+    await session.flush()
+
+
+async def resolve_orphaned_repair_findings(session: AsyncSession) -> int:
+    """Resolve all repair_attempted findings that have no active repair range.
+
+    A finding is considered orphaned when it is in the repair_attempted state
+    but every repair range that was created for it has already completed or
+    failed (i.e. no range with status 'pending' or 'in_progress' points to it).
+
+    This is the backlog-cleanup pre-pass run at the start of fix-audit-findings.
+    It handles findings that were stuck before resolve_repair_finding was wired
+    into the backfill worker completion path.
+
+    Args:
+        session: Active async database session with an open transaction.
+
+    Returns:
+        Number of findings resolved.
+    """
+    now = datetime.now(UTC)
+    active_range = (
+        select(CtLogBackfillRange.id)
+        .where(
+            CtLogBackfillRange.repair_for_finding_id == CtAuditFinding.id,
+            CtLogBackfillRange.status.in_(_ACTIVE_RANGE_STATUSES),
+        )
+        .correlate(CtAuditFinding)
+    )
+    stmt = (
+        update(CtAuditFinding)
+        .where(
+            CtAuditFinding.status == STATUS_REPAIR_ATTEMPTED,
+            ~exists(active_range),
+        )
+        .values(
+            status=STATUS_RESOLVED,
+            resolved_at=now,
+            resolved_by="fix-audit-findings-cleanup",
+        )
+        .execution_options(synchronize_session=False)
+    )
+    result = await session.execute(stmt)
+    return result.rowcount

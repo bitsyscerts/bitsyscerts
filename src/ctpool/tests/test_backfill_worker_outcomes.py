@@ -20,7 +20,11 @@ from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
 from ctpool.exceptions import ParseError, UnsupportedEntryTypeError
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
-from ctpool.outcome_constants import OUTCOME_PARSE_ERROR, OUTCOME_UNSUPPORTED_ENTRY_TYPE
+from ctpool.outcome_constants import (
+    OUTCOME_PARSE_ERROR,
+    OUTCOME_UNSUPPORTED_ENTRY_TYPE,
+    OUTCOME_WRITE_ERROR,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -268,3 +272,250 @@ async def test_backfill_range_marked_failed_if_outcome_write_raises() -> None:
 
     mark_complete_mock.assert_not_called()
     mark_failed_mock.assert_called_once()
+
+
+async def test_backfill_unexpected_exception_records_write_error_outcome() -> None:
+    """An unexpected exception from persist_entry_with_retry writes OUTCOME_WRITE_ERROR.
+
+    This is the accounting gap that previously caused missing_entry_outcomes audit
+    findings: the entry was parsed but the write failed after retry exhaustion, and
+    no outcome row was recorded.  The range still completes; only the specific index
+    is marked write_error so the audit checker and repair process can re-queue it.
+    """
+    log = _log()
+    rng = _range(log.id)
+    failure_outcomes: list[str] = []
+
+    async def _fake_failure_outcome(
+        session: object,
+        log_source_id: object,
+        log_index: object,
+        outcome: str,
+        error: object,
+    ) -> None:
+        failure_outcomes.append(outcome)
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(side_effect=[rng, None]),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(return_value=_entries(1)),
+        ),
+        patch(
+            "ctpool.backfill_worker.parse_leaf_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(side_effect=RuntimeError("retry exhausted")),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_failure_outcome",
+            _fake_failure_outcome,
+        ),
+        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        factory = _session_factory(log, rng)
+        await run_backfill(factory, _settings(), once=True)
+
+    assert OUTCOME_WRITE_ERROR in failure_outcomes
+
+
+async def test_backfill_write_error_range_still_completes() -> None:
+    """A range with a write_error index is still marked complete, not failed.
+
+    The write_error outcome records the accounting gap durably.  The range
+    completion allows progress to continue; the audit checker and repair process
+    handle re-queuing the affected span.
+    """
+    log = _log()
+    rng = _range(log.id)
+    mark_complete_mock = AsyncMock()
+    mark_failed_mock = AsyncMock()
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(side_effect=[rng, None]),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(return_value=_entries(1)),
+        ),
+        patch(
+            "ctpool.backfill_worker.parse_leaf_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(side_effect=RuntimeError("retry exhausted")),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_failure_outcome",
+            AsyncMock(),
+        ),
+        patch("ctpool.backfill_worker.mark_range_complete", mark_complete_mock),
+        patch("ctpool.backfill_worker.mark_range_failed", mark_failed_mock),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        factory = _session_factory(log, rng)
+        await run_backfill(factory, _settings(), once=True)
+
+    mark_complete_mock.assert_called_once()
+    mark_failed_mock.assert_not_called()
+
+
+async def test_backfill_repair_range_resolves_finding() -> None:
+    """Completing a RANGE_KIND_REPAIR range calls resolve_repair_finding.
+
+    This ensures repair_attempted findings are transitioned to resolved after
+    the repair backfill range processes successfully, preventing them from
+    accumulating and being re-processed on every fix-audit-findings run.
+    """
+    from ctpool.audit_constants import RANGE_KIND_REPAIR
+
+    log = _log()
+    finding_id = uuid.uuid4()
+    rng = CtLogBackfillRange(
+        id=uuid.uuid4(),
+        log_source_id=log.id,
+        start_index=0,
+        end_index=0,
+        next_index=0,
+        status="in_progress",
+        range_kind=RANGE_KIND_REPAIR,
+        repair_for_finding_id=finding_id,
+    )
+    resolve_mock = AsyncMock()
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(side_effect=[rng, None]),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(return_value=_entries(1)),
+        ),
+        patch(
+            "ctpool.backfill_worker.parse_leaf_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_failure_outcome",
+            AsyncMock(),
+        ),
+        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
+        patch("ctpool.backfill_worker.resolve_repair_finding", resolve_mock),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        factory = _session_factory(log, rng)
+        await run_backfill(factory, _settings(), once=True)
+
+    resolve_mock.assert_called_once()
+    call_args = resolve_mock.call_args
+    assert call_args.args[1] == finding_id
+
+
+async def test_backfill_normal_range_does_not_call_resolve_repair_finding() -> None:
+    """A normal (non-repair) range completion does not call resolve_repair_finding."""
+    log = _log()
+    rng = _range(log.id)  # default range_kind is RANGE_KIND_BACKFILL / None
+    resolve_mock = AsyncMock()
+
+    with (
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch(
+            "ctpool.backfill_worker.has_backfill_ranges",
+            AsyncMock(return_value=True),
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(side_effect=[rng, None]),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(return_value=_entries(1)),
+        ),
+        patch(
+            "ctpool.backfill_worker.parse_leaf_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_failure_outcome",
+            AsyncMock(),
+        ),
+        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
+        patch("ctpool.backfill_worker.resolve_repair_finding", resolve_mock),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+    ):
+        factory = _session_factory(log, rng)
+        await run_backfill(factory, _settings(), once=True)
+
+    resolve_mock.assert_not_called()

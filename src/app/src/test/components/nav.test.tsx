@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { MantineProvider, AppShell as MantineAppShell } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactNode } from "react";
@@ -73,7 +73,21 @@ describe("navigation components smoke tests", () => {
         new RegExp(`Copyright\\s+\\u00A9\\s+${yearLabel}\\s+BitsysCerts`),
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/\|\s+vdev$/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /vdev/ })).toBeInTheDocument();
+  });
+
+  it("clicking version string opens About modal", () => {
+    render(
+      <AllProviders>
+        <AppShell>
+          <div>content</div>
+        </AppShell>
+      </AllProviders>,
+    );
+    const versionButton = screen.getByRole("button", { name: /vdev/ });
+    expect(versionButton).toBeInTheDocument();
+    // Smoke: clicking the button must not throw
+    fireEvent.click(versionButton);
   });
 
   it("renders ThemeToggle without crash", () => {

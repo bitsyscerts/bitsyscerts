@@ -17,6 +17,7 @@ export function SortSelect({ value, onChange }: SortSelectProps) {
   return (
     <Select
       label="Sort"
+      description="Column to order results by"
       data={DATA}
       value={value}
       onChange={(v) => {
