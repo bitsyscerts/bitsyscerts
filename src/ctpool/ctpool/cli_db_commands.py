@@ -15,9 +15,34 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from ctpool.config import Settings
 from ctpool.exceptions import DatabaseInitError, SchemaStateError
 
 _console = Console()
+
+
+async def _ensure_bootstrap_settings(settings: Settings) -> str:
+    """Create the initial instance settings row if it does not yet exist."""
+    from ctpool.bootstrap_config import get_bootstrap_config
+    from ctpool.db import create_engine, create_session_factory, get_session
+    from ctpool.instance_settings import bootstrap_settings_from_env
+
+    engine = create_engine(settings)
+    try:
+        session_factory = create_session_factory(engine)
+        async with get_session(session_factory) as session:
+            row = await bootstrap_settings_from_env(session, get_bootstrap_config())
+        return row.storage_profile
+    finally:
+        await engine.dispose()
+
+
+async def _migrate_and_bootstrap(settings: Settings) -> str:
+    """Apply migrations and ensure the first runtime settings row exists."""
+    from ctpool.migration_runner import run_upgrade_head
+
+    await run_upgrade_head(settings)
+    return await _ensure_bootstrap_settings(settings)
 
 
 def register(app: typer.Typer) -> None:
@@ -25,15 +50,15 @@ def register(app: typer.Typer) -> None:
 
     def _apply_migrations() -> None:
         from ctpool.config import get_settings
-        from ctpool.migration_runner import run_upgrade_head
 
         settings = get_settings()
         try:
-            asyncio.run(run_upgrade_head(settings))
+            profile = asyncio.run(_migrate_and_bootstrap(settings))
         except SchemaStateError as exc:
             _console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1) from exc
         _console.print("[green]Database schema is up to date.[/green]")
+        _console.print(f"[green]Active storage profile: {profile}.[/green]")
 
     @app.command("apply-migrations")
     def apply_migrations() -> None:
@@ -64,16 +89,20 @@ def register(app: typer.Typer) -> None:
         settings = get_settings()
         try:
             action = asyncio.run(run_init_db(settings, force=force))
+            profile = asyncio.run(_ensure_bootstrap_settings(settings))
         except DatabaseInitError as exc:
             _console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1) from exc
         if action == "created":
             _console.print("[green]Database created and migrated.[/green]")
+            _console.print(f"[green]Active storage profile: {profile}.[/green]")
             return
         if action == "recreated":
             _console.print("[green]Database recreated and migrated.[/green]")
+            _console.print(f"[green]Active storage profile: {profile}.[/green]")
             return
         _console.print("[green]Database schema is up to date.[/green]")
+        _console.print(f"[green]Active storage profile: {profile}.[/green]")
 
     @app.command("db-status")
     def db_status() -> None:

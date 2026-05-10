@@ -1,3 +1,9 @@
+/**
+ * Consolidated StatsPanel render-state coverage stays in one file while the
+ * shared stats payload contract remains in active iteration. Split by subpanel
+ * once the response shape settles after the Sprint 7 runtime follow-up work.
+ */
+
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { AllProviders } from "../AllProviders";
@@ -18,7 +24,12 @@ const MOCK_DATA = {
   storage: {
     total_size_pretty: "2.5 GB",
     tables: [
-      { table_name: "hostnames", pretty_size: "1 GB", row_estimate: 1000 },
+      {
+        table_name: "hostnames",
+        row_estimate: 1000,
+        size_bytes: 1_073_741_824,
+        size_pretty: "1 GB",
+      },
     ],
   },
   ingestion_rate: {
@@ -45,18 +56,14 @@ const MOCK_DATA = {
   },
   logs: [
     {
-      id: 1,
+      log_id: "00000000-0000-4000-8000-000000000001",
       url: "https://ct.example.com/log",
       description: "Example CT Log",
-      state: "running" as const,
+      log_state: "running",
       backfill_complete_pct: 80,
-      tree_size: 1_000_000,
-      latest_sth_timestamp: "2024-01-01T00:00:00Z",
-      latest_sth_age_seconds: 3600,
-      tail_lag: 100,
-      tail_lag_pct: 0.01,
-      window_start: "2020-01-01T00:00:00Z",
-      window_end: null,
+      tail_position: 1_000_000,
+      last_tail_sync: "2024-01-01T00:00:00Z",
+      tail_freshness_lag_seconds: 100,
     },
   ],
 };
@@ -117,6 +124,28 @@ describe("StatsPanel with data", () => {
       </AllProviders>,
     );
     expect(container).toBeTruthy();
+  });
+
+  it("renders log rows without missing key warnings", () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+
+    expect(
+      consoleError.mock.calls.some(([message]) =>
+        String(message).includes(
+          'Each child in a list should have a unique "key" prop',
+        ),
+      ),
+    ).toBe(false);
+
+    consoleError.mockRestore();
   });
 
   it("shows the Ingestion Statistics heading", () => {

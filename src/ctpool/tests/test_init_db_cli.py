@@ -20,6 +20,11 @@ def test_init_db_command_invokes_orchestrator() -> None:
             new_callable=AsyncMock,
             return_value="created",
         ),
+        patch(
+            "ctpool.cli_db_commands._ensure_bootstrap_settings",
+            new_callable=AsyncMock,
+            return_value="lite",
+        ),
     ):
         result = _runner.invoke(app, ["init-db"])
 
@@ -35,6 +40,11 @@ def test_init_db_force_passes_force_flag() -> None:
             new_callable=AsyncMock,
             return_value="recreated",
         ) as mock_run,
+        patch(
+            "ctpool.cli_db_commands._ensure_bootstrap_settings",
+            new_callable=AsyncMock,
+            return_value="lite",
+        ),
     ):
         result = _runner.invoke(app, ["init-db", "--force"])
 

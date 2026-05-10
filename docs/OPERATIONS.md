@@ -1,33 +1,167 @@
 # BitsysCerts Operations Guide
 
+## Runtime Modes
+
+BitsysCerts supports three runtime modes. Use the canonical environment file for the
+mode you are actually running instead of reusing one mode's paths in another.
+
+| Mode | Canonical env file | Typical operator |
+|---|---|---|
+| Developer mode | `src/.env.development.example` | Contributor working from a source checkout |
+| Local Python mode | `src/.env.local.example` | User who cannot run Docker but can run Python |
+| Docker Compose mode | `src/.env.compose.example` | Normal self-hosted operator deployment |
+
+All three modes share the same documented bootstrap defaults:
+
+- `BITSYSCERTS_BOOTSTRAP_PROFILE=lite`
+- `CT_BACKFILL_DAYS=30`
+- `CT_BACKFILL_DISPATCH_MODE=per-log`
+- `BITSYSCERTS_ENABLE_SCHEDULED_AUDIT=false`
+- `/v1/stats` enabled by default
+
+## Smoke Commands
+
+### Developer mode
+
+Assumes a source checkout with editable installs already in place.
+
+```bash
+cp src/.env.development.example src/.env
+set -a
+source src/.env
+set +a
+
+cd src/ctpool
+ctpool apply-migrations
+ctpool sync-logs
+ctpool stats-snapshot
+ctpool maintenance
+ctpool status
+ctpool workers list
+ctpool backfill-state
+ctpool prune-for-storage-profile --dry-run
+
+cd ../api
+certsapi serve --reload
+
+cd ../app
+npm run dev
+```
+
+### Local Python mode
+
+Assumes a Python environment with `ctpool` and `certsapi` installed.
+
+```bash
+cp src/.env.local.example src/.env
+set -a
+source src/.env
+set +a
+
+ctpool apply-migrations
+ctpool sync-logs
+ctpool stats-snapshot
+ctpool maintenance
+ctpool status
+ctpool workers list
+ctpool backfill-state
+ctpool prune-for-storage-profile --dry-run
+
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8000/v1/stats
+```
+
+### Docker Compose mode
+
+Run these commands from the compose bundle directory or from `src/` in a source checkout.
+
+```bash
+cp .env.compose.example .env
+
+./server-deploy.sh
+docker compose run --rm migrate ctpool status
+docker compose run --rm migrate ctpool workers list
+docker compose run --rm migrate ctpool backfill-state
+docker compose run --rm migrate ctpool prune-for-storage-profile --dry-run
+
+curl -fsS http://127.0.0.1:${FRONTEND_PORT:-80}/v1/stats
+```
+
+`server-deploy.sh` and `src/deploy.sh` both run one bootstrap `stats-snapshot`
+and one bootstrap `maintenance` pass before the long-running `stats-snapshotter`
+and `maintenance` services start. If the dashboard still says no snapshot yet,
+run `docker compose run --rm migrate ctpool stats-snapshot` once.
+
+## Reset Workflows
+
+### Docker Compose reset (destructive)
+
+Use this when you want a clean local/operator stack and are willing to discard the bundled
+PostgreSQL volume.
+
+```bash
+docker compose down -v
+docker compose up -d postgres
+docker compose run --rm migrate ctpool apply-migrations
+docker compose run --rm migrate ctpool sync-logs
+docker compose run --rm migrate ctpool stats-snapshot
+docker compose run --rm migrate ctpool maintenance
+docker compose up -d
+```
+
+### Local Python reset (destructive)
+
+Use this when you want to rebuild the target database in place.
+
+```bash
+ctpool init-db --force
+ctpool sync-logs
+ctpool stats-snapshot
+ctpool maintenance
+ctpool status
+```
+
+## Scaling Guidance
+
+- Scale `backfill` horizontally first. The default per-log dispatcher gives each worker
+  durable ownership of a single CT log.
+- Keep `tail` as a singleton unless you are actively testing a different ownership model.
+- Keep `stats-snapshotter`, `maintenance`, and `migrate` as singletons.
+- Treat `frontend` and `api` as the externally visible edge. Scale them only if you also
+  control the proxy/load-balancer layer in front of the stack.
+- In Docker Compose mode, scale workers with explicit commands such as:
+
+```bash
+docker compose up -d --scale backfill=2
+```
+
+Re-check `ctpool status` after any scaling change so you can confirm worker heartbeats,
+staleness, and backlog shape are still healthy.
+
 ## Maintenance smoke path
 
-After deploying or upgrading `ctpool`, run the following sequence to
-validate that the lightweight maintenance loop is wired up correctly.
-Each command is non-destructive in the order shown (the dry-run prune
-inspects state but deletes nothing; the single-shot maintenance run uses
-the configured retention windows).
+After deploying or upgrading `ctpool`, run the following sequence to validate that the
+lightweight maintenance loop is wired up correctly. Each command is non-destructive in the
+order shown.
 
 ```bash
 ctpool prune-for-storage-profile --dry-run
-ctpool maintenance --once
-ctpool stats-snapshot --once
+ctpool maintenance
+ctpool stats-snapshot
 ctpool stats
 ```
 
 What each step proves:
 
-1. **`prune-for-storage-profile --dry-run`** — confirms the orchestrator
-   can read settings, classify retention categories, and report
-   candidate counts without deleting anything.
-2. **`maintenance --once`** — runs one full lightweight maintenance
-   cycle: profile-aware prune only, no deep audit-gap scan unless
-   `BITSYSCERTS_ENABLE_SCHEDULED_AUDIT=true` is set and the audit
-   interval has elapsed.
-3. **`stats-snapshot --once`** — refreshes the cached storage and
-   ingestion metrics row that the API serves.
-4. **`stats`** — prints the latest snapshot so the operator can confirm
-   row counts moved as expected.
+1. `prune-for-storage-profile --dry-run` confirms the orchestrator can read settings,
+  classify retention categories, and report candidate counts without deleting anything.
+2. `maintenance` runs one full lightweight maintenance cycle: profile-aware prune
+  only, no deep audit-gap scan unless `BITSYSCERTS_ENABLE_SCHEDULED_AUDIT=true` is set and
+  the audit interval has elapsed.
+3. `stats-snapshot` refreshes the cached storage and ingestion metrics row that the
+  API serves.
+4. `stats` prints the latest snapshot so the operator can confirm row counts moved as
+  expected.
 
 ## Current backfill runtime
 

@@ -32,21 +32,6 @@ pytestmark = pytest.mark.asyncio
 
 
 # ---------------------------------------------------------------------------
-# Default dispatch mode
-# ---------------------------------------------------------------------------
-
-
-def test_default_dispatch_mode_is_per_log() -> None:
-    """Sprint 1B: default mode is per-log, not legacy-ranges."""
-    s = Settings.model_validate({"database_url": "postgresql+psycopg://x:y@h/db"})
-    assert s.ct_backfill_dispatch_mode == "per-log"
-
-
-# pytest-asyncio applies pytestmark to all coros below; this top-level non-async
-# test is not affected by the warning emitted via the module-level pytestmark.
-
-
-# ---------------------------------------------------------------------------
 # run_backfill dispatcher routes by mode
 # ---------------------------------------------------------------------------
 

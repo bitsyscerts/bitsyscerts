@@ -50,6 +50,14 @@ describe("SnapshotFreshnessCard (Sprint 5)", () => {
     expect(
       screen.getByText(/Stats snapshot has not been generated yet/),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /The stats snapshotter service should create one shortly/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/docker compose run --rm migrate ctpool stats-snapshot/),
+    ).toBeInTheDocument();
   });
 
   it("renders the no-snapshot notice when snapshot is null", () => {

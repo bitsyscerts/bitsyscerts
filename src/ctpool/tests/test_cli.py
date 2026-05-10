@@ -1,7 +1,11 @@
 """Tests for ctpool.cli — Typer command surface.
 
-All underlying worker/service functions are mocked so tests run without
-a database or network connection.
+This file still consolidates the CLI surface because the commands share one
+Typer app and the test value is primarily in asserting the public contract at
+that boundary. Split by command group once the remaining legacy aliases are
+retired and the surface area stops changing together. All underlying
+worker/service functions are mocked so tests run without a database or network
+connection.
 """
 
 from __future__ import annotations
@@ -14,6 +18,29 @@ from ctpool.cli import app
 from ctpool.exceptions import SchemaStateError
 
 _runner = CliRunner()
+
+
+def _close_coroutine(coro: object) -> None:
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
+
+
+def _discard_asyncio_run(return_value: object = None):
+    def runner(coro: object) -> object:
+        _close_coroutine(coro)
+        return return_value
+
+    return runner
+
+
+def _capture_asyncio_run(captured: list[object], return_value: object = None):
+    def runner(coro: object) -> object:
+        captured.append(coro)
+        _close_coroutine(coro)
+        return return_value
+
+    return runner
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +56,7 @@ def test_apply_migrations_command_invokes_migration_runner() -> None:
     ):
         # Patch inside cli module's local import
         with patch("ctpool.cli_db_commands.asyncio.run") as mock_run:
-            mock_run.return_value = None
+            mock_run.side_effect = _discard_asyncio_run()
             result = _runner.invoke(app, ["apply-migrations"])
 
     assert result.exit_code == 0
@@ -43,7 +70,7 @@ def test_db_init_alias_invokes_migration_runner() -> None:
         patch("ctpool.migration_runner.run_upgrade_head", new_callable=AsyncMock),
     ):
         with patch("ctpool.cli_db_commands.asyncio.run") as mock_run:
-            mock_run.return_value = None
+            mock_run.side_effect = _discard_asyncio_run()
             result = _runner.invoke(app, ["db-init"])
 
     assert result.exit_code == 0
@@ -75,7 +102,10 @@ def test_db_status_command_shows_revision() -> None:
     """db-status shows the current revision when the schema is initialised."""
     with (
         patch("ctpool.config.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli_db_commands.asyncio.run", return_value="abc123def456"),
+        patch(
+            "ctpool.cli_db_commands.asyncio.run",
+            side_effect=_discard_asyncio_run("abc123def456"),
+        ),
     ):
         result = _runner.invoke(app, ["db-status"])
 
@@ -87,7 +117,7 @@ def test_db_status_shows_uninitialised_message_when_no_revision() -> None:
     """db-status shows a clear message when no migrations are applied."""
     with (
         patch("ctpool.config.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli_db_commands.asyncio.run", return_value=None),
+        patch("ctpool.cli_db_commands.asyncio.run", side_effect=_discard_asyncio_run()),
     ):
         result = _runner.invoke(app, ["db-status"])
 
@@ -109,7 +139,7 @@ def test_sync_logs_command_invokes_discovery_and_prober() -> None:
         patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["sync-logs"])
 
     assert result.exit_code == 0
@@ -132,7 +162,7 @@ def test_tail_command_invokes_tail_worker() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["tail"])
 
     assert result.exit_code == 0
@@ -145,9 +175,6 @@ def test_tail_command_passes_once_flag() -> None:
 
     captured: list[object] = []
 
-    def capture_run(coro: object) -> None:
-        captured.append(coro)
-
     with (
         patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
         patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
@@ -155,7 +182,10 @@ def test_tail_command_passes_once_flag() -> None:
             "ctpool.cli_ingestion_commands.create_session_factory",
             return_value=MagicMock(),
         ),
-        patch("ctpool.cli_ingestion_commands.asyncio.run", side_effect=capture_run),
+        patch(
+            "ctpool.cli_ingestion_commands.asyncio.run",
+            side_effect=_capture_asyncio_run(captured),
+        ),
         patch("ctpool.tail_worker.run_tail", wraps=run_tail),
     ):
         _runner.invoke(app, ["tail", "--once"])
@@ -169,9 +199,6 @@ def test_tail_command_passes_limit() -> None:
     """tail --limit 100 results in a coroutine being run."""
     captured: list[object] = []
 
-    def capture_run(coro: object) -> None:
-        captured.append(coro)
-
     with (
         patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
         patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
@@ -179,7 +206,10 @@ def test_tail_command_passes_limit() -> None:
             "ctpool.cli_ingestion_commands.create_session_factory",
             return_value=MagicMock(),
         ),
-        patch("ctpool.cli_ingestion_commands.asyncio.run", side_effect=capture_run),
+        patch(
+            "ctpool.cli_ingestion_commands.asyncio.run",
+            side_effect=_capture_asyncio_run(captured),
+        ),
     ):
         result = _runner.invoke(app, ["tail", "--limit", "100"])
 
@@ -203,7 +233,7 @@ def test_backfill_command_invokes_backfill_worker() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["backfill"])
 
     assert result.exit_code == 0
@@ -214,9 +244,6 @@ def test_backfill_command_passes_once_flag() -> None:
     """backfill --once results in asyncio.run being called once."""
     captured: list[object] = []
 
-    def capture_run(coro: object) -> None:
-        captured.append(coro)
-
     with (
         patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
         patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
@@ -224,7 +251,10 @@ def test_backfill_command_passes_once_flag() -> None:
             "ctpool.cli_ingestion_commands.create_session_factory",
             return_value=MagicMock(),
         ),
-        patch("ctpool.cli_ingestion_commands.asyncio.run", side_effect=capture_run),
+        patch(
+            "ctpool.cli_ingestion_commands.asyncio.run",
+            side_effect=_capture_asyncio_run(captured),
+        ),
     ):
         result = _runner.invoke(app, ["backfill", "--once"])
 
@@ -248,7 +278,7 @@ def test_stats_command_invokes_stats_display() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["stats"])
 
     assert result.exit_code == 0
@@ -282,7 +312,7 @@ def test_tail_progress_flag_is_accepted() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["tail", "--once", "--progress"])
 
     assert result.exit_code == 0
@@ -300,7 +330,7 @@ def test_backfill_progress_flag_is_accepted() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["backfill", "--once", "--progress"])
 
     assert result.exit_code == 0
@@ -318,7 +348,7 @@ def test_tail_init_from_end_flag_is_accepted() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["tail", "--once", "--init-from-end", "10000"])
 
     assert result.exit_code == 0
@@ -358,7 +388,7 @@ def test_reset_tail_cursors_with_to_current_calls_worker() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["reset-tail-cursors", "--to-current"])
 
     assert result.exit_code == 0
@@ -381,7 +411,7 @@ def test_reap_stale_backfill_claims_dry_run_exits_zero() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["reap-stale-backfill-claims", "--dry-run"])
 
     assert result.exit_code == 0
@@ -399,7 +429,7 @@ def test_reap_stale_backfill_claims_default_exits_zero() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(app, ["reap-stale-backfill-claims"])
 
     assert result.exit_code == 0
@@ -417,7 +447,7 @@ def test_reap_stale_backfill_claims_timeout_flag_accepted() -> None:
         ),
         patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
     ):
-        mock_run.return_value = None
+        mock_run.side_effect = _discard_asyncio_run()
         result = _runner.invoke(
             app,
             ["reap-stale-backfill-claims", "--timeout-seconds", "600"],

@@ -46,7 +46,7 @@ done
 # ── Pre-flight ────────────────────────────────────────────────────────────────
 [[ -f "$COMPOSE_FILE" ]] || fail "docker-compose.yml not found at ${COMPOSE_FILE}"
 [[ -f "$ENV_FILE" ]] \
-  || fail ".env not found at ${ENV_FILE}. Copy .env.example and fill it in."
+  || fail ".env not found at ${ENV_FILE}. Copy .env.compose.example and fill it in."
 command -v docker >/dev/null 2>&1 \
   || fail "docker is not installed or not in PATH."
 docker compose version >/dev/null 2>&1 \
@@ -79,14 +79,23 @@ fi
 # ── One-shot init: sync CT log list ──────────────────────────────────────────
 if [[ "$SKIP_SYNC_LOGS" == false ]]; then
   log "Syncing CT log list..."
-  compose run --rm --no-deps api ctpool sync-logs
+  compose run --rm migrate ctpool sync-logs
   log "CT log sync complete."
 fi
+
+log "Seeding initial stats snapshot..."
+compose run --rm migrate ctpool stats-snapshot
+log "Initial stats snapshot complete."
+
+log "Running one maintenance pass..."
+compose run --rm migrate ctpool maintenance
+log "Initial maintenance pass complete."
 
 # ── Bring up the full stack ───────────────────────────────────────────────────
 log "Starting all services..."
 if [[ "$SKIP_MIGRATE" == true ]]; then
-  compose up --detach --remove-orphans --no-deps api frontend backfill tail
+  compose up --detach --remove-orphans --no-deps \
+    api frontend backfill tail stats-snapshotter maintenance
 else
   compose up --detach --remove-orphans
 fi

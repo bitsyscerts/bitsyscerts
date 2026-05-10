@@ -22,53 +22,59 @@ export function CertEmbedRow({ cert, onClick }: CertEmbedRowProps) {
     onClick?.(cert);
   }
 
+  const content = (
+    <Stack
+      gap={4}
+      mt={6}
+      pl="sm"
+      py={4}
+      pr={4}
+      style={{
+        borderLeft: "2px solid var(--mantine-color-brand-4)",
+        borderRadius: "0 4px 4px 0",
+      }}
+    >
+      <Group gap="xs" wrap="nowrap" justify="space-between">
+        <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
+          <Text size="xs" c="dimmed" ff="monospace" truncate>
+            {truncateFingerprint(cert.fingerprint_sha256)}
+          </Text>
+          {cert.is_wildcard_present && (
+            <Badge size="xs" color="brand">
+              wildcard
+            </Badge>
+          )}
+          {cert.is_precertificate && (
+            <Badge size="xs" color="gray">
+              pre-cert
+            </Badge>
+          )}
+        </Group>
+        {onClick && (
+          <IconChevronRight size={12} style={{ flexShrink: 0, opacity: 0.4 }} />
+        )}
+      </Group>
+      <Text size="xs" c="dimmed">
+        {issuer}
+      </Text>
+      <Text size="xs" c="dimmed">
+        {formatDate(cert.not_before)} → {formatDate(cert.not_after)}
+      </Text>
+    </Stack>
+  );
+
+  if (!onClick) {
+    return content;
+  }
+
   return (
     <UnstyledButton
       w="100%"
-      onClick={onClick ? handleClick : undefined}
-      style={{ cursor: onClick ? "pointer" : "default" }}
+      onClick={handleClick}
+      aria-label="Open embedded certificate details"
+      style={{ cursor: "pointer" }}
     >
-      <Stack
-        gap={4}
-        mt={6}
-        pl="sm"
-        py={4}
-        pr={4}
-        style={{
-          borderLeft: "2px solid var(--mantine-color-brand-4)",
-          borderRadius: "0 4px 4px 0",
-        }}
-      >
-        <Group gap="xs" wrap="nowrap" justify="space-between">
-          <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
-            <Text size="xs" c="dimmed" ff="monospace" truncate>
-              {truncateFingerprint(cert.fingerprint_sha256)}
-            </Text>
-            {cert.is_wildcard_present && (
-              <Badge size="xs" color="brand">
-                wildcard
-              </Badge>
-            )}
-            {cert.is_precertificate && (
-              <Badge size="xs" color="gray">
-                pre-cert
-              </Badge>
-            )}
-          </Group>
-          {onClick && (
-            <IconChevronRight
-              size={12}
-              style={{ flexShrink: 0, opacity: 0.4 }}
-            />
-          )}
-        </Group>
-        <Text size="xs" c="dimmed">
-          {issuer}
-        </Text>
-        <Text size="xs" c="dimmed">
-          {formatDate(cert.not_before)} → {formatDate(cert.not_after)}
-        </Text>
-      </Stack>
+      {content}
     </UnstyledButton>
   );
 }

@@ -11,8 +11,10 @@ from ctpool.models.storage_profile_history import CtStorageProfileHistory
 from certsapi.settings.repository import SettingsRepository
 
 
-def _make_session() -> AsyncMock:
-    session = AsyncMock()
+def _make_session() -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
     return session
 
 

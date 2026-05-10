@@ -1,4 +1,4 @@
-import { Badge, Group, Paper, Text } from "@mantine/core";
+import { Badge, Code, Group, Paper, Stack, Text } from "@mantine/core";
 import {
   IconClock,
   IconAlertCircle,
@@ -36,12 +36,22 @@ export function SnapshotFreshnessCard({
         p="xs"
         data-testid="snapshot-freshness-none"
       >
-        <Group gap="xs">
-          <IconClock size={14} />
+        <Stack gap={2}>
+          <Group gap="xs">
+            <IconClock size={14} />
+            <Text size="xs" c="dimmed">
+              Stats snapshot has not been generated yet.
+            </Text>
+          </Group>
           <Text size="xs" c="dimmed">
-            Stats snapshot has not been generated yet.
+            The stats snapshotter service should create one shortly.
           </Text>
-        </Group>
+          <Text size="xs" c="dimmed">
+            For Docker Compose, run{" "}
+            <Code>docker compose run --rm migrate ctpool stats-snapshot</Code>{" "}
+            to seed one immediately.
+          </Text>
+        </Stack>
       </Paper>
     );
   }
