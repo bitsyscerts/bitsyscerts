@@ -321,8 +321,14 @@ def _build_maintenance_status(
 class StatsService:
     """Runs all stats queries sequentially and assembles the StatsResponse."""
 
-    def __init__(self, repository: StatsRepository) -> None:
+    def __init__(
+        self,
+        repository: StatsRepository,
+        *,
+        stats_stale_seconds: int = 120,
+    ) -> None:
         self._repository = repository
+        self._stats_stale_seconds = stats_stale_seconds
 
     async def get_stats(self) -> StatsResponse:
         """Return aggregated ingestion statistics.
@@ -370,16 +376,14 @@ class StatsService:
         except (TypeError, ValueError):
             return None
 
-    @staticmethod
     def _build_snapshot_meta(
+        self,
         *,
         age_seconds: float | None,
         source: str,
     ) -> SnapshotMetadata:
         """Build :class:`SnapshotMetadata` honouring the configured stale window."""
-        from certsapi.config import get_settings
-
-        threshold = int(get_settings().stats_stale_seconds)
+        threshold = int(self._stats_stale_seconds)
         is_stale = age_seconds is not None and age_seconds > threshold
         generated_at: datetime | None = None
         if age_seconds is not None:

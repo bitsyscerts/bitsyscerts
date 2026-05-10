@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from certsapi.config import get_settings
 from certsapi.database import get_db
 from certsapi.stats.models import StatsResponse
 from certsapi.stats.repository import StatsRepository
@@ -24,9 +25,16 @@ def _get_stats_repository(
 
 def _get_stats_service(
     repo: Annotated[StatsRepository, Depends(_get_stats_repository)],
+    request: Request,
 ) -> StatsService:
     """Instantiate a StatsService with an injected repository."""
-    return StatsService(repo)
+    app_settings = getattr(request.app.state, "settings", None)
+    stats_stale_seconds = (
+        app_settings.stats_stale_seconds
+        if app_settings is not None
+        else get_settings().stats_stale_seconds
+    )
+    return StatsService(repo, stats_stale_seconds=stats_stale_seconds)
 
 
 @stats_router.get(
