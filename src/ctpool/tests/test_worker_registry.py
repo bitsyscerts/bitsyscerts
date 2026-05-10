@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -130,6 +131,94 @@ async def test_heartbeat_updates_counters(db_session: AsyncSession) -> None:
     assert row.terminal_errors == 2
     assert row.last_error_type == "ParseError"
     assert row.last_error_message == "bad cert"
+
+
+async def test_heartbeat_updates_assignment_fields_and_details(
+    db_session: AsyncSession,
+) -> None:
+    """heartbeat_worker writes assigned-log and details fields."""
+    row = await _commit_register(db_session, "host1:302", "tail")
+    log_source_id = uuid.uuid4()
+
+    async with db_session.begin_nested():
+        await heartbeat_worker(
+            db_session,
+            row_id=row.id,
+            status="processing",
+            current_index=42,
+            last_successful_index=41,
+            batch_start_index=40,
+            batch_end_index=60,
+            log_source_id=log_source_id,
+            log_name="Argon2027h1",
+            direction="tail",
+            counters=WorkerCounters(
+                extra={
+                    "observations_per_min": 120.0,
+                    "new_unique_certificates_per_min": 12.0,
+                }
+            ),
+        )
+
+    await db_session.refresh(row)
+    assert row.current_index == 42
+    assert row.last_successful_index == 41
+    assert row.batch_start_index == 40
+    assert row.batch_end_index == 60
+    assert row.log_source_id == log_source_id
+    assert row.log_name == "Argon2027h1"
+    assert row.direction == "tail"
+    assert row.details_json == {
+        "observations_per_min": 120.0,
+        "new_unique_certificates_per_min": 12.0,
+    }
+
+
+async def test_heartbeat_can_clear_runtime_fields(db_session: AsyncSession) -> None:
+    """heartbeat_worker clears explicit None values instead of keeping stale state."""
+    row = await _commit_register(db_session, "host1:303", "backfill")
+    log_source_id = uuid.uuid4()
+
+    async with db_session.begin_nested():
+        await heartbeat_worker(
+            db_session,
+            row_id=row.id,
+            status="processing",
+            current_index=100,
+            last_successful_index=99,
+            batch_start_index=80,
+            batch_end_index=120,
+            log_source_id=log_source_id,
+            log_name="Yeti2026",
+            direction="backfill",
+            details_json={"checkpoint_index": 99},
+        )
+
+    async with db_session.begin_nested():
+        await heartbeat_worker(
+            db_session,
+            row_id=row.id,
+            status="idle",
+            current_index=None,
+            last_successful_index=None,
+            batch_start_index=None,
+            batch_end_index=None,
+            log_source_id=None,
+            log_name=None,
+            direction=None,
+            details_json=None,
+        )
+
+    await db_session.refresh(row)
+    assert row.status == "idle"
+    assert row.current_index is None
+    assert row.last_successful_index is None
+    assert row.batch_start_index is None
+    assert row.batch_end_index is None
+    assert row.log_source_id is None
+    assert row.log_name is None
+    assert row.direction is None
+    assert row.details_json is None
 
 
 # ---------------------------------------------------------------------------

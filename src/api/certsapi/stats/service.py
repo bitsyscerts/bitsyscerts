@@ -19,11 +19,14 @@ from certsapi.stats.models import (
     AuditHealth,
     BackfillHealth,
     BackfillRangeStats,
+    BackfillStateSummary,
     DbContentionStats,
     EntryOutcomeStats,
+    IngestionHealth,
     IngestionRateStats,
     IngestionRateWindow,
     LogStatsItem,
+    MaintenanceStatus,
     MetricsRetentionStats,
     SnapshotMetadata,
     StatsResponse,
@@ -31,6 +34,7 @@ from certsapi.stats.models import (
     StorageStats,
     TableStorageItem,
     TailFreshnessStats,
+    WorkerSummary,
 )
 from certsapi.stats.projection import (
     ProjectionInputs,
@@ -51,7 +55,9 @@ class CtPoolSettingsLike(Protocol):
     ct_backfill_claim_timeout_seconds: int
     ct_backfill_dispatch_mode: str
     ct_metrics_retention_days: int
+    ct_maintenance_interval_seconds: int
     ct_stats_heavy_refresh_seconds: int
+    ct_worker_stale_seconds: int
 
 
 class ActiveSettingsLike(Protocol):
@@ -223,6 +229,95 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, int | float) else 0.0
 
 
+def _build_ingestion_health(
+    backfill_state: dict[str, object] | None,
+    worker_summary: dict[str, object] | None,
+    outcome_counts: dict[str, int],
+) -> IngestionHealth:
+    """Build the dashboard ingestion-health summary for live responses."""
+    retrying = 0
+    rate_limited = 0
+    paused = 0
+    error_logs = 0
+    total_retryable = 0
+    total_terminal = 0
+    if backfill_state is not None:
+        retrying = _as_int(backfill_state.get("retrying"))
+        rate_limited = _as_int(backfill_state.get("rate_limited"))
+        paused = _as_int(backfill_state.get("paused"))
+        error_logs = _as_int(backfill_state.get("error"))
+        for item in cast(list[dict[str, object]], backfill_state.get("items") or []):
+            total_retryable += _as_int(item.get("retryable_error_count"))
+            total_terminal += _as_int(item.get("terminal_error_count"))
+
+    stale_workers = 0
+    if worker_summary is not None:
+        stale_workers = _as_int(worker_summary.get("stale_total"))
+
+    recent_terminal_outcomes = sum(
+        _as_int(outcome_counts.get(key))
+        for key in ("parse_error", "unsupported_entry_type", "write_error")
+    )
+
+    return IngestionHealth(
+        retrying_logs=retrying,
+        rate_limited_logs=rate_limited,
+        paused_logs=paused,
+        error_logs=error_logs,
+        stale_workers=stale_workers,
+        retryable_error_total=total_retryable,
+        terminal_error_total=total_terminal,
+        recent_terminal_outcomes=recent_terminal_outcomes,
+        status="attention_needed" if (paused > 0 or error_logs > 0) else "ok",
+    )
+
+
+def _build_maintenance_status(
+    maintenance_run: dict[str, object] | None,
+    *,
+    interval_seconds: int,
+    active_settings: ActiveSettingsLike | None,
+) -> MaintenanceStatus:
+    """Build the maintenance card block for live responses."""
+    from ctpool.maintenance_queries import compute_next_due, is_lite_enforced
+
+    profile = active_settings.storage_profile if active_settings is not None else None
+    if maintenance_run is None:
+        return MaintenanceStatus(
+            status="never_ran",
+            active_profile=profile,
+            is_enforced=False,
+        )
+
+    return MaintenanceStatus(
+        status=cast(str, maintenance_run.get("status", "unknown")),
+        active_profile=cast(str | None, maintenance_run.get("storage_profile"))
+        or profile,
+        last_prune_started_at=cast(datetime | None, maintenance_run.get("started_at")),
+        last_prune_completed_at=cast(
+            datetime | None,
+            maintenance_run.get("completed_at"),
+        ),
+        last_prune_status=cast(str | None, maintenance_run.get("status")),
+        last_prune_mode=cast(str | None, maintenance_run.get("mode")),
+        last_prune_deleted=cast(dict[str, int], maintenance_run.get("deleted") or {}),
+        preserved_hostnames=cast(
+            int | None,
+            maintenance_run.get("preserved_hostnames"),
+        ),
+        duration_ms=cast(int | None, maintenance_run.get("duration_ms")),
+        next_prune_due_at=compute_next_due(
+            cast(datetime | None, maintenance_run.get("started_at")),
+            interval_seconds,
+        ),
+        is_enforced=is_lite_enforced(
+            cast(dict[str, object], maintenance_run),
+            interval_seconds=interval_seconds,
+        ),
+        error_message=cast(str | None, maintenance_run.get("error_message")),
+    )
+
+
 class StatsService:
     """Runs all stats queries sequentially and assembles the StatsResponse."""
 
@@ -354,6 +449,21 @@ class StatsService:
         dispatch_mode, backfill_ranges_primary = _resolve_backfill_range_mode(
             ctpool_settings
         )
+        worker_stale_seconds = (
+            ctpool_settings.ct_worker_stale_seconds
+            if ctpool_settings is not None
+            else 300
+        )
+        maintenance_interval_seconds = (
+            ctpool_settings.ct_maintenance_interval_seconds
+            if ctpool_settings is not None
+            else 3600
+        )
+        worker_summary = await self._repository.worker_summary(worker_stale_seconds)
+        backfill_state_summary = await self._repository.backfill_state_summary(
+            worker_stale_seconds
+        )
+        maintenance_run = await self._repository.latest_maintenance_run()
         metrics_summary = await self._repository.ingestion_metrics_summary()
         audit_counts = await self._repository.audit_health_counts()
         retention_days = (
@@ -448,6 +558,24 @@ class StatsService:
             ),
             audit_health=_build_audit_health(audit_counts),
             logs=[_row_to_log_item(row, now) for row in per_log],
+            workers=WorkerSummary.model_validate(worker_summary),
+            backfill_state=BackfillStateSummary.model_validate(
+                {
+                    **backfill_state_summary,
+                    "dispatch_mode": dispatch_mode,
+                    "is_primary": dispatch_mode == "per-log",
+                }
+            ),
+            ingestion_health=_build_ingestion_health(
+                cast(dict[str, object], backfill_state_summary),
+                cast(dict[str, object], worker_summary),
+                outcome_counts,
+            ),
+            maintenance=_build_maintenance_status(
+                cast(dict[str, object] | None, maintenance_run),
+                interval_seconds=maintenance_interval_seconds,
+                active_settings=active_settings,
+            ),
         )
 
 

@@ -18,9 +18,11 @@ from ctpool.audit_constants import (
     SEVERITY_WARNING,
     STATUS_OPEN,
 )
+from ctpool.backfill_state_queries import query_backfill_state_summary
 from ctpool.config import Settings as CtPoolSettings
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
 from ctpool.db_contention_types import DbContentionOperatorSnapshot
+from ctpool.maintenance_queries import query_latest_maintenance_run
 from ctpool.models.audit_finding import CtAuditFinding
 from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
@@ -33,6 +35,8 @@ from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
 from ctpool.models.observation import CtLogObservation
 from ctpool.outcome_constants import ALL_OUTCOMES
+from ctpool.worker_queries import query_worker_summary
+from ctpool.worker_reaper import reap_stale_worker_rows
 from sqlalchemy import case, func, select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -423,3 +427,19 @@ class StatsRepository:
             "warning": int(row.warning or 0),
             "info": int(row.info or 0),
         }
+
+    async def worker_summary(self, stale_seconds: int) -> dict[str, object]:
+        """Return the worker summary block for live stats responses."""
+        await reap_stale_worker_rows(self._session, stale_seconds=stale_seconds)
+        return await query_worker_summary(self._session, stale_seconds=stale_seconds)
+
+    async def backfill_state_summary(self, stale_seconds: int) -> dict[str, object]:
+        """Return the per-log backfill state block for live stats responses."""
+        return await query_backfill_state_summary(
+            self._session,
+            stale_seconds=stale_seconds,
+        )
+
+    async def latest_maintenance_run(self) -> dict[str, object] | None:
+        """Return the most recent maintenance run for live stats responses."""
+        return await query_latest_maintenance_run(self._session)

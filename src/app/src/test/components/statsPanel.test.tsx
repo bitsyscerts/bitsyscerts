@@ -204,6 +204,9 @@ describe("StatsPanel per-log primary mode", () => {
       stale_total: 0,
       tail_active: 0,
       backfill_active: 1,
+      stats_active: 0,
+      maintenance_active: 0,
+      unknown_active: 0,
       items: [],
     },
     backfill_state: {

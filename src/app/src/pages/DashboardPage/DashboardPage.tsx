@@ -23,6 +23,7 @@ import { StorageProfileCard } from "@/components/StatsPanel/StorageProfileCard";
 import { StorageProjectionCard } from "@/components/StatsPanel/StorageProjectionCard";
 import { StorageTable } from "@/components/StatsPanel/StorageTable";
 import { TailFreshnessCard } from "@/components/StatsPanel/TailFreshnessCard";
+import { WorkerActivityCard } from "@/components/StatsPanel/WorkerActivityCard";
 import { useLogFilter } from "@/hooks/useLogFilter";
 import { useStats } from "@/hooks/useStats";
 import type { LogStatsItem, StatsResponse } from "@/types";
@@ -91,6 +92,37 @@ function RefreshBar({ updatedAt, onRefresh }: RefreshBarProps) {
   );
 }
 
+interface DashboardTopBarProps {
+  updatedAt: number;
+  onRefresh: () => void;
+  totalHostnames: number;
+  totalCertificates: number;
+  totalLogs: number;
+}
+
+function DashboardTopBar({
+  updatedAt,
+  onRefresh,
+  totalHostnames,
+  totalCertificates,
+  totalLogs,
+}: DashboardTopBarProps) {
+  return (
+    <Grid gutter="sm" align="flex-start">
+      <Grid.Col span={{ base: 12, lg: 10 }}>
+        <StatsSummary
+          totalHostnames={totalHostnames}
+          totalCertificates={totalCertificates}
+          totalLogs={totalLogs}
+        />
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, lg: 2 }}>
+        <RefreshBar updatedAt={updatedAt} onRefresh={onRefresh} />
+      </Grid.Col>
+    </Grid>
+  );
+}
+
 interface LeftColProps {
   data: StatsResponse;
 }
@@ -100,11 +132,6 @@ function DashboardLeftCol({ data }: LeftColProps) {
 
   return (
     <Stack>
-      <StatsSummary
-        totalHostnames={data.total_hostnames}
-        totalCertificates={data.total_certificates}
-        totalLogs={data.total_logs}
-      />
       <IngestionRateCard ingestionRate={data.ingestion_rate} />
       <TailFreshnessCard tailFreshness={data.tail_freshness} />
       {perLogPrimary ? (
@@ -172,12 +199,16 @@ function DashboardContent() {
 
   return (
     <Stack gap="md">
-      <RefreshBar
+      <DashboardTopBar
         updatedAt={dataUpdatedAt}
         onRefresh={() => {
           void refetch();
         }}
+        totalHostnames={data.total_hostnames}
+        totalCertificates={data.total_certificates}
+        totalLogs={data.total_logs}
       />
+      {data.workers && <WorkerActivityCard workers={data.workers} />}
       <Grid gutter="lg" align="flex-start">
         <Grid.Col span={{ base: 12, md: 4, lg: 3 }}>
           <DashboardLeftCol data={data} />

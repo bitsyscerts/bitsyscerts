@@ -20,6 +20,8 @@ from certsapi.stats.models import (
     StorageProjection,
     StorageStats,
     TailFreshnessStats,
+    WorkerSummary,
+    WorkerSummaryItem,
 )
 from certsapi.stats.router import _get_stats_service
 
@@ -166,6 +168,67 @@ class TestStatsRouter:
         projection = resp.json()["storage_projection"]
         assert projection["disk_total_bytes"] is None
         assert projection["projected_fits_on_disk"] is None
+
+    async def test_worker_summary_serializes_rich_activity_fields(self) -> None:
+        svc = AsyncMock()
+        svc.get_stats.return_value = _make_stats(
+            workers=WorkerSummary(
+                active_total=1,
+                stale_total=0,
+                tail_active=1,
+                backfill_active=0,
+                stats_active=0,
+                maintenance_active=0,
+                unknown_active=0,
+                items=[
+                    WorkerSummaryItem(
+                        worker_id="host:1234",
+                        worker_kind="tail",
+                        log_source_id=str(uuid.uuid4()),
+                        log_name="Test Log",
+                        log_url="https://ct.test/",
+                        log_operator="Test Operator",
+                        direction="forward",
+                        status="processing",
+                        is_stale=False,
+                        last_heartbeat_at="2025-01-01T00:00:00Z",
+                        last_heartbeat_age_seconds=5,
+                        started_at="2025-01-01T00:00:00Z",
+                        current_index=123,
+                        checkpoint_index=120,
+                        batch_start_index=123,
+                        batch_end_index=223,
+                        processed_entries=50,
+                        stored_certificates=40,
+                        duplicate_certificates=10,
+                        observed_hostnames=20,
+                        new_hostnames=5,
+                        parse_errors=0,
+                        retryable_errors=1,
+                        terminal_errors=0,
+                        observations_per_min=60.0,
+                        new_unique_certificates_per_min=24.0,
+                        duplicate_certificates_per_min=6.0,
+                        new_unique_hostnames_per_min=3.0,
+                        known_hostnames_per_min=9.0,
+                        retry_count=2,
+                        next_retry_at="2025-01-01T00:05:00Z",
+                        rate_limited_until="2025-01-01T00:10:00Z",
+                        last_error_type="RateLimitError",
+                        last_error_message="too many requests",
+                    )
+                ],
+            )
+        )
+        async with _client_with_service(svc) as client:
+            resp = await client.get("/v1/stats")
+
+        worker = resp.json()["workers"]["items"][0]
+        assert worker["log_url"] == "https://ct.test/"
+        assert worker["log_operator"] == "Test Operator"
+        assert worker["checkpoint_index"] == 120
+        assert worker["observations_per_min"] == 60.0
+        assert worker["rate_limited_until"] == "2025-01-01T00:10:00Z"
 
     async def test_db_contention_block_serializes(self) -> None:
         svc = AsyncMock()

@@ -189,6 +189,8 @@ export interface WorkerSummaryItem {
   worker_kind: string;
   log_source_id: string | null;
   log_name: string | null;
+  log_url: string | null;
+  log_operator: string | null;
   direction: string | null;
   status: string;
   is_stale: boolean;
@@ -196,6 +198,9 @@ export interface WorkerSummaryItem {
   last_heartbeat_age_seconds: number;
   started_at: string;
   current_index: number | null;
+  checkpoint_index: number | null;
+  batch_start_index: number | null;
+  batch_end_index: number | null;
   processed_entries: number;
   stored_certificates: number;
   duplicate_certificates: number;
@@ -204,6 +209,14 @@ export interface WorkerSummaryItem {
   parse_errors: number;
   retryable_errors: number;
   terminal_errors: number;
+  observations_per_min: number | null;
+  new_unique_certificates_per_min: number | null;
+  duplicate_certificates_per_min: number | null;
+  new_unique_hostnames_per_min: number | null;
+  known_hostnames_per_min: number | null;
+  retry_count: number | null;
+  next_retry_at: string | null;
+  rate_limited_until: string | null;
   last_error_type: string | null;
   last_error_message: string | null;
 }
@@ -213,6 +226,9 @@ export interface WorkerSummary {
   stale_total: number;
   tail_active: number;
   backfill_active: number;
+  stats_active: number;
+  maintenance_active: number;
+  unknown_active: number;
   items: WorkerSummaryItem[];
 }
 

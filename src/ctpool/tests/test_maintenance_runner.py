@@ -9,12 +9,26 @@ elapsed.  Audit failures must never block the prune step.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from ctpool import maintenance_runner
-from ctpool.maintenance_runner import run_maintenance_once
+from ctpool.maintenance_runner import run_maintenance_loop, run_maintenance_once
+
+
+def _make_registry_session_factory() -> MagicMock:
+    session = AsyncMock()
+    session.begin = MagicMock()
+    session.begin.return_value.__aenter__ = AsyncMock(return_value=None)
+    session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    factory = MagicMock()
+    factory.return_value.__aenter__ = AsyncMock(return_value=session)
+    factory.return_value.__aexit__ = AsyncMock(return_value=False)
+    return factory
 
 
 def _settings(
@@ -129,3 +143,43 @@ class TestCheckAuditGaps:
             from ctpool.maintenance_runner import _check_audit_gaps  # noqa: PLC0415
 
             await _check_audit_gaps(_settings(), Console(quiet=True))
+
+
+@pytest.mark.asyncio
+async def test_run_maintenance_loop_registers_and_heartbeats_worker() -> None:
+    """Maintenance loop registers a singleton worker and heartbeats each cycle."""
+    settings = _settings()
+    factory = _make_registry_session_factory()
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+    row = MagicMock(id=uuid.uuid4())
+    heartbeat_mock = AsyncMock()
+
+    with (
+        patch("ctpool.maintenance_runner.create_engine", return_value=engine),
+        patch("ctpool.maintenance_runner.create_session_factory", return_value=factory),
+        patch(
+            "ctpool.maintenance_runner.register_worker",
+            AsyncMock(return_value=row),
+        ) as register_mock,
+        patch("ctpool.maintenance_runner.heartbeat_worker", heartbeat_mock),
+        patch(
+            "ctpool.maintenance_runner.mark_worker_stopped",
+            AsyncMock(),
+        ) as stop_mock,
+        patch("ctpool.maintenance_runner.run_maintenance_once", AsyncMock()),
+        patch(
+            "ctpool.maintenance_runner.asyncio.sleep",
+            AsyncMock(side_effect=asyncio.CancelledError()),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await run_maintenance_loop(settings)
+
+    register_mock.assert_awaited_once()
+    assert [call.kwargs["status"] for call in heartbeat_mock.await_args_list] == [
+        "processing",
+        "idle",
+    ]
+    stop_mock.assert_awaited_once()
+    engine.dispose.assert_awaited_once()

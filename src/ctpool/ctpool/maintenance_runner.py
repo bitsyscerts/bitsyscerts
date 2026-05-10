@@ -18,12 +18,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import time
+from os import getpid
 from typing import Any
 
 from rich.console import Console
 
 from ctpool.config import Settings
+from ctpool.db import create_engine, create_session_factory
+from ctpool.worker_registry import (
+    WorkerCounters,
+    heartbeat_worker,
+    mark_worker_stopped,
+    register_worker,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -33,6 +42,11 @@ _DEV_NULL_CONSOLE = Console(quiet=True)
 # single Settings + cycle time so this is correct for the in-process loop
 # without needing a database column.
 _LAST_SCHEDULED_AUDIT_AT: float = 0.0
+
+
+def _worker_id() -> str:
+    """Return a stable identity string for the maintenance singleton worker."""
+    return f"{socket.gethostname()}:{getpid()}"
 
 
 async def run_maintenance_once(settings: Settings) -> None:
@@ -63,13 +77,60 @@ async def run_maintenance_loop(settings: Settings) -> None:
         settings: Active application settings.
     """
     interval = settings.ct_maintenance_interval_seconds
+    engine = create_engine(settings)
+    factory = create_session_factory(engine)
+    async with factory() as session:
+        async with session.begin():
+            registry_row = await register_worker(
+                session,
+                worker_id=_worker_id(),
+                worker_kind="maintenance",
+            )
+    registry_id = registry_row.id
+
     _logger.info("Maintenance loop starting (interval=%d s)", interval)
-    while True:
-        try:
-            await run_maintenance_once(settings)
-        except Exception:
-            _logger.exception("Maintenance cycle failed; will retry after interval")
-        await asyncio.sleep(interval)
+    try:
+        while True:
+            try:
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="processing",
+                            direction="maintenance",
+                            counters=WorkerCounters(),
+                        )
+                await run_maintenance_once(settings)
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="idle",
+                            direction="maintenance",
+                            counters=WorkerCounters(),
+                        )
+            except Exception as exc:
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="error",
+                            direction="maintenance",
+                            counters=WorkerCounters(
+                                last_error_type=exc.__class__.__name__,
+                                last_error_message=str(exc),
+                            ),
+                        )
+                _logger.exception("Maintenance cycle failed; will retry after interval")
+            await asyncio.sleep(interval)
+    finally:
+        async with factory() as session:
+            async with session.begin():
+                await mark_worker_stopped(session, row_id=registry_id)
+        await engine.dispose()
 
 
 def _scheduled_audit_due(settings: Settings) -> bool:
@@ -82,6 +143,8 @@ def _scheduled_audit_due(settings: Settings) -> bool:
     interval = getattr(settings, "bitsyscerts_audit_interval_seconds", 21600)
     if interval <= 0:
         return False
+    if _LAST_SCHEDULED_AUDIT_AT <= 0.0:
+        return True
     return (time.monotonic() - _LAST_SCHEDULED_AUDIT_AT) >= interval
 
 

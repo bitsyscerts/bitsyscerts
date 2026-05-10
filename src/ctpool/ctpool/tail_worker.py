@@ -14,6 +14,7 @@ import socket
 import time
 import uuid as _uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from os import getpid
 
 import httpx
@@ -54,6 +55,7 @@ from ctpool.outcome_constants import (
     OUTCOME_WRITE_ERROR,
 )
 from ctpool.parser import parse_leaf_entry
+from ctpool.worker_activity_details import build_worker_counters
 from ctpool.worker_registry import (
     WorkerCounters,
     heartbeat_worker,
@@ -213,17 +215,24 @@ async def _tail_one_log(
     batch_size: int,
     limit_remaining: int | None,
     init_from_end: int = 0,
-) -> tuple[int, bool, bool, DbContentionObservation, int | None]:
+) -> tuple[int, bool, bool, DbContentionObservation, int | None, WorkerCounters]:
     """Run one tail batch for *log* in its own session/transaction.
 
     Returns:
         ``(entries_processed, is_empty, was_rate_limited, contention,
-        retry_after_seconds)``
+        retry_after_seconds, worker_counters)``
     """
     async with session_factory() as session:
         async with session.begin():
             if not await try_claim_tail_log(session, log.id):
-                return 0, True, False, DbContentionObservation(0, 0)
+                return (
+                    0,
+                    True,
+                    False,
+                    DbContentionObservation(0, 0),
+                    None,
+                    WorkerCounters(),
+                )
         try:
             count, is_empty, observation = await _process_log_batch(
                 log,
@@ -235,26 +244,51 @@ async def _tail_one_log(
                 settings=settings,
                 init_from_end=init_from_end,
             )
+            worker_counters = build_worker_counters(metrics)
             if metrics.has_activity():
                 async with session.begin():
                     await metrics.persist_snapshot(session, log.id)
-            return count, is_empty, False, observation, None
+            return count, is_empty, False, observation, None, worker_counters
         except RateLimitError as exc:
             _logger.warning("rate limited tail log=%s: %s", log.id, exc)
             metrics.record_retryable_errors(1)
+            worker_counters = build_worker_counters(
+                metrics,
+                last_error_type=exc.__class__.__name__,
+                last_error_message=str(exc),
+            )
             if metrics.has_activity():
                 async with session_factory() as session:
                     async with session.begin():
                         await metrics.persist_snapshot(session, log.id)
-            return 0, True, True, DbContentionObservation(0, 0), exc.retry_after_seconds
+            return (
+                0,
+                True,
+                True,
+                DbContentionObservation(0, 0),
+                exc.retry_after_seconds,
+                worker_counters,
+            )
         except FetchError as exc:
             _logger.error("fetch error tail log=%s: %s", log.id, exc)
             metrics.record_retryable_errors(1)
+            worker_counters = build_worker_counters(
+                metrics,
+                last_error_type=exc.__class__.__name__,
+                last_error_message=str(exc),
+            )
             if metrics.has_activity():
                 async with session_factory() as session:
                     async with session.begin():
                         await metrics.persist_snapshot(session, log.id)
-            return 0, False, False, DbContentionObservation(0, 0), None
+            return (
+                0,
+                False,
+                False,
+                DbContentionObservation(0, 0),
+                None,
+                worker_counters,
+            )
 
 
 async def run_tail(
@@ -368,6 +402,17 @@ async def run_tail(
                     db_sleep = await sleep_for_db_contention(directive, settings)
                     if db_sleep > 0.0 and on_status is not None:
                         on_status(f"DB contention — pacing {db_sleep:.2f} s")
+                    async with session_factory() as session:
+                        async with session.begin():
+                            await heartbeat_worker(
+                                session,
+                                row_id=_registry_id,
+                                status="processing",
+                                log_source_id=log.id,
+                                log_name=log.description,
+                                direction="forward",
+                                counters=WorkerCounters(),
+                            )
                     metrics = LogMetricsAccumulator()
                     (
                         processed,
@@ -375,6 +420,7 @@ async def run_tail(
                         was_rate_limited,
                         observation,
                         retry_after,
+                        worker_counters,
                     ) = await _tail_one_log(
                         log,
                         session_factory,
@@ -385,6 +431,8 @@ async def run_tail(
                         limit_remaining=limit_remaining,
                         init_from_end=init_from_end,
                     )
+
+                    status = "processing" if processed > 0 else "idle"
 
                     if was_rate_limited:
                         hit_count = rate_limit_hits.get(log.id, 0) + 1
@@ -400,11 +448,38 @@ async def run_tail(
                                 * (2 ** (hit_count - 1)),
                             )
                         rate_limited_until[log.id] = now + float(backoff_seconds)
+                        retry_deadline = datetime.now(UTC) + timedelta(
+                            seconds=float(backoff_seconds)
+                        )
+                        worker_counters.extra["retry_count"] = hit_count
+                        worker_counters.extra["next_retry_at"] = (
+                            retry_deadline.isoformat()
+                        )
+                        worker_counters.extra["rate_limited_until"] = (
+                            retry_deadline.isoformat()
+                        )
+                        status = "retrying"
                         if on_status is not None:
                             on_status(
                                 "Rate limited for "
                                 f"{log.description} — pausing {backoff_seconds} s"
                             )
+                    elif worker_counters.last_error_type is not None:
+                        status = "error"
+
+                    async with session_factory() as session:
+                        async with session.begin():
+                            await heartbeat_worker(
+                                session,
+                                row_id=_registry_id,
+                                status=status,
+                                log_source_id=log.id,
+                                log_name=log.description,
+                                direction="forward",
+                                counters=worker_counters,
+                            )
+
+                    if was_rate_limited:
                         continue
 
                     if observation.has_activity:

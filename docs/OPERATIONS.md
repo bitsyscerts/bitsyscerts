@@ -92,6 +92,24 @@ and one bootstrap `maintenance` pass before the long-running `stats-snapshotter`
 and `maintenance` services start. If the dashboard still says no snapshot yet,
 run `docker compose run --rm migrate ctpool stats-snapshot` once.
 
+## Integration test database
+
+The Python integration suites are destructive by design: they create and drop
+tables freely.
+
+- Do not point pytest at your live development database.
+- Set `BITSYSCERTS_TEST_DATABASE_URL` to a separate database on the same
+  PostgreSQL instance when you want explicit control.
+- If `BITSYSCERTS_TEST_DATABASE_URL` is unset, the test fixtures now derive a
+  sibling database by rewriting `DATABASE_URL` from `<name>` to `<name>_test`.
+
+Example:
+
+```bash
+export DATABASE_URL=postgresql+psycopg://bitsyscerts:...@127.0.0.1:5432/bitsyscerts
+export BITSYSCERTS_TEST_DATABASE_URL=postgresql+psycopg://bitsyscerts:...@127.0.0.1:5432/bitsyscerts_test
+```
+
 ## Reset Workflows
 
 ### Docker Compose reset (destructive)
@@ -288,3 +306,32 @@ Errors:
   terminal entries/min:  0
 Maintenance: last prune complete 12m ago
 ```
+
+### Worker activity dashboard and CLI
+
+The **Worker Activity** panel now sits directly under the top hostname /
+certificate / CT log totals on the main dashboard page. Treat it as the first
+live runtime view after the headline counts.
+
+- **Healthy** workers are current, non-stale heartbeats. These render in green.
+- **Stale** workers have missed the configured heartbeat threshold. These render in red.
+- **Retrying** workers are active but backing off after an upstream or fetch failure. These render in yellow.
+- **Services** counts cover singleton runtime loops such as `stats-snapshotter`
+  and `maintenance` so operators can confirm those daemons are alive.
+
+Each worker row now answers four operator questions directly:
+
+- **Which worker is this?** — worker id and worker kind.
+- **What is it assigned to?** — CT log name plus operator or URL when available.
+- **What is it doing right now?** — direction, batch window, current index,
+  and checkpoint.
+- **Is it healthy?** — last-seen age, recent throughput, and the last error or retry signal.
+
+The CLI now mirrors the same normalized worker view:
+
+```bash
+ctpool workers list
+```
+
+Use it when you need the same worker assignment / heartbeat / error view over
+SSH or in a deployment where the dashboard is not open.

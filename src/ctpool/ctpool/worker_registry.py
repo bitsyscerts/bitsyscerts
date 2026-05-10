@@ -26,6 +26,7 @@ _logger = logging.getLogger(__name__)
 
 _STATUS_STARTING = "starting"
 _STATUS_STOPPED = "stopped"
+_UNSET = object()
 
 
 @dataclass
@@ -59,7 +60,7 @@ async def register_worker(
     Args:
         session:     Open async SQLAlchemy session (inside an active transaction).
         worker_id:   Stable process identity string (e.g. ``hostname:PID``).
-        worker_kind: ``tail`` or ``backfill``.
+        worker_kind: Worker runtime category (e.g. ``tail`` or ``backfill``).
 
     Returns:
         The newly created :class:`CtWorkerRuntime` instance.
@@ -84,9 +85,14 @@ async def heartbeat_worker(
     *,
     row_id: uuid.UUID,
     status: str,
-    current_index: int | None = None,
-    batch_start_index: int | None = None,
-    batch_end_index: int | None = None,
+    current_index: int | None | object = _UNSET,
+    last_successful_index: int | None | object = _UNSET,
+    batch_start_index: int | None | object = _UNSET,
+    batch_end_index: int | None | object = _UNSET,
+    log_source_id: uuid.UUID | None | object = _UNSET,
+    log_name: str | None | object = _UNSET,
+    direction: str | None | object = _UNSET,
+    details_json: dict[str, Any] | None | object = _UNSET,
     counters: WorkerCounters | None = None,
 ) -> None:
     """Refresh ``last_heartbeat_at`` and runtime state for a worker row.
@@ -97,9 +103,15 @@ async def heartbeat_worker(
         session:           Open async SQLAlchemy session inside an active transaction.
         row_id:            Primary key of the :class:`CtWorkerRuntime` row.
         status:            Current worker status string.
-        current_index:     Most recent log index being processed.
-        batch_start_index: Start of the current batch range.
-        batch_end_index:   End of the current batch range.
+        current_index:     Most recent log index being processed; pass
+                   ``None`` to clear.
+        last_successful_index: Durable checkpoint or last successful index.
+        batch_start_index: Start of the current batch range; pass ``None`` to clear.
+        batch_end_index:   End of the current batch range; pass ``None`` to clear.
+        log_source_id:     Assigned log UUID when the worker is working a specific log.
+        log_name:          Assigned log description for operator display.
+        direction:         Optional direction or role label for operator display.
+        details_json:      Optional normalized details payload; pass ``None`` to clear.
         counters:          Cumulative ingestion counters since the last heartbeat.
     """
     now = datetime.now(UTC)
@@ -108,12 +120,20 @@ async def heartbeat_worker(
         "updated_at": now,
         "status": status,
     }
-    if current_index is not None:
+    if current_index is not _UNSET:
         values["current_index"] = current_index
-    if batch_start_index is not None:
+    if last_successful_index is not _UNSET:
+        values["last_successful_index"] = last_successful_index
+    if batch_start_index is not _UNSET:
         values["batch_start_index"] = batch_start_index
-    if batch_end_index is not None:
+    if batch_end_index is not _UNSET:
         values["batch_end_index"] = batch_end_index
+    if log_source_id is not _UNSET:
+        values["log_source_id"] = log_source_id
+    if log_name is not _UNSET:
+        values["log_name"] = log_name
+    if direction is not _UNSET:
+        values["direction"] = direction
     if counters is not None:
         values.update(
             {
@@ -129,6 +149,10 @@ async def heartbeat_worker(
                 "last_error_message": counters.last_error_message,
             }
         )
+        if details_json is _UNSET and counters.extra:
+            values["details_json"] = counters.extra
+    if details_json is not _UNSET:
+        values["details_json"] = details_json
 
     stmt = update(CtWorkerRuntime).where(CtWorkerRuntime.id == row_id).values(**values)
     await session.execute(stmt)

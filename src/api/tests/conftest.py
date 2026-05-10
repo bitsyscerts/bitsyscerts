@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 from ctpool.models import Base, Certificate, CtLogSource, Hostname
+from ctpool.test_database_url import TEST_DATABASE_URL_ENV, resolve_test_database_url
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -47,7 +49,14 @@ def _patch_settings_imports(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest_asyncio.fixture(scope="session")
 async def async_engine() -> AsyncGenerator[AsyncEngine, None]:
     """Async engine connected to ctpool_test; creates/drops schema once per session."""
-    engine = create_async_engine(_TEST_DB_URL, echo=False)
+    engine = create_async_engine(
+        resolve_test_database_url(
+            source_database_url=os.environ.get("DATABASE_URL"),
+            explicit_test_database_url=os.environ.get(TEST_DATABASE_URL_ENV),
+            fallback_database_url=_TEST_DB_URL,
+        ),
+        echo=False,
+    )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine

@@ -56,6 +56,7 @@ from ctpool.outcome_constants import (
     OUTCOME_WRITE_ERROR,
 )
 from ctpool.parser import parse_leaf_entry
+from ctpool.worker_activity_details import build_worker_counters
 from ctpool.worker_claim import (
     claim_any_eligible_log,
     increment_terminal_error_count,
@@ -209,7 +210,7 @@ async def _run_one_log_batch(
     batch_size: int,
     limit_remaining: int | None,
     worker_id: str,
-) -> tuple[int, bool, DbContentionObservation, int | None, int]:
+) -> tuple[int, bool, DbContentionObservation, int | None, int, WorkerCounters]:
     """Process one batch for a claimed log and persist progress.
 
     Computes the next batch from the durable checkpoint and the configured
@@ -218,7 +219,7 @@ async def _run_one_log_batch(
 
     Returns:
         ``(entries_processed, was_rate_limited, contention, retry_after_seconds,
-        next_checkpoint)``. ``next_checkpoint`` is the new
+        next_checkpoint, worker_counters)``. ``next_checkpoint`` is the new
         ``last_checkpoint_index`` after this batch (regardless of how many
         cert rows were written, since terminal entry outcomes also advance
         the checkpoint).
@@ -246,6 +247,10 @@ async def _run_one_log_batch(
                 metrics,
                 settings,
             )
+            worker_counters = build_worker_counters(
+                metrics,
+                checkpoint_index=last_index + 1,
+            )
             if metrics.has_activity():
                 async with session.begin():
                     await metrics.persist_snapshot(session, log_source_id)
@@ -264,16 +269,28 @@ async def _run_one_log_batch(
                     await increment_terminal_error_count(
                         session, log_source_id=log_source_id
                     )
-        return count, False, observation, None, new_checkpoint
+        return count, False, observation, None, new_checkpoint, worker_counters
     except Exception as exc:
         failure = classify_ingestion_error(exc)
         if failure.is_retryable:
             metrics.record_retryable_errors(1)
+        worker_counters = build_worker_counters(
+            metrics,
+            last_error_type=failure.error_type,
+            last_error_message=failure.error_message,
+            checkpoint_index=next_index,
+        )
         if metrics.has_activity():
             async with session_factory() as session:
                 async with session.begin():
                     await metrics.persist_snapshot(session, log_source_id)
-        return await _handle_batch_failure(
+        (
+            count,
+            was_rate_limited,
+            observation,
+            retry_after,
+            new_checkpoint,
+        ) = await _handle_batch_failure(
             session_factory,
             log_source_id=log_source_id,
             worker_id=worker_id,
@@ -284,6 +301,14 @@ async def _run_one_log_batch(
             error_type=failure.error_type,
             error_message=failure.error_message,
             retry_after_seconds=failure.retry_after_seconds,
+        )
+        return (
+            count,
+            was_rate_limited,
+            observation,
+            retry_after,
+            new_checkpoint,
+            worker_counters,
         )
 
 
@@ -559,16 +584,12 @@ async def _drive_one_log(
     log_source_id = state_row.log_source_id
     current = state_row
     while True:
-        # Pre-batch heartbeat and disk safety + rate-limit check.
-        async with session_factory() as session:
-            async with session.begin():
-                await heartbeat_worker(
-                    session,
-                    row_id=registry_id,
-                    status="processing",
-                    current_index=current.last_checkpoint_index,
-                    counters=WorkerCounters(),
-                )
+        assert current.last_checkpoint_index is not None  # noqa: S101
+        assert current.backfill_end_index is not None  # noqa: S101
+
+        limit_remaining = (
+            (limit - total_processed_ref[0]) if limit is not None else None
+        )
 
         directive = await get_db_contention_directive(
             session_factory, settings, base_batch
@@ -578,13 +599,32 @@ async def _drive_one_log(
         if db_sleep > 0.0 and on_status is not None:
             on_status(f"DB contention — pacing {db_sleep:.2f} s")
 
-        limit_remaining = (
-            (limit - total_processed_ref[0]) if limit is not None else None
+        batch_size = effective_batch
+        if limit_remaining is not None:
+            batch_size = min(batch_size, limit_remaining)
+
+        batch_end_index = min(
+            int(current.last_checkpoint_index) + batch_size - 1,
+            int(current.backfill_end_index),
         )
 
+        # Pre-batch heartbeat and disk safety + rate-limit check.
+        async with session_factory() as session:
+            async with session.begin():
+                await heartbeat_worker(
+                    session,
+                    row_id=registry_id,
+                    status="processing",
+                    log_source_id=log_source_id,
+                    direction="backfill",
+                    current_index=current.last_checkpoint_index,
+                    last_successful_index=current.last_checkpoint_index,
+                    batch_start_index=current.last_checkpoint_index,
+                    batch_end_index=batch_end_index,
+                    counters=WorkerCounters(),
+                )
+
         if on_status is not None:
-            assert current.last_checkpoint_index is not None  # noqa: S101
-            assert current.backfill_end_index is not None  # noqa: S101
             on_status(
                 "Fetching ["
                 f"{int(current.last_checkpoint_index):,}–"
@@ -597,6 +637,7 @@ async def _drive_one_log(
             observation,
             retry_after,
             new_checkpoint,
+            worker_counters,
         ) = await _run_one_log_batch(
             current,
             log_url,
@@ -607,6 +648,23 @@ async def _drive_one_log(
             limit_remaining,
             worker,
         )
+
+        status = "processing" if count > 0 else "idle"
+
+        async with session_factory() as session:
+            async with session.begin():
+                await heartbeat_worker(
+                    session,
+                    row_id=registry_id,
+                    status="retrying" if was_rate_limited else status,
+                    log_source_id=log_source_id,
+                    direction="backfill",
+                    current_index=new_checkpoint,
+                    last_successful_index=new_checkpoint,
+                    batch_start_index=current.last_checkpoint_index,
+                    batch_end_index=batch_end_index,
+                    counters=worker_counters,
+                )
 
         if was_rate_limited:
             hit_count = rate_limit_hits.get(log_source_id, 0) + 1

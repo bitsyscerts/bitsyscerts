@@ -147,6 +147,39 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
             "failed": 0,
         },
     )
+    repo.worker_summary.return_value = overrides.get(
+        "worker_summary",
+        {
+            "active_total": 0,
+            "stale_total": 0,
+            "tail_active": 0,
+            "backfill_active": 0,
+            "stats_active": 0,
+            "maintenance_active": 0,
+            "unknown_active": 0,
+            "items": [],
+        },
+    )
+    repo.backfill_state_summary.return_value = overrides.get(
+        "backfill_state_summary",
+        {
+            "total_logs": 0,
+            "pending": 0,
+            "claimed": 0,
+            "processing": 0,
+            "retrying": 0,
+            "rate_limited": 0,
+            "paused": 0,
+            "complete": 0,
+            "error": 0,
+            "stale": 0,
+            "items": [],
+        },
+    )
+    repo.latest_maintenance_run.return_value = overrides.get(
+        "latest_maintenance_run",
+        None,
+    )
     repo.ingestion_metrics_summary.return_value = overrides.get(
         "ingestion_metrics_summary",
         {
@@ -170,7 +203,7 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
         "latest_snapshot",
         None,
     )
-    repo._ctpool_settings = None
+    repo._ctpool_settings = overrides.get("ctpool_settings", None)
     return repo
 
 
@@ -248,6 +281,63 @@ class TestStatsService:
         repo = _repo_with_defaults(total_logs=1, per_log_stats=[_make_row()])
         result = await StatsService(repo).get_stats()
         assert len(result.logs) == 1
+
+    async def test_live_stats_include_worker_summary(self) -> None:
+        repo = _repo_with_defaults(
+            worker_summary={
+                "active_total": 1,
+                "stale_total": 0,
+                "tail_active": 1,
+                "backfill_active": 0,
+                "stats_active": 0,
+                "maintenance_active": 0,
+                "unknown_active": 0,
+                "items": [
+                    {
+                        "worker_id": "host:1234",
+                        "worker_kind": "tail",
+                        "log_source_id": None,
+                        "log_name": "Test Log",
+                        "log_url": None,
+                        "log_operator": None,
+                        "direction": "forward",
+                        "status": "processing",
+                        "is_stale": False,
+                        "last_heartbeat_at": "2025-01-01T00:00:00Z",
+                        "last_heartbeat_age_seconds": 5,
+                        "started_at": "2025-01-01T00:00:00Z",
+                        "current_index": 12,
+                        "checkpoint_index": 11,
+                        "batch_start_index": None,
+                        "batch_end_index": None,
+                        "processed_entries": 10,
+                        "stored_certificates": 8,
+                        "duplicate_certificates": 2,
+                        "observed_hostnames": 4,
+                        "new_hostnames": 1,
+                        "parse_errors": 0,
+                        "retryable_errors": 0,
+                        "terminal_errors": 0,
+                        "observations_per_min": 60.0,
+                        "new_unique_certificates_per_min": 12.0,
+                        "duplicate_certificates_per_min": 3.0,
+                        "new_unique_hostnames_per_min": 2.0,
+                        "known_hostnames_per_min": 2.0,
+                        "retry_count": None,
+                        "next_retry_at": None,
+                        "rate_limited_until": None,
+                        "last_error_type": None,
+                        "last_error_message": None,
+                    }
+                ],
+            }
+        )
+
+        result = await StatsService(repo).get_stats()
+
+        assert result.workers is not None
+        assert result.workers.active_total == 1
+        assert result.workers.items[0].worker_id == "host:1234"
 
     async def test_backfill_pct_computed_correctly(self) -> None:
         repo = _repo_with_defaults(

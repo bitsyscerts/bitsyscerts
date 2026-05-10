@@ -228,6 +228,8 @@ class WorkerSummaryItem(BaseModel):
     worker_kind: str
     log_source_id: str | None = None
     log_name: str | None = None
+    log_url: str | None = None
+    log_operator: str | None = None
     direction: str | None = None
     status: str
     is_stale: bool
@@ -235,6 +237,9 @@ class WorkerSummaryItem(BaseModel):
     last_heartbeat_age_seconds: int
     started_at: str
     current_index: int | None = None
+    checkpoint_index: int | None = None
+    batch_start_index: int | None = None
+    batch_end_index: int | None = None
     processed_entries: int
     stored_certificates: int
     duplicate_certificates: int
@@ -243,6 +248,14 @@ class WorkerSummaryItem(BaseModel):
     parse_errors: int
     retryable_errors: int
     terminal_errors: int
+    observations_per_min: float | None = None
+    new_unique_certificates_per_min: float | None = None
+    duplicate_certificates_per_min: float | None = None
+    new_unique_hostnames_per_min: float | None = None
+    known_hostnames_per_min: float | None = None
+    retry_count: int | None = None
+    next_retry_at: str | None = None
+    rate_limited_until: str | None = None
     last_error_type: str | None = None
     last_error_message: str | None = None
 
@@ -254,6 +267,9 @@ class WorkerSummary(BaseModel):
     stale_total: int
     tail_active: int
     backfill_active: int
+    stats_active: int
+    maintenance_active: int
+    unknown_active: int
     items: list[WorkerSummaryItem]
 
 

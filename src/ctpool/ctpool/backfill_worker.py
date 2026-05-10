@@ -21,6 +21,7 @@ import socket
 import time
 import uuid as _uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from os import getpid
 
 import httpx
@@ -67,6 +68,7 @@ from ctpool.outcome_constants import (
     OUTCOME_WRITE_ERROR,
 )
 from ctpool.parser import parse_leaf_entry
+from ctpool.worker_activity_details import build_worker_counters
 from ctpool.worker_registry import (
     WorkerCounters,
     heartbeat_worker,
@@ -223,12 +225,12 @@ async def _run_one_range(
     settings: Settings,
     batch_size: int,
     limit_remaining: int | None,
-) -> tuple[int, str, bool, DbContentionObservation, int | None]:
+) -> tuple[int, str, bool, DbContentionObservation, int | None, WorkerCounters]:
     """Process *claimed* range; mark complete or failed.
 
     Returns:
         ``(entries_written, log_url, was_rate_limited, contention,
-        retry_after_seconds)``.
+        retry_after_seconds, worker_counters)``.
     """
     metrics = LogMetricsAccumulator()
     try:
@@ -247,6 +249,10 @@ async def _run_one_range(
                 limit_remaining,
                 settings,
             )
+            worker_counters = build_worker_counters(
+                metrics,
+                checkpoint_index=claimed.end_index + 1,
+            )
             if metrics.has_activity():
                 async with session.begin():
                     await metrics.persist_snapshot(session, claimed.log_source_id)
@@ -260,10 +266,16 @@ async def _run_one_range(
                 ):
                     await resolve_repair_finding(session, claimed.repair_for_finding_id)
 
-        return count, log_url, False, observation, None
+        return count, log_url, False, observation, None, worker_counters
     except RateLimitError as exc:
         _logger.warning("rate limited backfill range=%s: %s", claimed.id, exc)
         metrics.record_retryable_errors(1)
+        worker_counters = build_worker_counters(
+            metrics,
+            last_error_type=exc.__class__.__name__,
+            last_error_message=str(exc),
+            checkpoint_index=claimed.next_index,
+        )
         if metrics.has_activity():
             async with session_factory() as session:
                 async with session.begin():
@@ -271,24 +283,22 @@ async def _run_one_range(
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_pending(session, claimed.id)
-        return 0, "", True, DbContentionObservation(0, 0), exc.retry_after_seconds
+        return (
+            0,
+            "",
+            True,
+            DbContentionObservation(0, 0),
+            exc.retry_after_seconds,
+            worker_counters,
+        )
     except FetchError as exc:
         _logger.error("fetch error backfill range=%s: %s", claimed.id, exc)
         metrics.record_retryable_errors(1)
-        if metrics.has_activity():
-            async with session_factory() as session:
-                async with session.begin():
-                    await metrics.persist_snapshot(session, claimed.log_source_id)
-        async with session_factory() as session:
-            async with session.begin():
-                await mark_range_failed(session, claimed.id, str(exc))
-        return 0, "", False, DbContentionObservation(0, 0), None
-    except Exception as exc:
-        _logger.error(
-            "unexpected error backfill range=%s type=%s: %s",
-            claimed.id,
-            exc.__class__.__name__,
-            exc,
+        worker_counters = build_worker_counters(
+            metrics,
+            last_error_type=exc.__class__.__name__,
+            last_error_message=str(exc),
+            checkpoint_index=claimed.next_index,
         )
         if metrics.has_activity():
             async with session_factory() as session:
@@ -297,7 +307,28 @@ async def _run_one_range(
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_failed(session, claimed.id, str(exc))
-        return 0, "", False, DbContentionObservation(0, 0), None
+        return 0, "", False, DbContentionObservation(0, 0), None, worker_counters
+    except Exception as exc:
+        _logger.error(
+            "unexpected error backfill range=%s type=%s: %s",
+            claimed.id,
+            exc.__class__.__name__,
+            exc,
+        )
+        worker_counters = build_worker_counters(
+            metrics,
+            last_error_type=exc.__class__.__name__,
+            last_error_message=str(exc),
+            checkpoint_index=claimed.next_index,
+        )
+        if metrics.has_activity():
+            async with session_factory() as session:
+                async with session.begin():
+                    await metrics.persist_snapshot(session, claimed.log_source_id)
+        async with session_factory() as session:
+            async with session.begin():
+                await mark_range_failed(session, claimed.id, str(exc))
+        return 0, "", False, DbContentionObservation(0, 0), None, worker_counters
 
 
 async def run_backfill(
@@ -514,12 +545,27 @@ async def run_backfill_legacy(
                         f"Fetching [{claimed.start_index:,}–{claimed.end_index:,}]"
                         f" ({claimed.end_index - claimed.start_index + 1:,} entries)…"
                     )
+                async with session_factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=_registry_id,
+                            status="processing",
+                            log_source_id=claimed.log_source_id,
+                            direction="backfill",
+                            current_index=claimed.next_index,
+                            last_successful_index=claimed.next_index,
+                            batch_start_index=claimed.next_index,
+                            batch_end_index=claimed.end_index,
+                            counters=WorkerCounters(),
+                        )
                 (
                     batch_count,
                     log_url,
                     was_rate_limited,
                     observation,
                     retry_after,
+                    worker_counters,
                 ) = await _run_one_range(
                     claimed,
                     session_factory,
@@ -528,6 +574,7 @@ async def run_backfill_legacy(
                     effective_batch,
                     limit_remaining,
                 )
+                status = "processing" if batch_count > 0 else "idle"
                 if was_rate_limited:
                     hit_count = rate_limit_hits.get(claimed.log_source_id, 0) + 1
                     rate_limit_hits[claimed.log_source_id] = hit_count
@@ -543,11 +590,42 @@ async def run_backfill_legacy(
                         )
                     until = now + float(backoff_seconds)
                     rate_limited_until[claimed.log_source_id] = until
+                    retry_deadline = datetime.now(UTC) + timedelta(
+                        seconds=float(backoff_seconds)
+                    )
+                    worker_counters.extra["retry_count"] = hit_count
+                    worker_counters.extra["next_retry_at"] = retry_deadline.isoformat()
+                    worker_counters.extra["rate_limited_until"] = (
+                        retry_deadline.isoformat()
+                    )
+                    status = "retrying"
                     if on_status is not None:
                         on_status(
                             "Rate limited for log "
                             f"{claimed.log_source_id} — pausing {backoff_seconds} s"
                         )
+                elif worker_counters.last_error_type is not None:
+                    status = "error"
+
+                current_index = (
+                    claimed.next_index if batch_count == 0 else claimed.end_index + 1
+                )
+                async with session_factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=_registry_id,
+                            status=status,
+                            log_source_id=claimed.log_source_id,
+                            direction="backfill",
+                            current_index=current_index,
+                            last_successful_index=current_index,
+                            batch_start_index=claimed.next_index,
+                            batch_end_index=claimed.end_index,
+                            counters=worker_counters,
+                        )
+
+                if was_rate_limited:
                     if once:
                         return
                     continue

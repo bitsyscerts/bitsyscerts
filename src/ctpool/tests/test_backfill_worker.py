@@ -24,6 +24,7 @@ from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.exceptions import FetchError
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
+from ctpool.worker_registry import WorkerCounters
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -408,6 +409,70 @@ async def test_backfill_worker_exits_at_entry_limit() -> None:
     assert len(written) == 1
 
 
+async def test_backfill_worker_heartbeats_assigned_range_details() -> None:
+    """Legacy backfill workers publish claimed-range heartbeat details."""
+    log = _make_log()
+    claimed = _make_range(log.id, start=0, end=9, next_index=0)
+    settings = _make_settings()
+    heartbeat_mock = AsyncMock()
+
+    with (
+        patch("ctpool.backfill_worker.heartbeat_worker", heartbeat_mock),
+        patch("ctpool.backfill_worker.mark_worker_stopped", AsyncMock()),
+        patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
+        patch("ctpool.backfill_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.backfill_worker.get_eligible_backfill_logs",
+            AsyncMock(return_value=[log]),
+        ),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch(
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
+        ),
+        patch(
+            "ctpool.backfill_worker.claim_backfill_range",
+            AsyncMock(return_value=claimed),
+        ),
+        patch(
+            "ctpool.backfill_worker._resolve_log_url",
+            AsyncMock(return_value="https://ct.example.com/log/"),
+        ),
+        patch(
+            "ctpool.backfill_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(1)),
+        ),
+        patch(
+            "ctpool.backfill_worker.parse_leaf_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.build_normalized_entry",
+            MagicMock(return_value=MagicMock()),
+        ),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
+        patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
+        patch("ctpool.backfill_worker.httpx.AsyncClient"),
+        patch(
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
+        ),
+    ):
+        await run_backfill(_make_session_factory(), settings, once=True)
+
+    processing_call = next(
+        call
+        for call in heartbeat_mock.await_args_list
+        if call.kwargs.get("log_source_id") == claimed.log_source_id
+        and call.kwargs["counters"].processed_entries == 1
+    )
+    assert processing_call.kwargs["direction"] == "backfill"
+    assert processing_call.kwargs["batch_start_index"] == 0
+    assert processing_call.kwargs["batch_end_index"] == 9
+    assert "observations_per_min" in processing_call.kwargs["counters"].extra
+
+
 # ---------------------------------------------------------------------------
 # on_status callback
 # ---------------------------------------------------------------------------
@@ -536,7 +601,16 @@ async def test_backfill_worker_applies_shared_db_pacing_before_processing() -> N
         ),
         patch(
             "ctpool.backfill_worker._run_one_range",
-            AsyncMock(return_value=(1, log.url, False, observation, None)),
+            AsyncMock(
+                return_value=(
+                    1,
+                    log.url,
+                    False,
+                    observation,
+                    None,
+                    WorkerCounters(),
+                )
+            ),
         ) as run_range_mock,
         patch(
             "ctpool.backfill_worker.submit_db_contention_observation",

@@ -450,6 +450,52 @@ async def test_tail_worker_calls_on_batch_callback_with_correct_args() -> None:
     assert total == 2
 
 
+async def test_tail_worker_heartbeats_assigned_log_and_activity_details() -> None:
+    """Tail workers publish assigned-log and recent-activity heartbeats."""
+    log = _make_log()
+    settings = _make_settings()
+    heartbeat_mock = AsyncMock()
+
+    with (
+        patch("ctpool.tail_worker.heartbeat_worker", heartbeat_mock),
+        patch("ctpool.tail_worker.mark_worker_stopped", AsyncMock()),
+        patch("ctpool.tail_worker.is_disk_critical", return_value=False),
+        patch("ctpool.tail_worker.is_disk_low", return_value=False),
+        patch(
+            "ctpool.tail_worker.get_eligible_tail_logs", AsyncMock(return_value=[log])
+        ),
+        patch(
+            "ctpool.tail_worker.ensure_tail_cursor",
+            AsyncMock(return_value=(_make_cursor(log.id, 0), False)),
+        ),
+        patch("ctpool.tail_worker.fetch_sth", AsyncMock(return_value=_make_sth(2))),
+        patch(
+            "ctpool.tail_worker.fetch_entries",
+            AsyncMock(return_value=_make_entries_response(2)),
+        ),
+        patch("ctpool.tail_worker.parse_leaf_entry", MagicMock()),
+        patch("ctpool.tail_worker.build_normalized_entry", MagicMock()),
+        patch(
+            "ctpool.tail_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
+        patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
+        patch("ctpool.tail_worker.httpx.AsyncClient"),
+    ):
+        factory = _make_session_factory([log], {})
+        await run_tail(factory, settings, once=True)
+
+    processing_call = next(
+        call
+        for call in heartbeat_mock.await_args_list
+        if call.kwargs.get("log_source_id") == log.id
+        and call.kwargs["counters"].processed_entries == 2
+    )
+    assert processing_call.kwargs["direction"] == "forward"
+    assert processing_call.kwargs["log_name"] == log.description
+    assert "observations_per_min" in processing_call.kwargs["counters"].extra
+
+
 # ---------------------------------------------------------------------------
 # New cursor initialization semantics
 # ---------------------------------------------------------------------------
@@ -786,7 +832,16 @@ async def test_tail_worker_applies_shared_db_pacing_before_processing_log() -> N
         ) as sleep_mock,
         patch(
             "ctpool.tail_worker._tail_one_log",
-            AsyncMock(return_value=(1, False, False, observation, None)),
+            AsyncMock(
+                return_value=(
+                    1,
+                    False,
+                    False,
+                    observation,
+                    None,
+                    MagicMock(),
+                )
+            ),
         ) as tail_one_log_mock,
         patch(
             "ctpool.tail_worker.submit_db_contention_observation",

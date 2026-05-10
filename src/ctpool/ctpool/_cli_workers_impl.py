@@ -9,29 +9,84 @@ Exports:
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 from rich.console import Console
 from rich.table import Table
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from ctpool.config import get_settings
 from ctpool.db import create_engine, create_session_factory
 from ctpool.models.worker_runtime import CtWorkerRuntime
+from ctpool.worker_queries import query_worker_summary
+from ctpool.worker_reaper import reap_stale_worker_rows
 
 _STATUS_STOPPED = "stopped"
 
 
-def _format_age(dt: datetime) -> str:
+def _format_age(total_s: int) -> str:
     """Return a human-readable age string like '4s ago'."""
-    delta = datetime.now(UTC) - dt
-    total_s = int(delta.total_seconds())
     if total_s < 60:
         return f"{total_s}s ago"
     if total_s < 3600:
         return f"{total_s // 60}m ago"
     return f"{total_s // 3600}h ago"
+
+
+def _format_status(item: dict[str, object]) -> str:
+    status = str(item["status"])
+    if bool(item["is_stale"]):
+        return f"[red]{status} (stale)[/red]"
+    if status == "processing":
+        return f"[green]{status}[/green]"
+    if status == "retrying":
+        return f"[yellow]{status}[/yellow]"
+    if status == "error":
+        return f"[red]{status}[/red]"
+    if status == "idle":
+        return f"[cyan]{status}[/cyan]"
+    return status
+
+
+def _format_log(item: dict[str, object]) -> str:
+    log_name = item.get("log_name")
+    log_operator = item.get("log_operator")
+    if isinstance(log_name, str) and log_name:
+        if isinstance(log_operator, str) and log_operator:
+            return f"{log_name} ({log_operator})"
+        return log_name
+    log_source_id = item.get("log_source_id")
+    return str(log_source_id) if log_source_id else "-"
+
+
+def _format_work(item: dict[str, object]) -> str:
+    batch_start = item.get("batch_start_index")
+    batch_end = item.get("batch_end_index")
+    current_index = item.get("current_index")
+    checkpoint_index = item.get("checkpoint_index")
+    parts: list[str] = []
+    if isinstance(item.get("direction"), str) and item["direction"]:
+        parts.append(str(item["direction"]))
+    if isinstance(batch_start, int) and isinstance(batch_end, int):
+        parts.append(f"{batch_start:,}-{batch_end:,}")
+    elif isinstance(current_index, int):
+        parts.append(f"idx {current_index:,}")
+    if isinstance(checkpoint_index, int) and checkpoint_index != current_index:
+        parts.append(f"ckpt {checkpoint_index:,}")
+    return " | ".join(parts) if parts else "-"
+
+
+def _format_error(item: dict[str, object]) -> str:
+    error_type = item.get("last_error_type")
+    error_message = item.get("last_error_message")
+    if isinstance(error_type, str) and error_type:
+        if isinstance(error_message, str) and error_message:
+            return f"{error_type}: {error_message}"
+        return error_type
+    rate_limited_until = item.get("rate_limited_until")
+    if isinstance(rate_limited_until, str) and rate_limited_until:
+        return f"retry until {rate_limited_until}"
+    return "-"
 
 
 async def run_list_workers(*, stale_seconds: int | None) -> None:
@@ -50,40 +105,47 @@ async def run_list_workers(*, stale_seconds: int | None) -> None:
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     async with session_factory() as session:
-        result = await session.execute(
-            select(CtWorkerRuntime)
-            .where(CtWorkerRuntime.status != _STATUS_STOPPED)
-            .order_by(CtWorkerRuntime.started_at.asc())
+        summary = await query_worker_summary(
+            session,
+            stale_seconds=effective_stale,
         )
-        rows = list(result.scalars().all())
 
     await engine.dispose()
 
-    if not rows:
+    items = summary["items"]
+    if not items:
         console.print("[dim]No active workers.[/dim]")
         return
 
-    cutoff = datetime.now(UTC) - timedelta(seconds=effective_stale)
+    console.print(
+        "[bold]Workers:[/bold] "
+        f"{summary['active_total']} active | "
+        f"{summary['stale_total']} stale | "
+        f"tail {summary['tail_active']} | "
+        f"backfill {summary['backfill_active']} | "
+        f"snapshot {summary['stats_active']} | "
+        f"maintenance {summary['maintenance_active']}"
+    )
+
     table = Table(title=f"Active Workers (stale_seconds={effective_stale})")
     table.add_column("Worker ID", style="cyan")
     table.add_column("Kind", style="magenta")
-    table.add_column("Log", style="white", max_width=30, no_wrap=True)
     table.add_column("Status", style="yellow")
+    table.add_column("Log", style="white", max_width=32)
+    table.add_column("Work", style="white", max_width=32)
     table.add_column("Last Seen")
-    table.add_column("Index", justify="right")
+    table.add_column("Error", style="red", max_width=48)
 
-    for row in rows:
-        is_stale = row.last_heartbeat_at < cutoff
-        heartbeat_age = _format_age(row.last_heartbeat_at)
-        index_str = f"{row.current_index:,}" if row.current_index is not None else "-"
-        status_str = f"[red]{row.status}[/red]" if is_stale else row.status
+    for item in items:
+        heartbeat_age = _format_age(int(item["last_heartbeat_age_seconds"]))
         table.add_row(
-            row.worker_id,
-            row.worker_kind,
-            row.log_name or "-",
-            status_str,
-            f"[red]{heartbeat_age}[/red]" if is_stale else heartbeat_age,
-            index_str,
+            str(item["worker_id"]),
+            str(item["worker_kind"]),
+            _format_status(item),
+            _format_log(item),
+            _format_work(item),
+            heartbeat_age,
+            _format_error(item),
         )
 
     console.print(table)
@@ -133,14 +195,8 @@ async def run_reap_workers(*, stale_seconds: int | None, dry_run: bool) -> None:
             await engine.dispose()
             return
 
-        stale_ids: list[uuid.UUID] = [r.id for r in stale_rows]
-        now = datetime.now(UTC)
-        async with session.begin():
-            await session.execute(
-                update(CtWorkerRuntime)
-                .where(CtWorkerRuntime.id.in_(stale_ids))
-                .values(status=_STATUS_STOPPED, stopped_at=now, updated_at=now)
-            )
+        await reap_stale_worker_rows(session, stale_seconds=effective_stale)
+        await session.commit()
 
     await engine.dispose()
     console.print(

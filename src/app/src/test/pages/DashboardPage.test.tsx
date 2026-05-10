@@ -70,6 +70,53 @@ const STATS_FIXTURE = {
     unsupported_entry_type: 0,
     skipped_by_policy: 0,
   },
+  workers: {
+    active_total: 1,
+    stale_total: 0,
+    tail_active: 1,
+    backfill_active: 0,
+    stats_active: 0,
+    maintenance_active: 0,
+    unknown_active: 0,
+    items: [
+      {
+        worker_id: "host:1234",
+        worker_kind: "tail",
+        log_source_id: "log-1",
+        log_name: "Test Log",
+        log_url: null,
+        log_operator: "Test Operator",
+        direction: "forward",
+        status: "processing",
+        is_stale: false,
+        last_heartbeat_at: "2025-01-01T00:00:00Z",
+        last_heartbeat_age_seconds: 5,
+        started_at: "2025-01-01T00:00:00Z",
+        current_index: 100,
+        checkpoint_index: null,
+        batch_start_index: null,
+        batch_end_index: null,
+        processed_entries: 10,
+        stored_certificates: 8,
+        duplicate_certificates: 2,
+        observed_hostnames: 4,
+        new_hostnames: 1,
+        parse_errors: 0,
+        retryable_errors: 0,
+        terminal_errors: 0,
+        observations_per_min: 60,
+        new_unique_certificates_per_min: 12,
+        duplicate_certificates_per_min: 3,
+        new_unique_hostnames_per_min: 2,
+        known_hostnames_per_min: 2,
+        retry_count: null,
+        next_retry_at: null,
+        rate_limited_until: null,
+        last_error_type: null,
+        last_error_message: null,
+      },
+    ],
+  },
   backfill_ranges: {
     pending: 0,
     in_progress: 0,
@@ -126,6 +173,7 @@ describe("DashboardPage with data", () => {
 
   it("renders operational panel headings", () => {
     renderPage();
+    expect(screen.getByText("Worker Activity")).toBeInTheDocument();
     expect(screen.getByText("Storage Projection")).toBeInTheDocument();
     expect(screen.getByText("DB Contention Control")).toBeInTheDocument();
     expect(screen.getByText("Database Storage")).toBeInTheDocument();

@@ -27,6 +27,7 @@ import pytest
 from ctpool.config import Settings
 from ctpool.exceptions import FetchError, RateLimitError
 from ctpool.models.log_backfill_state import CtLogBackfillState
+from ctpool.worker_registry import WorkerCounters
 
 pytestmark = pytest.mark.asyncio
 
@@ -155,6 +156,7 @@ async def test_run_one_log_batch_advances_checkpoint_on_success() -> None:
             _obs,
             retry_after,
             new_checkpoint,
+            worker_counters,
         ) = await backfill_per_log._run_one_log_batch(
             state_row,
             "https://ct.example.com/",
@@ -171,6 +173,7 @@ async def test_run_one_log_batch_advances_checkpoint_on_success() -> None:
     assert retry_after is None
     # Started at 100, batch covers [100..109] → new_checkpoint = 110
     assert new_checkpoint == 110
+    assert worker_counters.extra["checkpoint_index"] == 110
     progress_mock.assert_awaited_once()
     awaited_kwargs = progress_mock.await_args.kwargs
     assert awaited_kwargs["checkpoint_index"] == 110
@@ -204,6 +207,7 @@ async def test_run_one_log_batch_rate_limit_does_not_advance_checkpoint() -> Non
             _obs,
             retry_after,
             new_checkpoint,
+            worker_counters,
         ) = await backfill_per_log._run_one_log_batch(
             state_row,
             "https://ct.example.com/",
@@ -219,6 +223,7 @@ async def test_run_one_log_batch_rate_limit_does_not_advance_checkpoint() -> Non
     assert retry_after == 12
     # Checkpoint stays at the row's existing value.
     assert new_checkpoint == state_row.last_checkpoint_index
+    assert worker_counters.last_error_type == "RateLimitError"
     progress_mock.assert_not_called()
     retrying_mock.assert_awaited_once()
     assert retrying_mock.await_args.kwargs["error_type"] == "RateLimitError"
@@ -252,6 +257,7 @@ async def test_run_one_log_batch_fetch_error_marks_retrying() -> None:
             _obs,
             _retry_after,
             new_checkpoint,
+            worker_counters,
         ) = await backfill_per_log._run_one_log_batch(
             state_row,
             "https://ct.example.com/",
@@ -265,6 +271,7 @@ async def test_run_one_log_batch_fetch_error_marks_retrying() -> None:
 
     assert rate_limited is False
     assert new_checkpoint == state_row.last_checkpoint_index
+    assert worker_counters.last_error_type == "FetchError"
     progress_mock.assert_not_called()
     retrying_mock.assert_awaited_once()
     assert retrying_mock.await_args.kwargs["error_type"] == "FetchError"
@@ -292,9 +299,14 @@ async def test_drive_one_log_marks_complete_when_checkpoint_passes_end() -> None
     client: Any = AsyncMock()
 
     obs = MagicMock(has_activity=False)
+    heartbeat_mock = AsyncMock()
+    worker_counters = WorkerCounters(
+        processed_entries=1,
+        extra={"observations_per_min": 60.0},
+    )
 
     with (
-        patch.object(backfill_per_log, "heartbeat_worker", new=AsyncMock()),
+        patch.object(backfill_per_log, "heartbeat_worker", new=heartbeat_mock),
         patch.object(
             backfill_per_log,
             "get_db_contention_directive",
@@ -309,7 +321,7 @@ async def test_drive_one_log_marks_complete_when_checkpoint_passes_end() -> None
         patch.object(
             backfill_per_log,
             "_run_one_log_batch",
-            new=AsyncMock(return_value=(1, False, obs, None, 1000)),
+            new=AsyncMock(return_value=(1, False, obs, None, 1000, worker_counters)),
         ),
         patch.object(
             backfill_per_log, "mark_log_complete", new=AsyncMock()
@@ -333,6 +345,14 @@ async def test_drive_one_log_marks_complete_when_checkpoint_passes_end() -> None
         )
 
     complete_mock.assert_awaited_once()
+    assert len(heartbeat_mock.await_args_list) == 2
+    pre_call = heartbeat_mock.await_args_list[0]
+    assert pre_call.kwargs["log_source_id"] == state_row.log_source_id
+    assert pre_call.kwargs["batch_start_index"] == 999
+    assert pre_call.kwargs["batch_end_index"] == 999
+    post_call = heartbeat_mock.await_args_list[1]
+    assert post_call.kwargs["current_index"] == 1000
+    assert post_call.kwargs["counters"] == worker_counters
 
 
 async def test_drive_one_log_rate_limited_releases_claim() -> None:
@@ -368,7 +388,7 @@ async def test_drive_one_log_rate_limited_releases_claim() -> None:
         patch.object(
             backfill_per_log,
             "_run_one_log_batch",
-            new=AsyncMock(return_value=(0, True, obs, 5, 100)),
+            new=AsyncMock(return_value=(0, True, obs, 5, 100, WorkerCounters())),
         ),
         patch.object(
             backfill_per_log, "release_log_claim", new=AsyncMock()
@@ -392,6 +412,85 @@ async def test_drive_one_log_rate_limited_releases_claim() -> None:
         )
 
     release_mock.assert_awaited_once()
+
+
+async def test_drive_one_log_heartbeats_assignment_and_progress() -> None:
+    """Per-log workers publish assigned-log and batch progress heartbeats."""
+    from ctpool import backfill_per_log
+
+    state_row = CtLogBackfillState(
+        log_source_id=uuid.uuid4(),
+        status="claimed",
+        claimed_by="w1",
+        last_checkpoint_index=100,
+        backfill_start_index=0,
+        backfill_end_index=199,
+    )
+    factory, _ = _make_session_factory()
+    settings = _make_settings()
+    client: Any = AsyncMock()
+    heartbeat_mock = AsyncMock()
+    worker_counters = WorkerCounters(
+        processed_entries=10,
+        extra={"observations_per_min": 60.0},
+    )
+
+    with (
+        patch.object(backfill_per_log, "heartbeat_worker", new=heartbeat_mock),
+        patch.object(
+            backfill_per_log,
+            "get_db_contention_directive",
+            new=AsyncMock(return_value=None),
+        ),
+        patch.object(backfill_per_log, "resolve_effective_batch_size", return_value=25),
+        patch.object(
+            backfill_per_log,
+            "sleep_for_db_contention",
+            new=AsyncMock(return_value=0.0),
+        ),
+        patch.object(
+            backfill_per_log,
+            "_run_one_log_batch",
+            new=AsyncMock(
+                return_value=(
+                    10,
+                    False,
+                    MagicMock(has_activity=False),
+                    None,
+                    200,
+                    worker_counters,
+                )
+            ),
+        ),
+        patch.object(backfill_per_log, "mark_log_complete", new=AsyncMock()),
+    ):
+        await backfill_per_log._drive_one_log(
+            state_row=state_row,
+            log_url="https://x/",
+            session_factory=factory,
+            client=client,
+            settings=settings,
+            worker="w1",
+            registry_id=uuid.uuid4(),
+            base_batch=25,
+            on_batch=None,
+            on_status=None,
+            rate_limit_hits={},
+            rate_limited_until={},
+            total_processed_ref=[0],
+            limit=None,
+        )
+
+    assert len(heartbeat_mock.await_args_list) == 2
+    pre_call = heartbeat_mock.await_args_list[0]
+    assert pre_call.kwargs["log_source_id"] == state_row.log_source_id
+    assert pre_call.kwargs["direction"] == "backfill"
+    assert pre_call.kwargs["batch_start_index"] == 100
+    assert pre_call.kwargs["batch_end_index"] == 124
+    post_call = heartbeat_mock.await_args_list[1]
+    assert post_call.kwargs["current_index"] == 200
+    assert post_call.kwargs["last_successful_index"] == 200
+    assert post_call.kwargs["counters"] == worker_counters
 
 
 # ---------------------------------------------------------------------------
