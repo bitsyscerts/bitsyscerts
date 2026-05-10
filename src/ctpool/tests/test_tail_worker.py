@@ -15,6 +15,7 @@ import pytest
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
 from ctpool.db_contention_types import DbContentionDirective, DbContentionObservation
+from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.exceptions import FetchError
 from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
@@ -90,6 +91,21 @@ def _make_entries_response(n: int = 1) -> CtEntriesResponse:
     )
 
 
+def _stored_metrics(
+    *,
+    hostnames_observed: int = 0,
+    new_unique_hostnames: int = 0,
+    certificate_inserted: bool = False,
+) -> EntryWriteMetrics:
+    return EntryWriteMetrics(
+        new_unique_certificates=1 if certificate_inserted else 0,
+        duplicate_certificates=0 if certificate_inserted else 1,
+        hostnames_observed=hostnames_observed,
+        new_unique_hostnames=new_unique_hostnames,
+        known_hostnames=hostnames_observed - new_unique_hostnames,
+    )
+
+
 def _make_session_factory(
     logs: list[CtLogSource],
     cursor_map: dict[uuid.UUID, CtLogTailCursor],
@@ -102,6 +118,7 @@ def _make_session_factory(
     session.begin_nested = MagicMock()
     session.begin_nested.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin_nested.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.add = MagicMock()
     execute_result = MagicMock()
     execute_result.scalar.return_value = True
     session.execute.return_value = execute_result
@@ -120,6 +137,22 @@ def _mock_tail_log_claim() -> object:
         "ctpool.tail_worker.try_claim_tail_log", AsyncMock(return_value=True)
     ) as claim_mock:
         yield claim_mock
+
+
+@pytest.fixture(autouse=True)
+def _patch_worker_registry() -> object:
+    """Prevent worker_registry calls from hitting the mock session."""
+    import uuid as _uuid
+    from unittest.mock import MagicMock
+
+    mock_row = MagicMock()
+    mock_row.id = _uuid.uuid4()
+    with (
+        patch("ctpool.tail_worker.register_worker", AsyncMock(return_value=mock_row)),
+        patch("ctpool.tail_worker.heartbeat_worker", AsyncMock()),
+        patch("ctpool.tail_worker.mark_worker_stopped", AsyncMock()),
+    ):
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +188,10 @@ async def test_tail_worker_exits_after_one_iteration_with_once_flag() -> None:
             "ctpool.tail_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.tail_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch("ctpool.tail_worker.httpx.AsyncClient"),
     ):
@@ -214,8 +250,9 @@ async def test_tail_worker_stops_at_entry_limit() -> None:
         session: object,
         entry: object,
         **_: object,
-    ) -> None:
+    ) -> EntryWriteMetrics:
         written.append(entry)
+        return _stored_metrics()
 
     with (
         patch("ctpool.tail_worker.is_disk_critical", return_value=False),
@@ -396,7 +433,10 @@ async def test_tail_worker_calls_on_batch_callback_with_correct_args() -> None:
         ),
         patch("ctpool.tail_worker.parse_leaf_entry", MagicMock()),
         patch("ctpool.tail_worker.build_normalized_entry", MagicMock()),
-        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.tail_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch("ctpool.tail_worker.httpx.AsyncClient"),
     ):
@@ -667,7 +707,10 @@ async def test_tail_worker_calls_persist_snapshot_on_success() -> None:
             "ctpool.tail_worker.build_normalized_entry",
             return_value=MagicMock(),
         ),
-        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.tail_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch(
             "ctpool.tail_worker.LogMetricsAccumulator.persist_snapshot",
@@ -681,8 +724,8 @@ async def test_tail_worker_calls_persist_snapshot_on_success() -> None:
     assert snapshot_calls[0] == log.id
 
 
-async def test_tail_worker_does_not_call_persist_snapshot_on_fetch_error() -> None:
-    """persist_snapshot is NOT called when a FetchError is raised."""
+async def test_tail_worker_persists_snapshot_on_fetch_error() -> None:
+    """Retryable fetch errors emit a snapshot row for rate aggregation."""
     log = _make_log()
     settings = _make_settings()
     snapshot_calls: list[object] = []
@@ -711,7 +754,7 @@ async def test_tail_worker_does_not_call_persist_snapshot_on_fetch_error() -> No
     ):
         await run_tail(_make_session_factory([log], {}), settings, once=True)
 
-    assert snapshot_calls == []
+    assert snapshot_calls == [log.id]
 
 
 async def test_tail_worker_applies_shared_db_pacing_before_processing_log() -> None:
@@ -764,8 +807,8 @@ async def test_tail_worker_applies_shared_db_pacing_before_processing_log() -> N
 # ---------------------------------------------------------------------------
 
 
-async def test_tail_worker_records_hostnames_upserted_per_batch() -> None:
-    """record_hostnames_upserted is called with the sum of hostnames across entries."""
+async def test_tail_worker_records_hostnames_observed_per_batch() -> None:
+    """record_entry_write_metrics carries observed-hostname totals per entry."""
     from ctpool.metrics import LogMetricsAccumulator
 
     log = _make_log()
@@ -780,11 +823,14 @@ async def test_tail_worker_records_hostnames_upserted_per_batch() -> None:
     build_side_effects = [normalized_a, normalized_b]
 
     recorded_counts: list[int] = []
-    original_record = LogMetricsAccumulator.record_hostnames_upserted
+    original_record = LogMetricsAccumulator.record_entry_write_metrics
 
-    def capture_record_hostnames(self: LogMetricsAccumulator, count: int) -> None:
-        recorded_counts.append(count)
-        original_record(self, count)
+    def capture_record_entry_metrics(
+        self: LogMetricsAccumulator,
+        metrics: EntryWriteMetrics,
+    ) -> None:
+        recorded_counts.append(metrics.hostnames_observed)
+        original_record(self, metrics)
 
     async def mock_ensure(
         session: object, lid: object, *, init_index: int
@@ -811,18 +857,26 @@ async def test_tail_worker_records_hostnames_upserted_per_batch() -> None:
             "ctpool.tail_worker.build_normalized_entry",
             MagicMock(side_effect=build_side_effects),
         ),
-        patch("ctpool.tail_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.tail_worker.persist_entry_with_retry",
+            AsyncMock(
+                side_effect=[
+                    _stored_metrics(hostnames_observed=3, new_unique_hostnames=1),
+                    _stored_metrics(hostnames_observed=2, new_unique_hostnames=0),
+                ]
+            ),
+        ),
         patch("ctpool.tail_worker.advance_tail_cursor", AsyncMock()),
         patch("ctpool.tail_worker.LogMetricsAccumulator.persist_snapshot", AsyncMock()),
         patch(
-            "ctpool.tail_worker.LogMetricsAccumulator.record_hostnames_upserted",
-            capture_record_hostnames,
+            "ctpool.tail_worker.LogMetricsAccumulator.record_entry_write_metrics",
+            capture_record_entry_metrics,
         ),
         patch("ctpool.tail_worker.httpx.AsyncClient"),
     ):
         await run_tail(_make_session_factory([log], {}), settings, once=True)
 
-    assert recorded_counts == [5]
+    assert sum(recorded_counts) == 5
 
 
 async def test_tail_worker_hostname_not_recorded_when_no_entries() -> None:

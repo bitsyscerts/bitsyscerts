@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -110,8 +112,15 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
             {
                 "window_seconds": 300,
                 "entries_fetched": 0,
+                "entries_parsed": 0,
                 "certs_upserted": 0,
                 "hostnames_upserted": 0,
+                "new_unique_certificates": 0,
+                "duplicate_certificates": 0,
+                "new_unique_hostnames": 0,
+                "known_hostnames": 0,
+                "retryable_errors": 0,
+                "terminal_entry_errors": 0,
             }
         ],
     )
@@ -153,6 +162,14 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
         "active_instance_settings",
         None,
     )
+    repo.get_snapshot_age_seconds.return_value = overrides.get(
+        "snapshot_age_seconds",
+        None,
+    )
+    repo.get_latest_snapshot.return_value = overrides.get(
+        "latest_snapshot",
+        None,
+    )
     repo._ctpool_settings = None
     return repo
 
@@ -170,6 +187,62 @@ class TestStatsService:
         assert result.total_hostnames == 100
         assert result.total_certificates == 50
         assert result.total_logs == 3
+
+    async def test_snapshot_metadata_marks_fresh_payload_not_stale(self) -> None:
+        """Sprint 5: a young snapshot age yields ``is_stale=false``."""
+        repo = _repo_with_defaults(snapshot_age_seconds=12.0)
+        result = await StatsService(repo).get_stats()
+        assert result.snapshot is not None
+        assert result.snapshot.age_seconds == pytest.approx(12.0)
+        assert result.snapshot.is_stale is False
+        assert result.snapshot.source in {"snapshot", "live"}
+
+    async def test_snapshot_metadata_flags_stale_payload(self) -> None:
+        """Sprint 5: an old snapshot age yields ``is_stale=true``."""
+        repo = _repo_with_defaults(snapshot_age_seconds=999.0)
+        result = await StatsService(repo).get_stats()
+        assert result.snapshot is not None
+        assert result.snapshot.is_stale is True
+
+    async def test_snapshot_metadata_source_none_when_no_snapshot(self) -> None:
+        """Sprint 5: ``source='none'`` when there has never been a snapshot."""
+        repo = _repo_with_defaults(snapshot_age_seconds=None)
+        result = await StatsService(repo).get_stats()
+        assert result.snapshot is not None
+        assert result.snapshot.age_seconds is None
+        assert result.snapshot.source == "none"
+
+    async def test_ingestion_rate_window_exposes_precise_aliases(self) -> None:
+        """Sprint 5: precise ``*_per_min`` aliases populated alongside legacy."""
+        repo = _repo_with_defaults(
+            ingestion_rate_stats=[
+                {
+                    "window_seconds": 300,
+                    "entries_fetched": 6000,
+                    "entries_parsed": 1500,
+                    "certs_upserted": 1500,
+                    "hostnames_upserted": 3000,
+                    "new_unique_certificates": 400,
+                    "duplicate_certificates": 1100,
+                    "new_unique_hostnames": 120,
+                    "known_hostnames": 2880,
+                    "retryable_errors": 5,
+                    "terminal_entry_errors": 1,
+                }
+            ]
+        )
+        result = await StatsService(repo).get_stats()
+        assert result.ingestion_rate.windows
+        win = result.ingestion_rate.windows[0]
+        assert win.observations_per_min == pytest.approx(6000 / 300 * 60)
+        assert win.certificates_parsed_per_min == pytest.approx(300.0)
+        assert win.new_unique_certificates_per_min == pytest.approx(80.0)
+        assert win.duplicate_certificates_per_min == pytest.approx(220.0)
+        assert win.hostnames_observed_per_min == pytest.approx(win.hostnames_per_min)
+        assert win.new_unique_hostnames_per_min == pytest.approx(24.0)
+        assert win.known_hostnames_per_min == pytest.approx(576.0)
+        assert win.retryable_errors_per_min == pytest.approx(1.0)
+        assert win.terminal_entry_errors_per_min == pytest.approx(0.2)
 
     async def test_logs_list_populated(self) -> None:
         repo = _repo_with_defaults(total_logs=1, per_log_stats=[_make_row()])
@@ -302,8 +375,15 @@ class TestStatsService:
                 {
                     "window_seconds": 300,
                     "entries_fetched": 600,
+                    "entries_parsed": 120,
                     "certs_upserted": 120,
                     "hostnames_upserted": 60,
+                    "new_unique_certificates": 20,
+                    "duplicate_certificates": 100,
+                    "new_unique_hostnames": 12,
+                    "known_hostnames": 48,
+                    "retryable_errors": 3,
+                    "terminal_entry_errors": 1,
                 }
             ]
         )
@@ -392,30 +472,56 @@ class TestStatsService:
 
 class TestBuildIngestionRateStats:
     def test_single_window_rates_computed_correctly(self) -> None:
-        rows = [
-            {
-                "window_seconds": 300,
-                "entries_fetched": 300,
-                "certs_upserted": 150,
-                "hostnames_upserted": 60,
-            }
-        ]
+        rows = cast(
+            Sequence[Mapping[str, object]],
+            [
+                {
+                    "window_seconds": 300,
+                    "entries_fetched": 300,
+                    "entries_parsed": 270,
+                    "certs_upserted": 150,
+                    "hostnames_upserted": 60,
+                    "new_unique_certificates": 30,
+                    "duplicate_certificates": 120,
+                    "new_unique_hostnames": 9,
+                    "known_hostnames": 51,
+                    "retryable_errors": 3,
+                    "terminal_entry_errors": 1,
+                }
+            ],
+        )
         result = _build_ingestion_rate_stats(rows)
         assert len(result.windows) == 1
         w = result.windows[0]
         assert w.observations_per_sec == pytest.approx(1.0)
-        assert w.certs_per_min == pytest.approx(30.0)
+        assert w.certs_per_min == pytest.approx(54.0)
         assert w.hostnames_per_min == pytest.approx(12.0)
+        assert w.new_unique_certificates_per_min == pytest.approx(6.0)
+        assert w.duplicate_certificates_per_min == pytest.approx(24.0)
+        assert w.new_unique_hostnames_per_min == pytest.approx(1.8)
+        assert w.known_hostnames_per_min == pytest.approx(10.2)
+        assert w.retryable_errors_per_min == pytest.approx(0.6)
+        assert w.terminal_entry_errors_per_min == pytest.approx(0.2)
 
     def test_zero_counts_produce_zero_rates(self) -> None:
-        rows = [
-            {
-                "window_seconds": 300,
-                "entries_fetched": 0,
-                "certs_upserted": 0,
-                "hostnames_upserted": 0,
-            }
-        ]
+        rows = cast(
+            Sequence[Mapping[str, object]],
+            [
+                {
+                    "window_seconds": 300,
+                    "entries_fetched": 0,
+                    "entries_parsed": 0,
+                    "certs_upserted": 0,
+                    "hostnames_upserted": 0,
+                    "new_unique_certificates": 0,
+                    "duplicate_certificates": 0,
+                    "new_unique_hostnames": 0,
+                    "known_hostnames": 0,
+                    "retryable_errors": 0,
+                    "terminal_entry_errors": 0,
+                }
+            ],
+        )
         result = _build_ingestion_rate_stats(rows)
         assert result.windows[0].observations_per_sec == pytest.approx(0.0)
 
@@ -460,6 +566,13 @@ class TestBackfillRangeStats:
         assert result.backfill_ranges.completed == 0
         assert result.backfill_ranges.failed == 0
 
+    async def test_backfill_ranges_default_to_secondary_in_per_log_mode(self) -> None:
+        """Live range counts are compatibility-only when per-log dispatch is active."""
+        repo = _repo_with_defaults()
+        result = await StatsService(repo).get_stats()
+        assert result.backfill_ranges.dispatch_mode == "per-log"
+        assert result.backfill_ranges.is_primary is False
+
     async def test_backfill_ranges_populated_from_repository(self) -> None:
         """backfill_ranges mirrors values returned by the repository."""
         repo = _repo_with_defaults(
@@ -477,6 +590,14 @@ class TestBackfillRangeStats:
         assert result.backfill_ranges.stale_in_progress == 1
         assert result.backfill_ranges.completed == 500
         assert result.backfill_ranges.failed == 3
+
+    async def test_backfill_ranges_are_primary_in_legacy_range_mode(self) -> None:
+        """Legacy dispatch marks range status as the primary backfill signal."""
+        repo = _repo_with_defaults()
+        repo._ctpool_settings = MagicMock(ct_backfill_dispatch_mode="legacy-ranges")
+        result = await StatsService(repo).get_stats()
+        assert result.backfill_ranges.dispatch_mode == "legacy-ranges"
+        assert result.backfill_ranges.is_primary is True
 
     async def test_backfill_range_status_counts_called_with_default_timeout(
         self,

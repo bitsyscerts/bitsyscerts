@@ -2,19 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStats } from "@/hooks/useStats";
 
 const mockUseQuery = vi.fn<(options: unknown) => { fetchStatus: string }>();
-
-vi.mock("@tanstack/react-query", () => ({
-  useQuery: (options: unknown) => mockUseQuery(options),
-}));
-
-vi.mock("@/services/statsService", () => ({
-  getStats: vi.fn().mockResolvedValue({
+const { mockGetStats } = vi.hoisted(() => ({
+  mockGetStats: vi.fn().mockResolvedValue({
     total_hostnames: 1,
     total_certificates: 2,
     total_logs: 3,
     storage: { total_size_pretty: "1 MB", tables: [] },
     logs: [],
   }),
+}));
+
+vi.mock("@tanstack/react-query", () => ({
+  useQuery: (options: unknown) => mockUseQuery(options),
+}));
+
+vi.mock("@/services/statsService", () => ({
+  getStats: mockGetStats,
   STATS_QUERY_KEYS: { stats: () => ["stats"] },
 }));
 
@@ -32,6 +35,7 @@ describe("useStats", () => {
     useStats(5_000);
     expect(mockUseQuery).toHaveBeenCalledWith(
       expect.objectContaining({
+        queryFn: mockGetStats,
         refetchInterval: 5_000,
         refetchIntervalInBackground: false,
         refetchOnWindowFocus: true,

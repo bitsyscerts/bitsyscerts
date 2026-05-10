@@ -35,6 +35,16 @@ class _ResultRow:
     def one(self) -> tuple:
         return self._row
 
+    def one_or_none(self) -> tuple | None:
+        return self._row
+
+
+class _ResultRowNone:
+    """Mimics a RETURNING result with no row."""
+
+    def one_or_none(self) -> None:
+        return None
+
 
 def _parsed() -> ParsedCertificate:
     now = datetime(2024, 1, 1, tzinfo=UTC)
@@ -66,7 +76,8 @@ async def test_upsert_certificate_uses_returning_id_when_present() -> None:
 
     out = await upsert_certificate(session, _parsed(), is_wildcard_present=False)
 
-    assert out == expected
+    assert out.certificate_id == expected
+    assert out.inserted is True
     assert session.execute.await_count == 1
 
 
@@ -76,13 +87,14 @@ async def test_upsert_certificate_fallback_selects_existing_id() -> None:
     session.execute = AsyncMock(
         side_effect=[
             _ResultOneOrNone(None),
-            _ResultOne(expected),
+            _ResultRow((expected, False, 1)),
         ]
     )
 
     out = await upsert_certificate(session, _parsed(), is_wildcard_present=False)
 
-    assert out == expected
+    assert out.certificate_id == expected
+    assert out.inserted is False
     assert session.execute.await_count == 2
 
 
@@ -99,7 +111,8 @@ async def test_upsert_hostname_uses_returning_id_when_present() -> None:
 
     out = await upsert_hostname(session, "example.com", _parsed(), observed_at=observed)
 
-    assert out == expected
+    assert out.hostname_id == expected
+    assert out.inserted is True
     # First execute: upsert; no update since stored fingerprint is None
     # → should_update_latest_cert returns True, triggering a second execute
     assert session.execute.await_count == 2
@@ -126,6 +139,27 @@ async def test_upsert_hostname_no_update_when_existing_cert_wins() -> None:
 
     out = await upsert_hostname(session, "example.com", _parsed(), observed_at=observed)
 
-    assert out == expected
+    assert out.hostname_id == expected
+    assert out.inserted is True
     # Only the upsert execute; no update because stored cert wins
     assert session.execute.await_count == 1
+
+
+async def test_upsert_hostname_duplicate_returns_existing_id() -> None:
+    """Duplicate hostname path updates last_seen_ct and reports inserted=False."""
+    session = AsyncMock()
+    expected = uuid.uuid4()
+    observed = datetime(2024, 1, 1, tzinfo=UTC)
+    session.execute = AsyncMock(
+        side_effect=[
+            _ResultRowNone(),
+            _ResultRow((str(expected), None, None, None, None)),
+            _ResultOneOrNone(None),
+        ]
+    )
+
+    out = await upsert_hostname(session, "example.com", _parsed(), observed_at=observed)
+
+    assert out.hostname_id == expected
+    assert out.inserted is False
+    assert session.execute.await_count == 3

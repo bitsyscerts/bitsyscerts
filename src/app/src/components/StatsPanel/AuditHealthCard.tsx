@@ -5,6 +5,12 @@ import type { AuditHealth } from "../../types/stats";
 
 interface AuditHealthCardProps {
   auditHealth: AuditHealth;
+  /**
+   * Whether the active dispatch mode treats audit findings as primary
+   * operator signal. In per-log dispatch (default), audit/repair commands
+   * are positioned as advanced/debug tools, not routine workflow.
+   */
+  isPrimary?: boolean;
 }
 
 /**
@@ -12,7 +18,10 @@ interface AuditHealthCardProps {
  * Renders a green shield when no findings are open, or a warning with
  * per-severity badges when findings are present.
  */
-export function AuditHealthCard({ auditHealth }: AuditHealthCardProps) {
+export function AuditHealthCard({
+  auditHealth,
+  isPrimary = true,
+}: AuditHealthCardProps) {
   const isClean = auditHealth.total_open === 0;
 
   if (isClean) {
@@ -31,19 +40,31 @@ export function AuditHealthCard({ auditHealth }: AuditHealthCardProps) {
   return (
     <Stack gap="xs">
       <Group gap="xs">
-        <ThemeIcon color="orange" variant="light" size="sm">
+        <ThemeIcon
+          color={isPrimary ? "orange" : "gray"}
+          variant="light"
+          size="sm"
+        >
           <IconAlertTriangle size={14} />
         </ThemeIcon>
         <Title order={6}>{auditHealth.total_open} open audit finding(s)</Title>
       </Group>
       <Group gap="xs">
         {auditHealth.open_critical > 0 && (
-          <Badge color="red" variant="filled" size="sm">
+          <Badge
+            color={isPrimary ? "red" : "gray"}
+            variant={isPrimary ? "filled" : "light"}
+            size="sm"
+          >
             {auditHealth.open_critical} critical
           </Badge>
         )}
         {auditHealth.open_error > 0 && (
-          <Badge color="orange" variant="filled" size="sm">
+          <Badge
+            color={isPrimary ? "orange" : "gray"}
+            variant={isPrimary ? "filled" : "light"}
+            size="sm"
+          >
             {auditHealth.open_error} error
           </Badge>
         )}
@@ -59,8 +80,18 @@ export function AuditHealthCard({ auditHealth }: AuditHealthCardProps) {
         )}
       </Group>
       <Text size="xs" c="dimmed">
-        Run <code>ctpool check-audit-gaps</code> to refresh. Use{" "}
-        <code>ctpool fix-audit-findings --dry-run</code> to preview repairs.
+        {isPrimary ? (
+          <>
+            Run <code>ctpool check-audit-gaps</code> to refresh. Use{" "}
+            <code>ctpool fix-audit-findings --dry-run</code> to preview repairs.
+          </>
+        ) : (
+          <>
+            Audit findings are advanced/debug diagnostics. Per-log workers
+            handle retryable failures inline; audit repair is not routine
+            workflow.
+          </>
+        )}
       </Text>
     </Stack>
   );

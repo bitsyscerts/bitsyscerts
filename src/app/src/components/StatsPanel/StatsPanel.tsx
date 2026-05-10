@@ -3,13 +3,20 @@ import { IconChartBar, IconAlertTriangle } from "@tabler/icons-react";
 import { useStats } from "@/hooks/useStats";
 import { AuditHealthCard } from "./AuditHealthCard";
 import { BackfillRangesCard } from "./BackfillRangesCard";
+import { BackfillStateCard } from "./BackfillStateCard";
 import { StatsSummary } from "./StatsSummary";
 import { StorageProfileCard } from "./StorageProfileCard";
 import { StorageTable } from "./StorageTable";
 import { LogStatsList } from "./LogStatsList";
 import { StatsPanelSkeleton } from "./StatsPanelSkeleton";
 import { IngestionRateCard } from "./IngestionRateCard";
+import { IngestionHealthCard } from "./IngestionHealthCard";
+import { LegacyDiagnosticsSection } from "./LegacyDiagnosticsSection";
+import { MaintenancePanel } from "./MaintenancePanel";
+import { SnapshotFreshnessCard } from "./SnapshotFreshnessCard";
 import { TailFreshnessCard } from "./TailFreshnessCard";
+import { WorkerActivityCard } from "./WorkerActivityCard";
+import { isPerLogPrimaryMode } from "@/utils/statsMode";
 
 /**
  * Collapsible Accordion panel showing ingestion statistics. Uses useStats
@@ -32,18 +39,35 @@ export function StatsPanel() {
         </Alert>
       );
     }
+    const perLogPrimary = isPerLogPrimaryMode(data);
     return (
       <Stack gap="lg">
+        <SnapshotFreshnessCard snapshot={data.snapshot} />
         <StatsSummary
           totalHostnames={data.total_hostnames}
           totalCertificates={data.total_certificates}
           totalLogs={data.total_logs}
         />
-        <IngestionRateCard ingestionRate={data.ingestion_rate} />
+        {data.workers && <WorkerActivityCard workers={data.workers} />}
+        {data.ingestion_health && (
+          <IngestionHealthCard ingestionHealth={data.ingestion_health} />
+        )}
+        {data.maintenance && (
+          <MaintenancePanel maintenance={data.maintenance} />
+        )}
+        {data.backfill_state && (
+          <BackfillStateCard state={data.backfill_state} />
+        )}
         <TailFreshnessCard tailFreshness={data.tail_freshness} />
-        <BackfillRangesCard backfillRanges={data.backfill_ranges} />
-        {data.audit_health && (
-          <AuditHealthCard auditHealth={data.audit_health} />
+        <IngestionRateCard ingestionRate={data.ingestion_rate} />
+        {!perLogPrimary && (
+          <BackfillRangesCard backfillRanges={data.backfill_ranges} isPrimary />
+        )}
+        {!perLogPrimary && data.audit_health && (
+          <AuditHealthCard
+            auditHealth={data.audit_health}
+            isPrimary={!perLogPrimary}
+          />
         )}
         <StorageProfileCard storageProfile={data.storage_profile} />
         <Text size="sm" fw={600}>
@@ -57,6 +81,12 @@ export function StatsPanel() {
           CT Logs
         </Text>
         <LogStatsList logs={data.logs} />
+        {perLogPrimary && (
+          <LegacyDiagnosticsSection
+            backfillRanges={data.backfill_ranges}
+            auditHealth={data.audit_health}
+          />
+        )}
       </Stack>
     );
   }

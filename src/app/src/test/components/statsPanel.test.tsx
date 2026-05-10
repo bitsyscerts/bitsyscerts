@@ -166,3 +166,151 @@ describe("StatsPanel with stale backfill claims", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("StatsPanel per-log primary mode", () => {
+  const PER_LOG_DATA = {
+    ...MOCK_DATA,
+    workers: {
+      active_total: 1,
+      stale_total: 0,
+      tail_active: 0,
+      backfill_active: 1,
+      items: [],
+    },
+    backfill_state: {
+      total_logs: 2,
+      pending: 0,
+      claimed: 0,
+      processing: 1,
+      retrying: 0,
+      paused: 0,
+      complete: 1,
+      error: 0,
+      stale: 0,
+      items: [],
+      dispatch_mode: "per-log",
+      is_primary: true,
+    },
+    backfill_ranges: {
+      pending: 0,
+      in_progress: 0,
+      stale_in_progress: 0,
+      completed: 0,
+      failed: 198,
+      dispatch_mode: "per-log",
+      is_primary: false,
+    },
+  };
+
+  beforeEach(() => {
+    mockUseStats.mockReturnValue({
+      data: PER_LOG_DATA,
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useStats>);
+  });
+
+  it("renders the Per-Log Backfill State card", () => {
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+    expect(screen.getByText("Per-Log Backfill State")).toBeInTheDocument();
+  });
+
+  it("renders the advanced/legacy section heading", () => {
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+    expect(
+      screen.getByText("Advanced / Legacy Range State"),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT show legacy failed ranges as primary red alert", () => {
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+    expect(
+      screen.queryByText(/Failed backfill ranges detected/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses backfill_ranges metadata when backfill_state is absent", () => {
+    mockUseStats.mockReturnValue({
+      data: {
+        ...MOCK_DATA,
+        backfill_ranges: {
+          pending: 0,
+          in_progress: 0,
+          stale_in_progress: 0,
+          completed: 0,
+          failed: 5,
+          dispatch_mode: "per-log",
+          is_primary: false,
+        },
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useStats>);
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+    expect(
+      screen.getByText("Advanced / Legacy Range State"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Failed backfill ranges detected/i),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("StatsPanel legacy-ranges primary mode", () => {
+  it("renders failed ranges alert as primary when is_primary=true", () => {
+    mockUseStats.mockReturnValue({
+      data: {
+        ...MOCK_DATA,
+        backfill_state: {
+          total_logs: 0,
+          pending: 0,
+          claimed: 0,
+          processing: 0,
+          retrying: 0,
+          paused: 0,
+          complete: 0,
+          error: 0,
+          stale: 0,
+          items: [],
+          dispatch_mode: "legacy-ranges",
+          is_primary: false,
+        },
+        backfill_ranges: {
+          pending: 0,
+          in_progress: 0,
+          stale_in_progress: 0,
+          completed: 0,
+          failed: 5,
+          dispatch_mode: "legacy-ranges",
+          is_primary: true,
+        },
+      },
+      isLoading: false,
+      isError: false,
+    } as unknown as ReturnType<typeof useStats>);
+    render(
+      <AllProviders>
+        <StatsPanel />
+      </AllProviders>,
+    );
+    expect(
+      screen.getByText(/Failed backfill ranges detected/i),
+    ).toBeInTheDocument();
+  });
+});

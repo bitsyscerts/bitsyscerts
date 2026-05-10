@@ -191,8 +191,15 @@ class TestQueryIngestionRateWindows:
         """One execute call per window, results combined into a list."""
         mapping_row = {
             "entries_fetched": 100,
+            "entries_parsed": 80,
             "certs_upserted": 50,
             "hostnames_upserted": 20,
+            "new_unique_certificates": 10,
+            "duplicate_certificates": 40,
+            "new_unique_hostnames": 5,
+            "known_hostnames": 15,
+            "retryable_errors": 2,
+            "terminal_entry_errors": 1,
         }
         result_mock = MagicMock()
         result_mock.mappings = MagicMock(
@@ -207,6 +214,7 @@ class TestQueryIngestionRateWindows:
         assert result[0]["window_seconds"] == 300
         assert result[1]["window_seconds"] == 3600
         assert result[0]["entries_fetched"] == 100
+        assert result[0]["new_unique_certificates"] == 10
 
     async def test_returns_empty_list_for_empty_windows(self) -> None:
         session = MagicMock()

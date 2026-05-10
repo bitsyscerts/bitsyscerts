@@ -36,12 +36,31 @@ def _make_settings_row(**overrides: object) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_get_settings_returns_none_when_not_seeded() -> None:
-    """get_settings returns None when no row exists."""
+async def test_get_settings_bootstraps_defaults_when_not_seeded() -> None:
+    """get_settings seeds the default Lite profile when no row exists."""
     repo = _make_repo(row=None)
     service = SettingsService(repo)
-    result = await service.get_settings()
-    assert result is None
+    row = _make_settings_row(updated_by="bootstrap")
+    bootstrap_config = MagicMock(name="bootstrap_config")
+
+    with (
+        patch(
+            "certsapi.settings.service.get_bootstrap_config",
+            return_value=bootstrap_config,
+        ) as config_mock,
+        patch(
+            "certsapi.settings.service.bootstrap_settings_from_env",
+            new_callable=AsyncMock,
+            return_value=row,
+        ) as bootstrap_mock,
+    ):
+        result = await service.get_settings()
+
+    assert result.storage_profile == "lite"
+    assert result.source == "database"
+    assert result.updated_by == "bootstrap"
+    config_mock.assert_called_once_with()
+    bootstrap_mock.assert_awaited_once_with(repo._session, bootstrap_config)
 
 
 @pytest.mark.asyncio

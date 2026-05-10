@@ -82,6 +82,7 @@ def _session_factory(log: CtLogSource) -> MagicMock:
     session.begin = MagicMock()
     session.begin.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.add = MagicMock()
     execute_result = MagicMock()
     execute_result.scalar.return_value = True
     session.execute.return_value = execute_result

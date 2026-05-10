@@ -1,104 +1,125 @@
-"""Unit tests for maintenance_runner module."""
+"""Unit tests for the Sprint 4B maintenance loop.
+
+The default cycle is now lightweight: it always runs
+``prune-for-storage-profile`` and **only** runs the deep audit-gap scan
+when the operator explicitly opts in via
+``BITSYSCERTS_ENABLE_SCHEDULED_AUDIT=true`` AND the audit interval has
+elapsed.  Audit failures must never block the prune step.
+"""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from ctpool import maintenance_runner
 from ctpool.maintenance_runner import run_maintenance_once
 
 
-def _make_settings(
-    maintenance_interval: int = 3600,
-    metrics_retention_days: int = 30,
-    observation_retention_days: int = 7,
-    entry_outcome_retention_days: int = 7,
+def _settings(
+    *,
+    enable_audit: bool = False,
+    audit_interval: int = 21600,
 ) -> MagicMock:
     s = MagicMock()
-    s.ct_maintenance_interval_seconds = maintenance_interval
-    s.ct_metrics_retention_days = metrics_retention_days
-    s.ct_observation_retention_days = observation_retention_days
-    s.ct_entry_outcome_retention_days = entry_outcome_retention_days
+    s.ct_maintenance_interval_seconds = 3600
+    s.bitsyscerts_enable_scheduled_audit = enable_audit
+    s.bitsyscerts_audit_interval_seconds = audit_interval
     return s
 
 
+@pytest.fixture(autouse=True)
+def _reset_audit_clock() -> None:
+    """Reset the module-level audit interval clock between tests."""
+    maintenance_runner._LAST_SCHEDULED_AUDIT_AT = 0.0  # type: ignore[attr-defined]
+
+
 class TestRunMaintenanceOnce:
-    async def test_runs_all_four_steps_without_error(self) -> None:
-        settings = _make_settings()
-        with (
-            patch(
-                "ctpool.maintenance_runner._prune_metrics",
-                new_callable=lambda: lambda: AsyncMock(),
-            ) as pm,
-            patch(
-                "ctpool.maintenance_runner._prune_observations",
-                new_callable=lambda: lambda: AsyncMock(),
-            ) as po,
-            patch(
-                "ctpool.maintenance_runner._prune_entry_outcomes",
-                new_callable=lambda: lambda: AsyncMock(),
-            ) as pe,
-            patch(
-                "ctpool.maintenance_runner._check_audit_gaps",
-                new_callable=lambda: lambda: AsyncMock(),
-            ) as ca,
-        ):
-            pm.return_value = AsyncMock()
-            po.return_value = AsyncMock()
-            pe.return_value = AsyncMock()
-            ca.return_value = AsyncMock()
-            # The patching approach above won't work for coroutine functions.
-            # Use a simpler patch strategy:
-            pass
-
-        # Simpler: patch the helper coroutines directly
-        prune_metrics_mock = AsyncMock()
-        prune_obs_mock = AsyncMock()
-        prune_eo_mock = AsyncMock()
+    @pytest.mark.asyncio
+    async def test_prune_runs_audit_does_not_by_default(self) -> None:
+        """Default settings (audit disabled) must not run audit-gaps."""
+        prune_mock = AsyncMock()
         audit_mock = AsyncMock()
-
         with (
-            patch("ctpool.maintenance_runner._prune_metrics", prune_metrics_mock),
-            patch("ctpool.maintenance_runner._prune_observations", prune_obs_mock),
-            patch("ctpool.maintenance_runner._prune_entry_outcomes", prune_eo_mock),
+            patch("ctpool.maintenance_runner._prune_for_profile", prune_mock),
             patch("ctpool.maintenance_runner._check_audit_gaps", audit_mock),
         ):
-            await run_maintenance_once(settings)
+            await run_maintenance_once(_settings())
+        prune_mock.assert_awaited_once()
+        audit_mock.assert_not_awaited()
 
-        prune_metrics_mock.assert_awaited_once()
-        prune_obs_mock.assert_awaited_once()
-        prune_eo_mock.assert_awaited_once()
-        audit_mock.assert_awaited_once()
-
-    async def test_continues_after_step_failure(self) -> None:
-        """A failure in one step should not block subsequent steps."""
-        settings = _make_settings()
-
-        async def _fail(s: object, c: object) -> None:
-            raise RuntimeError("step failed")
-
-        obs_mock = AsyncMock()
-        eo_mock = AsyncMock()
+    @pytest.mark.asyncio
+    async def test_audit_runs_when_opted_in_and_due(self) -> None:
+        prune_mock = AsyncMock()
         audit_mock = AsyncMock()
-
         with (
-            patch("ctpool.maintenance_runner._prune_metrics", _fail),
-            patch("ctpool.maintenance_runner._prune_observations", obs_mock),
-            patch("ctpool.maintenance_runner._prune_entry_outcomes", eo_mock),
+            patch("ctpool.maintenance_runner._prune_for_profile", prune_mock),
             patch("ctpool.maintenance_runner._check_audit_gaps", audit_mock),
         ):
-            # Should not raise even though _prune_metrics raises
-            await run_maintenance_once(settings)
-
-        obs_mock.assert_awaited_once()
-        eo_mock.assert_awaited_once()
+            await run_maintenance_once(_settings(enable_audit=True))
+        prune_mock.assert_awaited_once()
         audit_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_audit_does_not_rerun_within_interval(self) -> None:
+        """Second invocation inside the interval window must not re-run audit."""
+        prune_mock = AsyncMock()
+        audit_mock = AsyncMock()
+        with (
+            patch("ctpool.maintenance_runner._prune_for_profile", prune_mock),
+            patch("ctpool.maintenance_runner._check_audit_gaps", audit_mock),
+        ):
+            settings = _settings(enable_audit=True, audit_interval=21600)
+            await run_maintenance_once(settings)
+            await run_maintenance_once(settings)
+        assert prune_mock.await_count == 2
+        audit_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_audit_failure_does_not_block_prune(self) -> None:
+        async def _audit_fail(_s: object, _c: object) -> None:
+            raise RuntimeError("audit blew up")
+
+        prune_mock = AsyncMock()
+        with (
+            patch("ctpool.maintenance_runner._prune_for_profile", prune_mock),
+            patch("ctpool.maintenance_runner._check_audit_gaps", _audit_fail),
+        ):
+            # Must not raise; prune must still have run.
+            await run_maintenance_once(_settings(enable_audit=True))
+        prune_mock.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_prune_failure_does_not_propagate(self) -> None:
+        async def _prune_fail(_s: object, _c: object) -> None:
+            raise RuntimeError("prune blew up")
+
+        with patch("ctpool.maintenance_runner._prune_for_profile", _prune_fail):
+            await run_maintenance_once(_settings())
+
+
+class TestPruneForProfile:
+    @pytest.mark.asyncio
+    async def test_invokes_orchestrator_with_execute_true(self) -> None:
+        from ctpool.maintenance_runner import _prune_for_profile
+
+        run_mock = AsyncMock()
+        with patch(
+            "ctpool._cli_prune_storage_profile_impl.run_prune_for_storage_profile",
+            run_mock,
+        ):
+            from rich.console import Console  # noqa: PLC0415
+
+            await _prune_for_profile(_settings(), Console(quiet=True))
+
+        run_mock.assert_awaited_once()
+        assert run_mock.await_args.kwargs["execute"] is True
 
 
 class TestCheckAuditGaps:
+    @pytest.mark.asyncio
     async def test_skips_gracefully_when_module_not_available(self) -> None:
-        """_check_audit_gaps should not raise when ImportError occurs."""
-        settings = _make_settings()
-
         with patch.dict(
             "sys.modules",
             {"ctpool._cli_check_audit_impl": None},  # type: ignore[dict-item]
@@ -107,6 +128,4 @@ class TestCheckAuditGaps:
 
             from ctpool.maintenance_runner import _check_audit_gaps  # noqa: PLC0415
 
-            console = Console(quiet=True)
-            # Should complete without raising
-            await _check_audit_gaps(settings, console)
+            await _check_audit_gaps(_settings(), Console(quiet=True))

@@ -38,7 +38,7 @@ async def run_prune_expired_certs(
     batch_size: int = _DEFAULT_BATCH_SIZE,
     limit: int = _DEFAULT_LIMIT,
     console: Console,
-) -> None:
+) -> PruneSummary:
     """Prune expired certificate rows that are not the latest cert for any hostname.
 
     Args:
@@ -47,6 +47,11 @@ async def run_prune_expired_certs(
         batch_size:     Certificates to delete per transaction.
         limit:          Max certs to delete total (0 = unlimited).
         console:        Rich console for output.
+
+    Returns:
+        The :class:`PruneSummary` with exact deletion counts.  Counts are
+        zero on dry-run and reflect rows actually deleted by *this*
+        invocation on execute.
     """
     settings = get_settings()
     days = (
@@ -83,7 +88,7 @@ async def run_prune_expired_certs(
     if not execute:
         summary.status = "dry_run"
         reporter.print_summary(summary)
-        return
+        return summary
 
     # --- Create a prune_run audit row ---
     async with factory() as session:
@@ -155,3 +160,4 @@ async def run_prune_expired_certs(
             )
 
     reporter.print_summary(summary)
+    return summary

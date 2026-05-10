@@ -119,6 +119,24 @@ async def test_write_normalized_entry_inserts_all_rows(
     assert len(obs) == 1
 
 
+async def test_write_normalized_entry_returns_new_uniqueness_metrics(
+    db_session: AsyncSession,
+) -> None:
+    """First-seen certificate and hostnames are classified as new."""
+    log = _make_log_source(url="https://ct6.example.com/log/", log_id="Y3Q2MQ==")
+    db_session.add(log)
+    await db_session.flush()
+
+    entry = _make_entry(log.id, hostnames=["example.com", "www.example.com"])
+    result = await write_normalized_entry(db_session, entry)
+
+    assert result.new_unique_certificates == 1
+    assert result.duplicate_certificates == 0
+    assert result.hostnames_observed == 2
+    assert result.new_unique_hostnames == 2
+    assert result.known_hostnames == 0
+
+
 async def test_write_normalized_entry_with_no_hostnames(
     db_session: AsyncSession,
 ) -> None:
@@ -151,12 +169,14 @@ async def test_write_normalized_entry_idempotent_on_same_fingerprint(
 
     entry1 = _make_entry(log.id, log_index=10)
     entry2 = _make_entry(log.id, log_index=11)  # same fingerprint, different index
-    await write_normalized_entry(db_session, entry1)
-    await write_normalized_entry(db_session, entry2)
+    first = await write_normalized_entry(db_session, entry1)
+    second = await write_normalized_entry(db_session, entry2)
     await db_session.flush()
 
     certs = list((await db_session.execute(select(Certificate))).scalars().all())
     assert len(certs) == 1  # deduplicated by fingerprint
+    assert first.new_unique_certificates == 1
+    assert second.duplicate_certificates == 1
 
     obs = list((await db_session.execute(select(CtLogObservation))).scalars().all())
     assert len(obs) == 2  # two distinct indices

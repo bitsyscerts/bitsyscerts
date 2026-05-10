@@ -34,21 +34,32 @@ def _make_settings_row(**overrides: object) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_get_storage_settings_returns_404_when_not_seeded() -> None:
-    """GET /v1/settings/storage returns 404 when no settings exist."""
+async def test_get_storage_settings_bootstraps_lite_when_not_seeded() -> None:
+    """GET /v1/settings/storage seeds the default Lite profile when empty."""
     app = create_app(_SETTINGS)
+    row = _make_settings_row(updated_by="bootstrap")
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as client:
-        with patch(
-            "certsapi.settings.repository.SettingsRepository.get_active_settings",
-            new_callable=AsyncMock,
-            return_value=None,
+        with (
+            patch(
+                "certsapi.settings.repository.SettingsRepository.get_active_settings",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch(
+                "certsapi.settings.service.bootstrap_settings_from_env",
+                new_callable=AsyncMock,
+                return_value=row,
+            ),
         ):
             response = await client.get("/v1/settings/storage")
 
-    assert response.status_code == 404
+    assert response.status_code == 200
+    body = response.json()
+    assert body["storage_profile"] == "lite"
+    assert body["updated_by"] == "bootstrap"
 
 
 @pytest.mark.asyncio

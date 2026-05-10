@@ -38,9 +38,10 @@ def test_settings() -> Settings:
 async def async_engine(
     test_settings: Settings,
 ) -> AsyncGenerator[AsyncEngine, None]:
-    """Async SQLAlchemy engine connected to ctpool_test."""
+    """Async SQLAlchemy engine connected to a freshly recreated test schema."""
     engine = create_async_engine(str(test_settings.database_url), echo=False)
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:

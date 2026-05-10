@@ -186,8 +186,7 @@ async def query_ingestion_rate_windows(
         windows_seconds: List of window durations in seconds.
 
     Returns:
-        List of dicts with keys: window_seconds, entries_fetched, certs_upserted,
-        hostnames_upserted.
+        List of dicts with one summed row per requested window.
     """
     rows = []
     for window_seconds in windows_seconds:
@@ -196,11 +195,32 @@ async def query_ingestion_rate_windows(
             func.coalesce(func.sum(IngestionMetric.entries_fetched), 0).label(
                 "entries_fetched"
             ),
+            func.coalesce(func.sum(IngestionMetric.entries_parsed), 0).label(
+                "entries_parsed"
+            ),
             func.coalesce(func.sum(IngestionMetric.certs_upserted), 0).label(
                 "certs_upserted"
             ),
             func.coalesce(func.sum(IngestionMetric.hostnames_upserted), 0).label(
                 "hostnames_upserted"
+            ),
+            func.coalesce(func.sum(IngestionMetric.new_unique_certificates), 0).label(
+                "new_unique_certificates"
+            ),
+            func.coalesce(func.sum(IngestionMetric.duplicate_certificates), 0).label(
+                "duplicate_certificates"
+            ),
+            func.coalesce(func.sum(IngestionMetric.new_unique_hostnames), 0).label(
+                "new_unique_hostnames"
+            ),
+            func.coalesce(func.sum(IngestionMetric.known_hostnames), 0).label(
+                "known_hostnames"
+            ),
+            func.coalesce(func.sum(IngestionMetric.retryable_errors), 0).label(
+                "retryable_errors"
+            ),
+            func.coalesce(func.sum(IngestionMetric.terminal_entry_errors), 0).label(
+                "terminal_entry_errors"
             ),
         ).where(IngestionMetric.snapshot_at >= cutoff)
         result = (await session.execute(stmt)).mappings().one()

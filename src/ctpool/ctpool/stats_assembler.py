@@ -39,6 +39,11 @@ def assemble_stats_payload(
     per_log_rows: list[dict[str, Any]],
     active_settings: CtInstanceSettings | None,
     now: datetime | None = None,
+    worker_summary: dict[str, Any] | None = None,
+    backfill_state: dict[str, Any] | None = None,
+    maintenance_run: dict[str, Any] | None = None,
+    maintenance_interval_seconds: int = 3600,
+    dispatch_mode: str = "per-log",
 ) -> dict[str, Any]:
     """Build a stats payload dict from pre-fetched query results.
 
@@ -57,6 +62,9 @@ def assemble_stats_payload(
         per_log_rows: Output of per-log stats query.
         active_settings: Active ``CtInstanceSettings`` row, or ``None``.
         now: Timestamp to use as "now" (defaults to ``datetime.now(UTC)``).
+        worker_summary: Optional worker summary dict from
+            :func:`~ctpool.worker_queries.query_worker_summary`; included
+            under the ``"workers"`` key when provided.
 
     Returns:
         A dict that can be validated against ``StatsResponse``.
@@ -79,16 +87,31 @@ def assemble_stats_payload(
         for row in storage_data["tables"]
     ]
 
+    per_log_primary = dispatch_mode == "per-log"
     contention_dict = _build_contention_dict(contention_snapshot)
     rate_list = _build_ingestion_rate_list(rate_rows)
     freshness_dict = _build_freshness_dict(freshness_row)
     entry_outcomes_dict = _build_entry_outcomes_dict(outcome_counts)
     backfill_ranges_dict = _build_backfill_ranges_dict(backfill_status_counts)
+    backfill_ranges_dict["dispatch_mode"] = dispatch_mode
+    backfill_ranges_dict["is_primary"] = not per_log_primary
     backfill_health_dict = _build_backfill_health_dict(
         backfill_status_counts["failed"],
         backfill_status_counts["stale_in_progress"],
     )
     storage_profile_dict = _build_storage_profile_dict(active_settings)
+    if backfill_state is not None:
+        backfill_state = {
+            **backfill_state,
+            "dispatch_mode": dispatch_mode,
+            "is_primary": per_log_primary,
+        }
+    ingestion_health_dict = _build_ingestion_health_dict(
+        backfill_state, worker_summary, outcome_counts
+    )
+    maintenance_dict = _build_maintenance_dict(
+        maintenance_run, maintenance_interval_seconds, active_settings
+    )
     logs_list = [_build_log_item_dict(row, now) for row in per_log_rows]
 
     return {
@@ -120,6 +143,10 @@ def assemble_stats_payload(
         },
         "audit_health": _build_audit_health_dict(audit_counts),
         "logs": logs_list,
+        "workers": worker_summary,
+        "backfill_state": backfill_state,
+        "ingestion_health": ingestion_health_dict,
+        "maintenance": maintenance_dict,
     }
 
 
@@ -304,12 +331,32 @@ def _build_ingestion_rate_list(
     for row in rate_rows:
         secs = int(row["window_seconds"])
         minutes = secs / 60.0
+        observations_per_min = float(row["entries_fetched"]) / minutes
+        certificates_parsed_per_min = float(row["entries_parsed"]) / minutes
+        hostnames_observed_per_min = float(row["hostnames_upserted"]) / minutes
         windows.append(
             {
                 "window_seconds": secs,
                 "observations_per_sec": float(row["entries_fetched"]) / secs,
-                "certs_per_min": float(row["certs_upserted"]) / minutes,
-                "hostnames_per_min": float(row["hostnames_upserted"]) / minutes,
+                "certs_per_min": certificates_parsed_per_min,
+                "hostnames_per_min": hostnames_observed_per_min,
+                "observations_per_min": observations_per_min,
+                "certificates_parsed_per_min": certificates_parsed_per_min,
+                "new_unique_certificates_per_min": (
+                    float(row["new_unique_certificates"]) / minutes
+                ),
+                "duplicate_certificates_per_min": (
+                    float(row["duplicate_certificates"]) / minutes
+                ),
+                "hostnames_observed_per_min": hostnames_observed_per_min,
+                "new_unique_hostnames_per_min": (
+                    float(row["new_unique_hostnames"]) / minutes
+                ),
+                "known_hostnames_per_min": float(row["known_hostnames"]) / minutes,
+                "retryable_errors_per_min": (float(row["retryable_errors"]) / minutes),
+                "terminal_entry_errors_per_min": (
+                    float(row["terminal_entry_errors"]) / minutes
+                ),
             }
         )
     return windows
@@ -406,6 +453,122 @@ def _build_audit_health_dict(counts: dict[str, int]) -> dict[str, Any]:
         "open_info": counts.get("info", 0),
         "total_open": total,
         "status": "attention_needed" if actionable > 0 else "ok",
+    }
+
+
+def _build_ingestion_health_dict(
+    backfill_state: dict[str, Any] | None,
+    worker_summary: dict[str, Any] | list[Any] | None,
+    outcome_counts: dict[str, int] | None,
+) -> dict[str, Any]:
+    """Build the ingestion_health summary card.
+
+    Aggregates per-log self-healing state (retrying / rate-limited /
+    paused / error counters), recent terminal-entry-error totals, and
+    derived stale-worker counts. Used by the dashboard error-summary
+    card so operators can see at a glance whether self-healing is
+    making progress or whether logs need manual attention.
+    """
+    retrying = 0
+    rate_limited = 0
+    paused = 0
+    error_logs = 0
+    total_retryable = 0
+    total_terminal = 0
+    if backfill_state is not None:
+        retrying = int(backfill_state.get("retrying") or 0)
+        rate_limited = int(backfill_state.get("rate_limited") or 0)
+        paused = int(backfill_state.get("paused") or 0)
+        error_logs = int(backfill_state.get("error") or 0)
+        for item in backfill_state.get("items") or []:
+            total_retryable += int(item.get("retryable_error_count") or 0)
+            total_terminal += int(item.get("terminal_error_count") or 0)
+
+    stale_workers = 0
+    if isinstance(worker_summary, dict):
+        stale_workers = int(worker_summary.get("stale") or 0)
+
+    recent_terminal_outcomes = 0
+    if outcome_counts is not None:
+        for key, value in outcome_counts.items():
+            if key in ("parse_error", "unsupported_entry_type", "write_error"):
+                recent_terminal_outcomes += int(value or 0)
+
+    needs_attention = paused > 0 or error_logs > 0
+    status = "attention_needed" if needs_attention else "ok"
+
+    return {
+        "retrying_logs": retrying,
+        "rate_limited_logs": rate_limited,
+        "paused_logs": paused,
+        "error_logs": error_logs,
+        "stale_workers": stale_workers,
+        "retryable_error_total": total_retryable,
+        "terminal_error_total": total_terminal,
+        "recent_terminal_outcomes": recent_terminal_outcomes,
+        "status": status,
+    }
+
+
+def _build_maintenance_dict(
+    maintenance_run: dict[str, Any] | None,
+    interval_seconds: int,
+    active_settings: Any,
+) -> dict[str, Any]:
+    """Build the ``maintenance`` retention-status card.
+
+    Surfaces last prune status, deletion totals, and next-due time so
+    operators can confirm Lite mode is actually being enforced.  When no
+    maintenance run has occurred yet the card returns a ``never_ran``
+    status and the dashboard can show the warning banner.
+    """
+    from ctpool.maintenance_queries import compute_next_due, is_lite_enforced
+
+    profile = active_settings.storage_profile if active_settings is not None else None
+    if maintenance_run is None:
+        return {
+            "status": "never_ran",
+            "active_profile": profile,
+            "last_prune_started_at": None,
+            "last_prune_completed_at": None,
+            "last_prune_status": None,
+            "last_prune_mode": None,
+            "last_prune_deleted": {
+                "certificates": 0,
+                "certificate_hostnames": 0,
+                "observations": 0,
+                "entry_outcomes": 0,
+                "ingestion_metrics": 0,
+            },
+            "preserved_hostnames": None,
+            "duration_ms": None,
+            "next_prune_due_at": None,
+            "is_enforced": False,
+            "error_message": None,
+        }
+
+    next_due = compute_next_due(maintenance_run.get("started_at"), interval_seconds)
+    enforced = is_lite_enforced(maintenance_run, interval_seconds=interval_seconds)
+    return {
+        "status": maintenance_run.get("status", "unknown"),
+        "active_profile": maintenance_run.get("storage_profile") or profile,
+        "last_prune_started_at": maintenance_run.get("started_at"),
+        "last_prune_completed_at": maintenance_run.get("completed_at"),
+        "last_prune_status": maintenance_run.get("status"),
+        "last_prune_mode": maintenance_run.get("mode"),
+        "last_prune_deleted": maintenance_run.get("deleted")
+        or {
+            "certificates": 0,
+            "certificate_hostnames": 0,
+            "observations": 0,
+            "entry_outcomes": 0,
+            "ingestion_metrics": 0,
+        },
+        "preserved_hostnames": maintenance_run.get("preserved_hostnames"),
+        "duration_ms": maintenance_run.get("duration_ms"),
+        "next_prune_due_at": next_due,
+        "is_enforced": enforced,
+        "error_message": maintenance_run.get("error_message"),
     }
 
 

@@ -48,8 +48,18 @@ from ctpool.fetcher import fetch_entries, fetch_sth
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
-from ctpool.outcome_constants import OUTCOME_PARSE_ERROR, OUTCOME_UNSUPPORTED_ENTRY_TYPE
+from ctpool.outcome_constants import (
+    OUTCOME_PARSE_ERROR,
+    OUTCOME_UNSUPPORTED_ENTRY_TYPE,
+    OUTCOME_WRITE_ERROR,
+)
 from ctpool.parser import parse_leaf_entry
+from ctpool.worker_registry import (
+    WorkerCounters,
+    heartbeat_worker,
+    mark_worker_stopped,
+    register_worker,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -114,13 +124,14 @@ async def _process_log_batch(
         return 0, True, DbContentionObservation(0, 0)
 
     count = 0
-    hostname_count = 0
+    parsed_count = 0
     retry_accumulator = DbRetryPressureAccumulator()
     for i, raw_entry in enumerate(entries):
         entry_index = start + i
         try:
             parsed = parse_leaf_entry(raw_entry.leaf_input)
             normalized = build_normalized_entry(parsed, log.id, entry_index)
+            parsed_count += 1
 
             def _on_retry(
                 attempt: int,
@@ -139,7 +150,7 @@ async def _process_log_batch(
                 )
 
             retry_accumulator.record_entry_attempt()
-            await persist_entry_with_retry(
+            write_metrics = await persist_entry_with_retry(
                 session,
                 normalized,
                 max_retries=settings.ct_deadlock_max_retries,
@@ -148,7 +159,7 @@ async def _process_log_batch(
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
             )
             count += 1
-            hostname_count += len(normalized.hostnames)
+            metrics.record_entry_write_metrics(write_metrics)
         except UnsupportedEntryTypeError as exc:
             _logger.warning(
                 "unsupported entry type log=%s index=%d: %s",
@@ -157,12 +168,14 @@ async def _process_log_batch(
                 exc,
             )
             metrics.record_parse_error()
+            metrics.record_terminal_entry_errors(1)
             await persist_failure_outcome(
                 session, log.id, entry_index, OUTCOME_UNSUPPORTED_ENTRY_TYPE, exc
             )
         except ParseError as exc:
             _logger.warning("parse error log=%s index=%d: %s", log.id, entry_index, exc)
             metrics.record_parse_error()
+            metrics.record_terminal_entry_errors(1)
             await persist_failure_outcome(
                 session, log.id, entry_index, OUTCOME_PARSE_ERROR, exc
             )
@@ -174,16 +187,20 @@ async def _process_log_batch(
                 exc.__class__.__name__,
                 exc,
             )
+            metrics.record_terminal_entry_errors(1)
+            await persist_failure_outcome(
+                session, log.id, entry_index, OUTCOME_WRITE_ERROR, exc
+            )
 
     metrics.record_entries_fetched(len(entries))
-    metrics.record_entries_parsed(count)
-    metrics.record_certs_upserted(count)
-    metrics.record_hostnames_upserted(hostname_count)
+    metrics.record_entries_parsed(parsed_count)
+    observation = retry_accumulator.drain()
+    metrics.record_retryable_errors(observation.retryable_errors)
 
     next_index = start + len(entries)
     async with session.begin():
         await advance_tail_cursor(session, log.id, next_index)
-    return count, False, retry_accumulator.drain()
+    return count, False, observation
 
 
 async def _tail_one_log(
@@ -218,15 +235,25 @@ async def _tail_one_log(
                 settings=settings,
                 init_from_end=init_from_end,
             )
-            if count > 0:
+            if metrics.has_activity():
                 async with session.begin():
                     await metrics.persist_snapshot(session, log.id)
             return count, is_empty, False, observation, None
         except RateLimitError as exc:
             _logger.warning("rate limited tail log=%s: %s", log.id, exc)
+            metrics.record_retryable_errors(1)
+            if metrics.has_activity():
+                async with session_factory() as session:
+                    async with session.begin():
+                        await metrics.persist_snapshot(session, log.id)
             return 0, True, True, DbContentionObservation(0, 0), exc.retry_after_seconds
         except FetchError as exc:
             _logger.error("fetch error tail log=%s: %s", log.id, exc)
+            metrics.record_retryable_errors(1)
+            if metrics.has_activity():
+                async with session_factory() as session:
+                    async with session.begin():
+                        await metrics.persist_snapshot(session, log.id)
             return 0, False, False, DbContentionObservation(0, 0), None
 
 
@@ -270,125 +297,152 @@ async def run_tail(
     rate_limit_hits: dict[_uuid.UUID, int] = {}
 
     async with client:
-        while True:
-            if is_disk_critical(
-                settings.ct_critical_free_disk_gb, settings.ct_disk_check_path
-            ):
-                _logger.critical("disk critical — halting tail worker")
-                # Exit non-zero so Docker applies restart backoff instead of
-                # immediately relaunching and looping on the same condition.
-                raise SystemExit(1)
-
-            if is_disk_low(settings.ct_min_free_disk_gb, settings.ct_disk_check_path):
-                _logger.warning(
-                    "disk low — pausing tail for %ds", _SLEEP_DISK_LOW_SECONDS
+        async with session_factory() as session:
+            async with session.begin():
+                _registry_row = await register_worker(
+                    session,
+                    worker_id=_worker_id(),
+                    worker_kind="tail",
                 )
-                if on_status is not None:
-                    on_status(f"Disk low — pausing {_SLEEP_DISK_LOW_SECONDS} s")
-                await asyncio.sleep(_SLEEP_DISK_LOW_SECONDS)
-                if once:
-                    break
-                continue
+        _registry_id = _registry_row.id
 
-            async with session_factory() as session:
-                logs = await get_eligible_tail_logs(session)
-
-            if log_id is not None:
-                logs = [lg for lg in logs if lg.id == log_id]
-            random.shuffle(logs)
-
-            any_empty = True
-            for log in logs:
-                if limit is not None and total_processed >= limit:
-                    return
-
-                now = time.monotonic()
-                if now < rate_limited_until.get(log.id, 0.0):
-                    continue
-
-                limit_remaining = (
-                    (limit - total_processed) if limit is not None else None
-                )
-                directive = await get_db_contention_directive(
-                    session_factory,
-                    settings,
-                    _batch,
-                )
-                effective_batch = resolve_effective_batch_size(_batch, directive)
-                db_sleep = await sleep_for_db_contention(directive, settings)
-                if db_sleep > 0.0 and on_status is not None:
-                    on_status(f"DB contention — pacing {db_sleep:.2f} s")
-                metrics = LogMetricsAccumulator()
-                (
-                    processed,
-                    is_empty,
-                    was_rate_limited,
-                    observation,
-                    retry_after,
-                ) = await _tail_one_log(
-                    log,
-                    session_factory,
-                    client,
-                    metrics,
-                    settings=settings,
-                    batch_size=effective_batch,
-                    limit_remaining=limit_remaining,
-                    init_from_end=init_from_end,
-                )
-
-                if was_rate_limited:
-                    hit_count = rate_limit_hits.get(log.id, 0) + 1
-                    rate_limit_hits[log.id] = hit_count
-                    if retry_after is not None:
-                        backoff_seconds: float = min(
-                            settings.ct_retry_after_max_seconds, retry_after
+        try:
+            while True:
+                async with session_factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=_registry_id,
+                            status="idle",
+                            current_index=None,
+                            batch_start_index=None,
+                            batch_end_index=None,
+                            counters=WorkerCounters(),
                         )
-                    else:
-                        backoff_seconds = min(
-                            settings.ct_rate_limit_backoff_max_seconds,
-                            settings.ct_rate_limit_backoff_seconds
-                            * (2 ** (hit_count - 1)),
-                        )
-                    rate_limited_until[log.id] = now + float(backoff_seconds)
+
+                if is_disk_critical(
+                    settings.ct_critical_free_disk_gb, settings.ct_disk_check_path
+                ):
+                    _logger.critical("disk critical — halting tail worker")
+                    # Exit non-zero so Docker applies restart backoff instead of
+                    # immediately relaunching and looping on the same condition.
+                    raise SystemExit(1)
+
+                check_path = settings.ct_disk_check_path
+                if is_disk_low(settings.ct_min_free_disk_gb, check_path):
+                    _logger.warning(
+                        "disk low — pausing tail for %ds", _SLEEP_DISK_LOW_SECONDS
+                    )
                     if on_status is not None:
-                        on_status(
-                            "Rate limited for "
-                            f"{log.description} — pausing {backoff_seconds} s"
-                        )
+                        on_status(f"Disk low — pausing {_SLEEP_DISK_LOW_SECONDS} s")
+                    await asyncio.sleep(_SLEEP_DISK_LOW_SECONDS)
+                    if once:
+                        break
                     continue
 
-                if observation.has_activity:
-                    await submit_db_contention_observation(
+                async with session_factory() as session:
+                    logs = await get_eligible_tail_logs(session)
+
+                if log_id is not None:
+                    logs = [lg for lg in logs if lg.id == log_id]
+                random.shuffle(logs)
+
+                any_empty = True
+                for log in logs:
+                    if limit is not None and total_processed >= limit:
+                        return
+
+                    now = time.monotonic()
+                    if now < rate_limited_until.get(log.id, 0.0):
+                        continue
+
+                    limit_remaining = (
+                        (limit - total_processed) if limit is not None else None
+                    )
+                    directive = await get_db_contention_directive(
                         session_factory,
                         settings,
-                        observation,
                         _batch,
                     )
-
-                if processed > 0:
-                    rate_limit_hits.pop(log.id, None)
-                    rate_limited_until.pop(log.id, None)
-
-                total_processed += processed
-                if processed > 0 and on_batch is not None:
-                    on_batch(log.url, processed, total_processed)
-                if not is_empty:
-                    any_empty = False
-
-            if once:
-                return
-
-            if any_empty:
-                _logger.debug(
-                    "tail: no new entries — sleeping %ds",
-                    settings.ct_tail_interval_seconds,
-                )
-                if on_status is not None:
-                    on_status(
-                        f"All logs at tree edge — sleeping"
-                        f" {settings.ct_tail_interval_seconds} s"
+                    effective_batch = resolve_effective_batch_size(_batch, directive)
+                    db_sleep = await sleep_for_db_contention(directive, settings)
+                    if db_sleep > 0.0 and on_status is not None:
+                        on_status(f"DB contention — pacing {db_sleep:.2f} s")
+                    metrics = LogMetricsAccumulator()
+                    (
+                        processed,
+                        is_empty,
+                        was_rate_limited,
+                        observation,
+                        retry_after,
+                    ) = await _tail_one_log(
+                        log,
+                        session_factory,
+                        client,
+                        metrics,
+                        settings=settings,
+                        batch_size=effective_batch,
+                        limit_remaining=limit_remaining,
+                        init_from_end=init_from_end,
                     )
-                await asyncio.sleep(settings.ct_tail_interval_seconds)
+
+                    if was_rate_limited:
+                        hit_count = rate_limit_hits.get(log.id, 0) + 1
+                        rate_limit_hits[log.id] = hit_count
+                        if retry_after is not None:
+                            backoff_seconds: float = min(
+                                settings.ct_retry_after_max_seconds, retry_after
+                            )
+                        else:
+                            backoff_seconds = min(
+                                settings.ct_rate_limit_backoff_max_seconds,
+                                settings.ct_rate_limit_backoff_seconds
+                                * (2 ** (hit_count - 1)),
+                            )
+                        rate_limited_until[log.id] = now + float(backoff_seconds)
+                        if on_status is not None:
+                            on_status(
+                                "Rate limited for "
+                                f"{log.description} — pausing {backoff_seconds} s"
+                            )
+                        continue
+
+                    if observation.has_activity:
+                        await submit_db_contention_observation(
+                            session_factory,
+                            settings,
+                            observation,
+                            _batch,
+                        )
+
+                    if processed > 0:
+                        rate_limit_hits.pop(log.id, None)
+                        rate_limited_until.pop(log.id, None)
+
+                    total_processed += processed
+                    if processed > 0 and on_batch is not None:
+                        on_batch(log.url, processed, total_processed)
+                    if not is_empty:
+                        any_empty = False
+
+                if once:
+                    return
+
+                if any_empty:
+                    _logger.debug(
+                        "tail: no new entries — sleeping %ds",
+                        settings.ct_tail_interval_seconds,
+                    )
+                    if on_status is not None:
+                        on_status(
+                            f"All logs at tree edge — sleeping"
+                            f" {settings.ct_tail_interval_seconds} s"
+                        )
+                    await asyncio.sleep(settings.ct_tail_interval_seconds)
+        finally:
+            async with session_factory() as session:
+                async with session.begin():
+                    await mark_worker_stopped(session, row_id=_registry_id)
 
 
 async def reset_tail_cursors(

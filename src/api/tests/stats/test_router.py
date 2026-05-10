@@ -24,7 +24,10 @@ from certsapi.stats.models import (
 from certsapi.stats.router import _get_stats_service
 
 _UNIT_TEST_SETTINGS = Settings.model_validate(
-    {"database_url": "postgresql+psycopg://localhost/test"}
+    {
+        "database_url": "postgresql+psycopg://localhost/test",
+        "expose_stats_api": True,
+    }
 )
 
 

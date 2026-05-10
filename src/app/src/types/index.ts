@@ -21,6 +21,14 @@ export type {
   StatsResponse,
   TableStorageItem,
   TailFreshnessStats,
+  WorkerSummary,
+  WorkerSummaryItem,
+  BackfillStateItem,
+  BackfillStateSummary,
+  IngestionHealth,
+  MaintenanceDeleted,
+  MaintenanceStatus,
+  SnapshotMetadata,
 } from "./stats";
 export type {
   StorageSettingsHistoryItem,

@@ -11,10 +11,11 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ctpool.entry_write_result import CertificateUpsertResult, HostnameUpsertResult
 from ctpool.hostname_latest_cert import (
     IncomingCertSummary,
     StoredCertSummary,
@@ -32,11 +33,12 @@ async def upsert_certificate(
     session: AsyncSession,
     parsed: ParsedCertificate,
     is_wildcard_present: bool,
-) -> uuid.UUID:
+) -> CertificateUpsertResult:
     """Upsert a ``Certificate`` row and return its ``id``.
 
-    On conflict (``fingerprint_sha256`` already exists) the row is updated with
-    the latest ``last_seen_ct`` timestamp and wildcard/SAN metadata.
+    On conflict (``fingerprint_sha256`` already exists) the function returns
+    the existing row id and marks the write as a duplicate.  Metadata updates
+    remain local to this function so callers never need a follow-up query.
 
     Args:
         session:            Active async database session.
@@ -44,7 +46,7 @@ async def upsert_certificate(
         is_wildcard_present: True if any SAN contains a wildcard.
 
     Returns:
-        The ``id`` of the upserted certificate.
+        Typed result with the ``Certificate`` id and insertion classification.
     """
     now = datetime.now(UTC)
     stmt = (
@@ -71,33 +73,40 @@ async def upsert_certificate(
             first_seen_ct=now,
             last_seen_ct=now,
         )
-        .on_conflict_do_update(
+        .on_conflict_do_nothing(
             index_elements=["fingerprint_sha256"],
-            set_={
-                "last_seen_ct": now,
-                "is_wildcard_present": is_wildcard_present,
-                "san_count": len(parsed.san_dns_names),
-            },
-            where=or_(
-                Certificate.is_wildcard_present.is_distinct_from(is_wildcard_present),
-                Certificate.san_count != len(parsed.san_dns_names),
-            ),
         )
         .returning(Certificate.id)
     )
     result = await session.execute(stmt)
-    inserted_or_updated_id = result.scalar_one_or_none()
-    if inserted_or_updated_id is not None:
-        return uuid.UUID(str(inserted_or_updated_id))
-
-    # No row is returned when conflict occurred but DO UPDATE ... WHERE
-    # evaluated false (no-op update). Fetch the existing certificate id.
-    existing_result = await session.execute(
-        select(Certificate.id).where(
-            Certificate.fingerprint_sha256 == parsed.fingerprint_sha256
+    inserted_id = result.scalar_one_or_none()
+    if inserted_id is not None:
+        return CertificateUpsertResult(
+            certificate_id=uuid.UUID(str(inserted_id)),
+            inserted=True,
         )
+
+    existing_result = await session.execute(
+        select(
+            Certificate.id,
+            Certificate.is_wildcard_present,
+            Certificate.san_count,
+        ).where(Certificate.fingerprint_sha256 == parsed.fingerprint_sha256)
     )
-    return uuid.UUID(str(existing_result.scalar_one()))
+    existing_row = existing_result.one()
+    certificate_id = uuid.UUID(str(existing_row[0]))
+    san_count = len(parsed.san_dns_names)
+    if existing_row[1] != is_wildcard_present or existing_row[2] != san_count:
+        await session.execute(
+            update(Certificate)
+            .where(Certificate.id == certificate_id)
+            .values(
+                last_seen_ct=now,
+                is_wildcard_present=is_wildcard_present,
+                san_count=san_count,
+            )
+        )
+    return CertificateUpsertResult(certificate_id=certificate_id, inserted=False)
 
 
 async def upsert_hostname(
@@ -106,7 +115,7 @@ async def upsert_hostname(
     certificate: ParsedCertificate,
     *,
     observed_at: datetime,
-) -> uuid.UUID:
+) -> HostnameUpsertResult:
     """Upsert a ``Hostname`` row and return its ``id``.
 
     Uses a two-step SELECT + Python ranking approach so that all five
@@ -123,14 +132,12 @@ async def upsert_hostname(
         observed_at: Timestamp at which this entry was processed.
 
     Returns:
-        The ``id`` of the upserted hostname.
+        Typed result with the ``Hostname`` id and insertion classification.
     """
     reg_domain = extract_registrable_domain(hostname)
     is_wildcard = hostname.startswith("*.")
 
-    # Step 1: upsert presence fields; DO UPDATE only touches last_seen_ct so
-    # that RETURNING always reflects the stored cert fields (not overwritten).
-    stmt = (
+    insert_stmt = (
         pg_insert(Hostname)
         .values(
             hostname=hostname,
@@ -139,10 +146,7 @@ async def upsert_hostname(
             first_seen_ct=observed_at,
             last_seen_ct=observed_at,
         )
-        .on_conflict_do_update(
-            index_elements=["hostname"],
-            set_={"last_seen_ct": observed_at},
-        )
+        .on_conflict_do_nothing(index_elements=["hostname"])
         .returning(
             Hostname.id,
             Hostname.latest_cert_fingerprint_sha256,
@@ -151,7 +155,25 @@ async def upsert_hostname(
             Hostname.latest_cert_seen_at,
         )
     )
-    row = (await session.execute(stmt)).one()
+    insert_result = await session.execute(insert_stmt)
+    inserted_row = insert_result.one_or_none()
+    inserted = inserted_row is not None
+    if inserted_row is None:
+        update_result = await session.execute(
+            update(Hostname)
+            .where(Hostname.hostname == hostname)
+            .values(last_seen_ct=observed_at)
+            .returning(
+                Hostname.id,
+                Hostname.latest_cert_fingerprint_sha256,
+                Hostname.latest_cert_not_before,
+                Hostname.latest_cert_not_after,
+                Hostname.latest_cert_seen_at,
+            )
+        )
+        row = update_result.one()
+    else:
+        row = inserted_row
     hostname_id = uuid.UUID(str(row[0]))
 
     # Step 2: apply ranking and conditionally update the latest-cert summary.
@@ -177,7 +199,7 @@ async def upsert_hostname(
             update(Hostname).where(Hostname.id == hostname_id).values(**fields)
         )
 
-    return hostname_id
+    return HostnameUpsertResult(hostname_id=hostname_id, inserted=inserted)
 
 
 async def upsert_certificate_hostname(

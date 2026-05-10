@@ -40,6 +40,20 @@ class IngestionMetric(Base):
     hostnames_upserted: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0
     )
+    new_unique_certificates: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    duplicate_certificates: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    new_unique_hostnames: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    known_hostnames: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    retryable_errors: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    terminal_entry_errors: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
     parse_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     http_429_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     http_5xx_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

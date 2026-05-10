@@ -175,6 +175,42 @@ describe("DashboardPage with data", () => {
     renderPage();
     expect(screen.getByText("Storage Profile")).toBeInTheDocument();
   });
+
+  it("demotes legacy range diagnostics when per-log mode is primary", () => {
+    mockUseStats.mockReturnValue({
+      data: {
+        ...STATS_FIXTURE,
+        backfill_ranges: {
+          pending: 0,
+          in_progress: 0,
+          stale_in_progress: 0,
+          completed: 0,
+          failed: 5,
+          dispatch_mode: "per-log",
+          is_primary: false,
+        },
+        audit_health: {
+          open_critical: 0,
+          open_error: 1,
+          open_warning: 0,
+          open_info: 0,
+          total_open: 1,
+          status: "attention_needed" as const,
+        },
+      },
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useStats>);
+    renderPage();
+    expect(
+      screen.getByText("Advanced / Legacy Range Diagnostics"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Failed backfill ranges detected/i),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe("DashboardPage error state", () => {

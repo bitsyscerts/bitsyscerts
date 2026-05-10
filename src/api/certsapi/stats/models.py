@@ -132,12 +132,29 @@ class DbContentionStats(BaseModel):
 
 
 class IngestionRateWindow(BaseModel):
-    """Throughput aggregates for a single time window."""
+    """Throughput aggregates for a single time window.
+
+    Sprint 5 introduces precise per-metric labels; the original
+    ``observations_per_sec`` / ``certs_per_min`` / ``hostnames_per_min``
+    fields remain for backwards compatibility but should be considered
+    *legacy aliases*.  Prefer the explicit ``*_per_min`` names below.
+    """
 
     window_seconds: int
+    # Legacy fields — kept for compatibility with existing consumers.
     observations_per_sec: float
     certs_per_min: float
     hostnames_per_min: float
+    # Sprint 5 precise labels.
+    observations_per_min: float | None = None
+    certificates_parsed_per_min: float | None = None
+    new_unique_certificates_per_min: float | None = None
+    duplicate_certificates_per_min: float | None = None
+    hostnames_observed_per_min: float | None = None
+    new_unique_hostnames_per_min: float | None = None
+    known_hostnames_per_min: float | None = None
+    retryable_errors_per_min: float | None = None
+    terminal_entry_errors_per_min: float | None = None
 
 
 class IngestionRateStats(BaseModel):
@@ -172,6 +189,8 @@ class BackfillRangeStats(BaseModel):
     stale_in_progress: int
     completed: int
     failed: int
+    dispatch_mode: str | None = None
+    is_primary: bool = True
 
 
 class AuditHealth(BaseModel):
@@ -202,6 +221,133 @@ class MetricsRetentionStats(BaseModel):
     metrics_retention_days: int
 
 
+class WorkerSummaryItem(BaseModel):
+    """Per-worker activity row returned in stats responses."""
+
+    worker_id: str
+    worker_kind: str
+    log_source_id: str | None = None
+    log_name: str | None = None
+    direction: str | None = None
+    status: str
+    is_stale: bool
+    last_heartbeat_at: str
+    last_heartbeat_age_seconds: int
+    started_at: str
+    current_index: int | None = None
+    processed_entries: int
+    stored_certificates: int
+    duplicate_certificates: int
+    observed_hostnames: int
+    new_hostnames: int
+    parse_errors: int
+    retryable_errors: int
+    terminal_errors: int
+    last_error_type: str | None = None
+    last_error_message: str | None = None
+
+
+class WorkerSummary(BaseModel):
+    """Aggregated worker activity included in stats responses."""
+
+    active_total: int
+    stale_total: int
+    tail_active: int
+    backfill_active: int
+    items: list[WorkerSummaryItem]
+
+
+class BackfillStateItem(BaseModel):
+    """Per-log backfill state row returned in stats responses."""
+
+    log_source_id: str
+    log_name: str | None = None
+    log_url: str | None = None
+    status: str
+    claimed_by: str | None = None
+    is_stale: bool = False
+    checkpoint_index: int | None = None
+    backfill_start_index: int | None = None
+    backfill_end_index: int | None = None
+    progress_percent: float | None = None
+    last_heartbeat_age_seconds: float | None = None
+    last_error_type: str | None = None
+    last_error_message: str | None = None
+    last_error_at: str | None = None
+    next_retry_at: str | None = None
+    rate_limited_until: str | None = None
+    retry_count: int = 0
+    retryable_error_count: int = 0
+    terminal_error_count: int = 0
+    completed_at: str | None = None
+
+
+class BackfillStateSummary(BaseModel):
+    """Aggregated per-log backfill state included in stats responses."""
+
+    total_logs: int = 0
+    pending: int = 0
+    claimed: int = 0
+    processing: int = 0
+    retrying: int = 0
+    rate_limited: int = 0
+    paused: int = 0
+    complete: int = 0
+    error: int = 0
+    stale: int = 0
+    items: list[BackfillStateItem] = []
+    dispatch_mode: str | None = None
+    is_primary: bool = False
+
+
+class IngestionHealth(BaseModel):
+    """Self-healing ingestion summary used by the dashboard error card."""
+
+    retrying_logs: int = 0
+    rate_limited_logs: int = 0
+    paused_logs: int = 0
+    error_logs: int = 0
+    stale_workers: int = 0
+    retryable_error_total: int = 0
+    terminal_error_total: int = 0
+    recent_terminal_outcomes: int = 0
+    status: Literal["ok", "attention_needed"] = "ok"
+
+
+class MaintenanceDeleted(BaseModel):
+    """Per-table deletion totals for the most recent maintenance run."""
+
+    certificates: int = 0
+    certificate_hostnames: int = 0
+    observations: int = 0
+    entry_outcomes: int = 0
+    ingestion_metrics: int = 0
+
+
+class MaintenanceStatus(BaseModel):
+    """Retention-maintenance card surfaced to the dashboard.
+
+    ``status`` of ``"never_ran"`` means no maintenance has executed yet
+    and Lite mode may temporarily retain more data.  ``"complete"`` /
+    ``"failed"`` mirror the most recent ``ct_maintenance_runs`` row.
+    """
+
+    status: Literal["never_ran", "running", "complete", "failed", "unknown"] = (
+        "never_ran"
+    )
+    active_profile: str | None = None
+    last_prune_started_at: datetime | None = None
+    last_prune_completed_at: datetime | None = None
+    last_prune_status: Literal["running", "complete", "failed"] | None = None
+    last_prune_mode: Literal["dry_run", "execute"] | None = None
+    last_prune_deleted: MaintenanceDeleted = MaintenanceDeleted()
+    preserved_hostnames: int | None = None
+    duration_ms: int | None = None
+    next_prune_due_at: datetime | None = None
+    is_enforced: bool = False
+    error_message: str | None = None
+
+
 class StorageProfileSettings(BaseModel):
     """Active instance storage settings embedded in stats responses."""
 
@@ -217,9 +363,26 @@ class StorageProfileSettings(BaseModel):
     source: Literal["database", "bootstrap_default", "none"]
 
 
+class SnapshotMetadata(BaseModel):
+    """Freshness metadata for the stats payload (Sprint 5).
+
+    Lets the UI tell the operator how old the displayed numbers are and
+    whether the API is serving a stale snapshot.  ``source`` indicates
+    where the payload came from: a cached snapshot, a fresh live query,
+    or no snapshot at all.
+    """
+
+    generated_at: datetime | None = None
+    age_seconds: float | None = None
+    is_stale: bool = False
+    stale_threshold_seconds: int | None = None
+    source: Literal["snapshot", "live", "none"] = "live"
+
+
 class StatsResponse(BaseModel):
     """Global ingestion statistics."""
 
+    snapshot: SnapshotMetadata | None = None
     total_hostnames: int
     storage_profile: StorageProfileSettings | None = None
     total_certificates: int
@@ -235,3 +398,12 @@ class StatsResponse(BaseModel):
     metrics_retention: MetricsRetentionStats | None = None
     audit_health: AuditHealth | None = None
     logs: list[LogStatsItem]
+    workers: WorkerSummary | None = None
+    backfill_state: BackfillStateSummary | None = None
+    ingestion_health: IngestionHealth | None = None
+    maintenance: MaintenanceStatus | None = None
+
+
+# Resolve the forward reference to SnapshotMetadata, which is defined
+# after StatsResponse so the schema reads top-down.
+StatsResponse.model_rebuild()

@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
+
+from certsapi.app import create_app
+from certsapi.config import Settings
+
+_DISABLED_STATS_SETTINGS = Settings.model_validate(
+    {
+        "database_url": "postgresql+psycopg://localhost/test",
+        "expose_stats_api": False,
+    }
+)
 
 
 class TestRootRouter:
@@ -37,6 +47,16 @@ class TestRootRouter:
         resp = await http_client.get("/")
         paths = [e["path"] for e in resp.json()["endpoints"]]
         assert "/v1/stats" in paths
+
+    async def test_response_omits_stats_endpoint_when_disabled(self) -> None:
+        app = create_app(settings=_DISABLED_STATS_SETTINGS)
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get("/")
+        paths = [e["path"] for e in resp.json()["endpoints"]]
+        assert "/v1/stats" not in paths
 
     async def test_response_includes_docs_link(self, http_client: AsyncClient) -> None:
         body = (await http_client.get("/")).json()

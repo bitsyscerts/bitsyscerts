@@ -1,4 +1,7 @@
-"""Tests for durable outcome recording in the backfill worker.
+"""Tests for durable outcome recording in the legacy backfill worker.
+
+These assertions cover the retained ``run_backfill_legacy`` compatibility
+path. Active per-log runtime coverage lives in ``tests/test_backfill_per_log.py``.
 
 Verifies that:
   - parse errors record OUTCOME_PARSE_ERROR during backfill
@@ -14,9 +17,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ctpool.backfill_worker import run_backfill
+from ctpool.backfill_worker import run_backfill_legacy as run_backfill
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
+from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.exceptions import ParseError, UnsupportedEntryTypeError
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -38,6 +42,24 @@ def _patch_reap_stale():
     with patch(
         "ctpool.backfill_worker.reap_stale_backfill_claims",
         AsyncMock(return_value=[]),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _patch_worker_registry():
+    """Prevent worker_registry calls from hitting the mock session."""
+    import uuid as _uuid
+    from unittest.mock import MagicMock
+
+    mock_row = MagicMock()
+    mock_row.id = _uuid.uuid4()
+    with (
+        patch(
+            "ctpool.backfill_worker.register_worker", AsyncMock(return_value=mock_row)
+        ),
+        patch("ctpool.backfill_worker.heartbeat_worker", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_worker_stopped", AsyncMock()),
     ):
         yield
 
@@ -99,6 +121,10 @@ def _entries(n: int) -> CtEntriesResponse:
     )
 
 
+def _stored_metrics() -> EntryWriteMetrics:
+    return EntryWriteMetrics(duplicate_certificates=1)
+
+
 def _session_factory(
     log: CtLogSource,
     rng: CtLogBackfillRange | None = None,
@@ -107,6 +133,7 @@ def _session_factory(
     session.begin = MagicMock()
     session.begin.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.add = MagicMock()
 
     async def _fake_get(model_cls: object, pk: object) -> object:
         if model_cls is CtLogSource:
@@ -144,7 +171,7 @@ async def test_backfill_parse_error_records_outcome() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(return_value=True),
         ),
         patch(
@@ -198,7 +225,7 @@ async def test_backfill_unsupported_entry_type_records_outcome() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(return_value=True),
         ),
         patch(
@@ -244,7 +271,7 @@ async def test_backfill_range_marked_failed_if_outcome_write_raises() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(return_value=True),
         ),
         patch(
@@ -303,7 +330,7 @@ async def test_backfill_unexpected_exception_records_write_error_outcome() -> No
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(return_value=True),
         ),
         patch(
@@ -360,7 +387,7 @@ async def test_backfill_write_error_range_still_completes() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(return_value=True),
         ),
         patch(
@@ -429,7 +456,7 @@ async def test_backfill_repair_range_resolves_finding() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(return_value=True),
         ),
         patch(
@@ -450,7 +477,7 @@ async def test_backfill_repair_range_resolves_finding() -> None:
         ),
         patch(
             "ctpool.backfill_worker.persist_entry_with_retry",
-            AsyncMock(),
+            AsyncMock(return_value=_stored_metrics()),
         ),
         patch(
             "ctpool.backfill_worker.persist_failure_outcome",
@@ -483,7 +510,7 @@ async def test_backfill_normal_range_does_not_call_resolve_repair_finding() -> N
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(return_value=True),
         ),
         patch(
@@ -504,7 +531,7 @@ async def test_backfill_normal_range_does_not_call_resolve_repair_finding() -> N
         ),
         patch(
             "ctpool.backfill_worker.persist_entry_with_retry",
-            AsyncMock(),
+            AsyncMock(return_value=_stored_metrics()),
         ),
         patch(
             "ctpool.backfill_worker.persist_failure_outcome",

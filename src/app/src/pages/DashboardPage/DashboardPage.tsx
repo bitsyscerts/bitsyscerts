@@ -14,6 +14,7 @@ import { AuditHealthCard } from "@/components/StatsPanel/AuditHealthCard";
 import { BackfillRangesCard } from "@/components/StatsPanel/BackfillRangesCard";
 import { DbContentionCard } from "@/components/StatsPanel/DbContentionCard";
 import { IngestionRateCard } from "@/components/StatsPanel/IngestionRateCard";
+import { LegacyDiagnosticsSection } from "@/components/StatsPanel/LegacyDiagnosticsSection";
 import { LogStatsFilter } from "@/components/StatsPanel/LogStatsFilter";
 import { LogStatsList } from "@/components/StatsPanel/LogStatsList";
 import { StatsPanelSkeleton } from "@/components/StatsPanel/StatsPanelSkeleton";
@@ -25,6 +26,7 @@ import { TailFreshnessCard } from "@/components/StatsPanel/TailFreshnessCard";
 import { useLogFilter } from "@/hooks/useLogFilter";
 import { useStats } from "@/hooks/useStats";
 import type { LogStatsItem, StatsResponse } from "@/types";
+import { isPerLogPrimaryMode } from "@/utils/statsMode";
 
 const AUTO_REFRESH_MS = 10_000;
 
@@ -94,6 +96,8 @@ interface LeftColProps {
 }
 
 function DashboardLeftCol({ data }: LeftColProps) {
+  const perLogPrimary = isPerLogPrimaryMode(data);
+
   return (
     <Stack>
       <StatsSummary
@@ -103,8 +107,20 @@ function DashboardLeftCol({ data }: LeftColProps) {
       />
       <IngestionRateCard ingestionRate={data.ingestion_rate} />
       <TailFreshnessCard tailFreshness={data.tail_freshness} />
-      <BackfillRangesCard backfillRanges={data.backfill_ranges} />
-      {data.audit_health && <AuditHealthCard auditHealth={data.audit_health} />}
+      {perLogPrimary ? (
+        <LegacyDiagnosticsSection
+          backfillRanges={data.backfill_ranges}
+          auditHealth={data.audit_health}
+          title="Advanced / Legacy Range Diagnostics"
+        />
+      ) : (
+        <>
+          <BackfillRangesCard backfillRanges={data.backfill_ranges} isPrimary />
+          {data.audit_health && (
+            <AuditHealthCard auditHealth={data.audit_health} isPrimary />
+          )}
+        </>
+      )}
       <StorageProjectionCard projection={data.storage_projection} />
       <DbContentionCard contention={data.db_contention} />
     </Stack>

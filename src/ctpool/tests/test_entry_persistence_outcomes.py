@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from ctpool.entry_persistence import persist_entry_with_retry, persist_failure_outcome
+from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.exceptions import ParseError
 from ctpool.outcome_constants import OUTCOME_PARSE_ERROR, OUTCOME_STORED
 
@@ -47,7 +48,10 @@ async def test_persist_entry_writes_stored_outcome() -> None:
     entry = _make_entry(fingerprint="deadbeef")
 
     with (
-        patch("ctpool.entry_persistence.write_normalized_entry", AsyncMock()),
+        patch(
+            "ctpool.entry_persistence.write_normalized_entry",
+            AsyncMock(return_value=EntryWriteMetrics()),
+        ),
         patch(
             "ctpool.entry_persistence.upsert_entry_outcome", AsyncMock()
         ) as outcome_mock,
@@ -76,8 +80,9 @@ async def test_persist_entry_outcome_and_cert_in_same_transaction() -> None:
 
     call_order: list[str] = []
 
-    async def _fake_write(*_args: object, **_kwargs: object) -> None:
+    async def _fake_write(*_args: object, **_kwargs: object) -> EntryWriteMetrics:
         call_order.append("cert")
+        return EntryWriteMetrics()
 
     async def _fake_outcome(*_args: object, **_kwargs: object) -> None:
         call_order.append("outcome")
@@ -105,7 +110,10 @@ async def test_cursor_does_not_advance_if_outcome_write_fails() -> None:
     entry = _make_entry()
 
     with (
-        patch("ctpool.entry_persistence.write_normalized_entry", AsyncMock()),
+        patch(
+            "ctpool.entry_persistence.write_normalized_entry",
+            AsyncMock(return_value=EntryWriteMetrics()),
+        ),
         patch(
             "ctpool.entry_persistence.upsert_entry_outcome",
             AsyncMock(side_effect=RuntimeError("db down")),

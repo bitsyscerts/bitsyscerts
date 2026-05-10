@@ -113,10 +113,10 @@ flowchart LR
     end
 
     subgraph backfill[backfill worker — ctpool backfill]
-        B1[Claim backfill range\nfrom ct_log_backfill_ranges]
-        B2[Fetch entries\nfor range]
+        B1[Claim one CT log\nfrom ct_log_backfill_state]
+        B2[Fetch entries\nfrom durable checkpoint]
         B3[Parse + write]
-        B4[Mark range complete]
+        B4[Advance checkpoint\nor mark retrying / complete]
         B1 --> B2 --> B3 --> B4 --> B1
     end
 
@@ -181,13 +181,35 @@ directory mount. If free space drops below `CT_MIN_FREE_DISK_GB`, a warning is l
 If free space drops below `CT_CRITICAL_FREE_DISK_GB`, ingestion is halted and an error
 is written to the health/log channel.
 
+### Backfill Dispatch Model
+
+BitsysCerts uses **per-log backfill ownership** by default. Each backfill worker claims
+one eligible CT log, processes it from its durable checkpoint stored in
+`ct_log_backfill_state`, heartbeats its claim, and either advances the checkpoint,
+marks the log `retrying` on retryable errors, or marks it `complete` when the window is
+finished. There is at most one worker per log at any time.
+
+The legacy range-based dispatcher (`ct_log_backfill_ranges`) remains available for
+compatibility and debug use under `CT_BACKFILL_DISPATCH_MODE=legacy-ranges` or
+`ctpool backfill --dispatch-mode legacy-ranges`. It is **not** the default runtime
+model.
+
+Legacy range failures from older runs may remain visible in advanced diagnostics. They
+do not necessarily indicate that the current per-log dispatcher is unhealthy.
+
 ### Audit Checker
+
+> **Advanced / debug only.** The audit checker is not part of normal per-log operation.
+> Per-log workers handle retryable failures inline by transitioning the log to
+> `retrying` and re-fetching from the unchanged checkpoint. The audit/repair commands
+> below remain available for legacy range investigation and one-off historical
+> reconciliation.
 
 `ctpool check-audit-gaps` / `ctpool fix-audit-findings` detect and repair:
 
 - Gaps in CT log entry ranges (entries that should have been fetched but were not)
 - Hostnames with a missing or stale `latest_cert_fingerprint_sha256` reference
-- Backfill ranges stuck in `in_progress` past their claim timeout
+- Legacy backfill ranges stuck in `in_progress` past their claim timeout
 
 ---
 

@@ -17,6 +17,7 @@ Command groups:
     cli_settings_commands    — profile show, profile list
     cli_stats_commands       — stats, stats-snapshot
     cli_maintenance_commands — maintenance
+    cli_workers_commands     — workers list, workers reap-stale
 """
 
 from __future__ import annotations
@@ -25,11 +26,15 @@ import typer
 
 import ctpool.cli_audit_commands as _audit
 import ctpool.cli_db_commands as _db
+import ctpool.cli_diagnostics_commands as _diagnostics
 import ctpool.cli_ingestion_commands as _ingestion
+import ctpool.cli_legacy_commands as _legacy
 import ctpool.cli_maintenance_commands as _maintenance
 import ctpool.cli_prune_commands as _prune
 import ctpool.cli_stats_commands as _stats
+import ctpool.cli_status_commands as _status
 import ctpool.cli_storage_commands as _storage
+import ctpool.cli_workers_commands as _workers
 from ctpool.cli_settings_commands import profile_app
 
 app = typer.Typer(name="ctpool", no_args_is_help=True, add_completion=False)
@@ -37,8 +42,12 @@ app = typer.Typer(name="ctpool", no_args_is_help=True, add_completion=False)
 _db.register(app)
 _ingestion.register(app)
 _audit.register(app)
+_diagnostics.register(app)
 _prune.register(app)
 _storage.register(app)
 _stats.register(app)
+_status.register(app)
 _maintenance.register(app)
+_workers.register(app)
+_legacy.register(app)
 app.add_typer(profile_app)

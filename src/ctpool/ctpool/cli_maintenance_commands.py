@@ -28,7 +28,12 @@ def register(app: typer.Typer) -> None:
             ),
         ] = False,
     ) -> None:
-        """Run maintenance tasks: prune expired rows and check audit gaps.
+        """Run lightweight profile-aware maintenance.
+
+        By default this runs ``prune-for-storage-profile`` only.  Deep
+        ``check-audit-gaps`` scans are **disabled unless**
+        ``BITSYSCERTS_ENABLE_SCHEDULED_AUDIT=true``; when enabled they run
+        on ``BITSYSCERTS_AUDIT_INTERVAL_SECONDS`` and never block prune.
 
         Use ``--loop`` to run as a persistent service that repeats on the
         ``ct_maintenance_interval_seconds`` interval (default 3600 s).

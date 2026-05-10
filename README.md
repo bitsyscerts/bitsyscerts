@@ -258,21 +258,31 @@ docs/
 The `ctpool` CLI is available inside the running `api` container for maintenance tasks:
 
 ```sh
-# View ingestion statistics
+# Routine per-log runtime checks
 docker compose exec api ctpool stats
+docker compose exec api ctpool backfill
+docker compose exec api ctpool backfill-state
 
-# Run a data integrity audit
+# Routine retention maintenance
+docker compose exec api ctpool prune-for-storage-profile
+
+# Advanced / debug legacy compatibility tools
+docker compose exec api ctpool legacy-ranges status
+docker compose exec api ctpool reap-stale-backfill-claims
+
+# Advanced / debug audit tools
 docker compose exec api ctpool check-audit-gaps
 
-# Repair audit findings
-docker compose exec api ctpool fix-audit-findings
-
-# Manually prune to the active retention profile
-docker compose exec api ctpool prune-for-storage-profile
+# Preview audit repairs
+docker compose exec api ctpool fix-audit-findings --dry-run
 
 # Reset migrations and reinitialise (destructive)
 docker compose run --rm migrate ctpool init-db --force
 ```
+
+`ctpool backfill` uses per-log dispatch by default. `legacy-ranges`,
+`reap-stale-backfill-claims`, `check-audit-gaps`, and `fix-audit-findings`
+are retained for compatibility, troubleshooting, and one-off historical repair.
 
 ---
 

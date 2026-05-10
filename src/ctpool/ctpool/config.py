@@ -19,6 +19,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Database — required; no default
@@ -73,6 +74,34 @@ class Settings(BaseSettings):
     """
     ct_backfill_heartbeat_seconds: int = 60
     """Interval in seconds at which active backfill workers refresh heartbeat_at."""
+
+    # Worker runtime / ownership
+    ct_worker_heartbeat_seconds: int = 15
+    """Interval (s) at which workers refresh their ct_worker_runtime heartbeat."""
+    ct_worker_stale_seconds: int = 300
+    """Seconds without a heartbeat after which a worker claim is considered stale."""
+    ct_worker_assignment_refresh_seconds: int = 30
+    """Seconds between log assignment refresh checks in the worker loop."""
+
+    # Backfill dispatch model
+    ct_backfill_dispatch_mode: str = "per-log"
+    """Backfill dispatch model.
+
+    ``per-log`` (default): one worker claims one CT log via
+    ``ct_log_backfill_state`` and processes its window using a per-log
+    durable checkpoint. The legacy ``ct_log_backfill_ranges`` table is
+    not used by the normal runtime.
+
+    ``legacy-ranges``: legacy compatibility mode. Workers claim individual
+    ranges from ``ct_log_backfill_ranges`` and mark them complete or failed.
+    Reserved for backfill-range repair, audit, and migration scenarios.
+    """
+
+    # Per-log retry budget (Sprint 3 — self-healing ingestion)
+    ct_batch_retry_max_attempts: int = 10
+    """Maximum consecutive retryable batch failures before pausing the log."""
+    ct_batch_retry_max_seconds: int = 3600
+    """Maximum age (seconds) of the first failure before pausing the log."""
 
     # Disk safety thresholds (GiB)
     ct_min_free_disk_gb: int = 50
@@ -157,6 +186,13 @@ class Settings(BaseSettings):
     ct_stats_snapshot_retention_hours: int = 24
     """Hours to retain old snapshot rows before pruning."""
 
+    # Sprint 5: how old a stats snapshot may be before consumers should
+    # treat it as stale.  Mirrors the API ``stats_stale_seconds`` setting
+    # so the CLI ``ctpool status`` command and the API agree on what
+    # "stale" means.
+    stats_stale_seconds: int = 120
+    """Seconds beyond which a stats snapshot is considered stale."""
+
     # Maintenance service cadences
     ct_maintenance_interval_seconds: int = 3600
     """Seconds between maintenance loop cycles."""
@@ -164,6 +200,14 @@ class Settings(BaseSettings):
     """Seconds between automatic audit-gap checks in the maintenance loop."""
     ct_prune_interval_seconds: int = 3600
     """Seconds between automatic prune runs in the maintenance loop."""
+
+    # Scheduled audit opt-in (Sprint 4B). Deep audit-gap scans are expensive
+    # and legacy-range-oriented; they are disabled by default in the normal
+    # maintenance loop and must be explicitly enabled by the operator.
+    bitsyscerts_enable_scheduled_audit: bool = False
+    """If True, the maintenance loop runs check-audit-gaps on its interval."""
+    bitsyscerts_audit_interval_seconds: int = 21600
+    """Seconds between scheduled audit runs when explicitly enabled."""
 
     # Logging
     log_level: str = "INFO"

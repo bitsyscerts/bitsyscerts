@@ -14,6 +14,7 @@ import logging
 import time
 from typing import Any
 
+from ctpool.backfill_state_queries import query_backfill_state_summary
 from ctpool.config import Settings
 from ctpool.db import create_engine, create_session_factory
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
@@ -32,6 +33,7 @@ from ctpool.stats_queries import (
     query_tail_freshness,
 )
 from ctpool.stats_snapshot_repository import StatsSnapshotRepository
+from ctpool.worker_queries import query_worker_summary
 
 _logger = logging.getLogger(__name__)
 
@@ -76,6 +78,15 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
             audit_counts = await _query_audit_counts(session)
             per_log_rows = await query_log_stats(session)
             active_settings = await query_active_instance_settings(session)
+            worker_summary = await query_worker_summary(
+                session, stale_seconds=settings.ct_worker_stale_seconds
+            )
+            backfill_state = await query_backfill_state_summary(
+                session, stale_seconds=settings.ct_worker_stale_seconds
+            )
+            from ctpool.maintenance_queries import query_latest_maintenance_run
+
+            maintenance_run = await query_latest_maintenance_run(session)
 
         payload = assemble_stats_payload(
             global_counts=global_counts,
@@ -91,6 +102,11 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
             audit_counts=audit_counts,
             per_log_rows=per_log_rows,
             active_settings=active_settings,
+            worker_summary=worker_summary,
+            backfill_state=backfill_state,
+            maintenance_run=maintenance_run,
+            maintenance_interval_seconds=settings.ct_maintenance_interval_seconds,
+            dispatch_mode=settings.ct_backfill_dispatch_mode,
         )
 
         duration_ms = int((time.monotonic() - t0) * 1000)

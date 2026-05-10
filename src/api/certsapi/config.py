@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 
-from pydantic import PostgresDsn
+from pydantic import AliasChoices, Field, PostgresDsn
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +27,23 @@ class Settings(BaseSettings):
     # Pagination defaults
     default_page_limit: int = 50
     max_page_limit: int = 200
+
+    # Operator stats power the bundled dashboard and are enabled by default
+    # for self-hosted workstation, lab, and local Docker Compose deployments.
+    # Unusual deployments can explicitly disable them behind a gateway.
+    expose_stats_api: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "expose_stats_api",
+            "BITSYSCERTS_EXPOSE_STATS_API",
+            "EXPOSE_STATS_API",
+        ),
+    )
+
+    # Sprint 5: how old a stats snapshot may be before the API marks it stale.
+    # The dashboard surfaces ``is_stale=true`` so the operator never reads
+    # stale numbers as current.
+    stats_stale_seconds: int = 120
 
 
 @functools.lru_cache(maxsize=1)

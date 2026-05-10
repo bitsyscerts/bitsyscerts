@@ -5,7 +5,7 @@ Commands:
     tail                         — Run the tail worker loop.
     reset-tail-cursors           — Reset tail cursors to the current edge.
     backfill                     — Run the backfill worker loop.
-    reap-stale-backfill-claims   — Reset stale in_progress backfill claims.
+    reap-stale-backfill-claims   — Advanced/legacy: reset stale range claims.
     stats                        — Display per-log ingestion statistics.
     logs-follow                  — Stream application log output.
     rebuild-hostname-latest-certs — Rebuild latest-cert summary for all hostnames.
@@ -17,7 +17,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 from rich.console import Console
@@ -39,6 +39,13 @@ def register(app: typer.Typer) -> None:
         from ctpool._cli_ops_impl import run_sync_logs
 
         asyncio.run(run_sync_logs(_console))
+
+    @app.command("backfill-state")
+    def backfill_state() -> None:
+        """Show per-log backfill state from ct_log_backfill_state."""
+        from ctpool._cli_backfill_state_impl import run_list_backfill_state
+
+        asyncio.run(run_list_backfill_state())
 
     @app.command("tail")
     def tail(
@@ -131,7 +138,7 @@ def register(app: typer.Typer) -> None:
     @app.command("backfill")
     def backfill(
         once: Annotated[
-            bool, typer.Option("--once", help="Process one range then exit.")
+            bool, typer.Option("--once", help="Process one batch then exit.")
         ] = False,
         limit: Annotated[
             int | None, typer.Option("--limit", help="Stop after N entries.")
@@ -147,8 +154,23 @@ def register(app: typer.Typer) -> None:
         progress: Annotated[
             bool, typer.Option("--progress", help="Print a line per batch.")
         ] = False,
+        dispatch_mode: Annotated[
+            Literal["per-log", "legacy-ranges"] | None,
+            typer.Option(
+                "--dispatch-mode",
+                help=(
+                    "Override CT_BACKFILL_DISPATCH_MODE: 'per-log' "
+                    "(default runtime) or 'legacy-ranges' "
+                    "(compatibility/debug only)."
+                ),
+            ),
+        ] = None,
     ) -> None:
-        """Claim and process historical CT log backfill ranges."""
+        """Run the backfill worker.
+
+        Per-log dispatch is the default runtime path. ``legacy-ranges`` is a
+        compatibility/debug override for older range-based workflows.
+        """
         from ctpool.backfill_worker import run_backfill
 
         settings = get_settings()
@@ -179,6 +201,7 @@ def register(app: typer.Typer) -> None:
                 on_batch=on_batch,
                 on_status=on_status,
                 batch_size=batch_size,
+                dispatch_mode=dispatch_mode,
             )
         )
 
@@ -198,7 +221,11 @@ def register(app: typer.Typer) -> None:
             ),
         ] = None,
     ) -> None:
-        """Reset in_progress backfill ranges with stale heartbeats to pending."""
+        """Reset stale legacy range claims back to pending.
+
+        This only affects ``ct_log_backfill_ranges`` compatibility state. It
+        is not part of the normal per-log runtime path.
+        """
         from ctpool._cli_reap_impl import run_reap_stale
 
         asyncio.run(

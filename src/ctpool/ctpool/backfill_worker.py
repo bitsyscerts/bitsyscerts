@@ -1,11 +1,16 @@
-"""CT log backfill worker: claim and process historical index ranges.
+"""CT log backfill worker entry point.
+
+The historical implementation here drove dispatch through
+``ct_log_backfill_ranges``. As of Sprint 1B the default normal-runtime
+path is **per-log dispatch** through ``ct_log_backfill_state`` — see
+:mod:`ctpool.backfill_per_log`. The legacy range-based loop is preserved
+in this module under :func:`run_backfill_legacy` for compatibility with
+range repair, audit findings, and migration scenarios; it is selected
+only when ``Settings.ct_backfill_dispatch_mode == 'legacy-ranges'``.
 
 Exports:
-    estimate_log_age_days — Pure helper: estimate a log's age in days from STH
-                            timestamp and first_seen_at.
-    compute_pivot_index   — Pure helper: calculate the start index for a
-                            days-bounded backfill window.
-    run_backfill          — Backfill loop entry point; one session per range claim.
+    run_backfill        — Dispatcher: routes to per-log or legacy by config.
+    run_backfill_legacy — Legacy range-based loop (kept for compatibility).
 """
 
 from __future__ import annotations
@@ -16,7 +21,6 @@ import socket
 import time
 import uuid as _uuid
 from collections.abc import Callable
-from datetime import datetime
 from os import getpid
 
 import httpx
@@ -24,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ctpool.audit_constants import RANGE_KIND_REPAIR
 from ctpool.audit_repair import resolve_repair_finding
+from ctpool.backfill_seeder import seed_ranges_for_log
 from ctpool.config import Settings
 from ctpool.db_contention_accumulator import DbRetryPressureAccumulator
 from ctpool.db_contention_coordinator import (
@@ -37,9 +42,7 @@ from ctpool.db_contention_types import DbContentionObservation
 from ctpool.disk_guard import is_disk_critical, is_disk_low
 from ctpool.dispatcher import (
     claim_backfill_range,
-    create_backfill_ranges,
     get_eligible_backfill_logs,
-    has_backfill_ranges,
     mark_range_complete,
     mark_range_failed,
     mark_range_pending,
@@ -53,7 +56,7 @@ from ctpool.exceptions import (
     RateLimitError,
     UnsupportedEntryTypeError,
 )
-from ctpool.fetcher import fetch_entries, fetch_sth
+from ctpool.fetcher import fetch_entries
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -64,64 +67,17 @@ from ctpool.outcome_constants import (
     OUTCOME_WRITE_ERROR,
 )
 from ctpool.parser import parse_leaf_entry
+from ctpool.worker_registry import (
+    WorkerCounters,
+    heartbeat_worker,
+    mark_worker_stopped,
+    register_worker,
+)
 
 _logger = logging.getLogger(__name__)
 
 _SLEEP_NO_RANGES_SECONDS = 30
 _SLEEP_DISK_LOW_SECONDS = 60
-
-# Milliseconds-per-day constant used by the pivot estimation.
-_MS_PER_DAY: float = 86_400_000.0
-
-
-def estimate_log_age_days(
-    sth_timestamp_ms: int,
-    first_seen_at: datetime | None,
-) -> float:
-    """Return a CT log's approximate age in days.
-
-    Uses the STH millisecond timestamp as *now* and ``first_seen_at`` as the
-    log creation proxy.  Returns ``0.0`` if the result would be negative or
-    ``first_seen_at`` is ``None``.
-
-    Args:
-        sth_timestamp_ms: Milliseconds since epoch from the log's signed tree head.
-        first_seen_at:    When this log was first observed (from ``CtLogSource``).
-                          ``None`` is treated as unknown → returns ``0.0``.
-
-    Returns:
-        Age in days as a float, minimum ``0.0``.
-    """
-    if first_seen_at is None:
-        return 0.0
-    first_seen_ms = first_seen_at.timestamp() * 1000.0
-    age_ms = sth_timestamp_ms - first_seen_ms
-    return max(0.0, age_ms / _MS_PER_DAY)
-
-
-def compute_pivot_index(
-    tree_size: int,
-    days: int,
-    log_age_days: float,
-) -> int:
-    """Return the start index for a days-bounded backfill window.
-
-    Estimates the index corresponding to ``days`` ago by assuming uniform
-    certificate issuance over the log's lifetime.  Returns ``0`` when the
-    window covers the full history or the age estimate is not usable.
-
-    Args:
-        tree_size:    Current tree size (number of entries in the log).
-        days:         How far back to backfill (0 means full history).
-        log_age_days: Estimated total age of the log in days.
-
-    Returns:
-        First index to include; always in ``[0, tree_size)``.
-    """
-    if tree_size == 0 or days <= 0 or log_age_days <= 0 or days >= log_age_days:
-        return 0
-    fraction_to_skip = 1.0 - (days / log_age_days)
-    return max(0, min(int(tree_size * fraction_to_skip), tree_size - 1))
 
 
 def _worker_id() -> str:
@@ -141,60 +97,6 @@ async def _resolve_log_url(session: AsyncSession, claimed: CtLogBackfillRange) -
             f"CtLogSource {claimed.log_source_id} not found for range {claimed.id}"
         )
     return log.url
-
-
-async def _seed_ranges_for_log(
-    log: CtLogSource,
-    session_factory: async_sessionmaker[AsyncSession],
-    settings: Settings,
-    client: httpx.AsyncClient,
-    days: int,
-    on_status: Callable[[str], None] | None = None,
-) -> None:
-    """Probe a log's STH and create backfill ranges if none exist yet.
-
-    When *days* is greater than zero, only ranges covering the most recent
-    *days* days of history are seeded (pivot estimated from tree uniformity).
-    Pass ``days=0`` to seed the full history from index 0.
-    """
-    try:
-        async with session_factory() as session:
-            if await has_backfill_ranges(session, log.id):
-                return
-
-        if on_status is not None:
-            on_status(f"Seeding {log.description} — probing tree size…")
-        sth = await fetch_sth(log.url, client)
-    except FetchError as exc:
-        _logger.error("backfill seed: STH probe failed log=%s: %s", log.id, exc)
-        if on_status is not None:
-            on_status(f"  Seed failed for {log.description}: {exc}")
-        return
-
-    tree_size: int = sth.tree_size
-    if tree_size == 0:
-        return
-
-    log_age_days = estimate_log_age_days(sth.timestamp, log.first_seen_at)
-    pivot = compute_pivot_index(tree_size, days, log_age_days)
-
-    async with session_factory() as session:
-        async with session.begin():
-            count = await create_backfill_ranges(session, log, pivot, tree_size - 1)
-
-    if count:
-        if on_status is not None:
-            on_status(
-                f"  └ seeded {count:,} ranges"
-                f" ({tree_size - pivot:,} entries) for {log.description}"
-            )
-        _logger.info(
-            "backfill seeded %d ranges log=%s tree_size=%d pivot=%d",
-            count,
-            log.id,
-            tree_size,
-            pivot,
-        )
 
 
 async def _process_range_batch(
@@ -219,7 +121,7 @@ async def _process_range_batch(
 
     response = await fetch_entries(log_url, start, end, client)
     count = 0
-    hostname_count = 0
+    parsed_count = 0
     retry_accumulator = DbRetryPressureAccumulator()
     for i, raw_entry in enumerate(response.entries):
         entry_index = start + i
@@ -228,6 +130,7 @@ async def _process_range_batch(
             normalized = build_normalized_entry(
                 parsed, claimed.log_source_id, entry_index
             )
+            parsed_count += 1
 
             def _on_retry(
                 attempt: int,
@@ -247,7 +150,7 @@ async def _process_range_batch(
                 )
 
             retry_accumulator.record_entry_attempt()
-            await persist_entry_with_retry(
+            write_metrics = await persist_entry_with_retry(
                 session,
                 normalized,
                 max_retries=settings.ct_deadlock_max_retries,
@@ -256,7 +159,7 @@ async def _process_range_batch(
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
             )
             count += 1
-            hostname_count += len(normalized.hostnames)
+            metrics.record_entry_write_metrics(write_metrics)
         except UnsupportedEntryTypeError as exc:
             _logger.warning(
                 "unsupported entry type backfill range=%s index=%d: %s",
@@ -265,6 +168,7 @@ async def _process_range_batch(
                 exc,
             )
             metrics.record_parse_error()
+            metrics.record_terminal_entry_errors(1)
             await persist_failure_outcome(
                 session,
                 claimed.log_source_id,
@@ -280,6 +184,7 @@ async def _process_range_batch(
                 exc,
             )
             metrics.record_parse_error()
+            metrics.record_terminal_entry_errors(1)
             await persist_failure_outcome(
                 session,
                 claimed.log_source_id,
@@ -295,6 +200,7 @@ async def _process_range_batch(
                 exc.__class__.__name__,
                 exc,
             )
+            metrics.record_terminal_entry_errors(1)
             await persist_failure_outcome(
                 session,
                 claimed.log_source_id,
@@ -304,10 +210,10 @@ async def _process_range_batch(
             )
 
     metrics.record_entries_fetched(len(response.entries))
-    metrics.record_entries_parsed(count)
-    metrics.record_certs_upserted(count)
-    metrics.record_hostnames_upserted(hostname_count)
-    return count, retry_accumulator.drain()
+    metrics.record_entries_parsed(parsed_count)
+    observation = retry_accumulator.drain()
+    metrics.record_retryable_errors(observation.retryable_errors)
+    return count, observation
 
 
 async def _run_one_range(
@@ -341,7 +247,7 @@ async def _run_one_range(
                 limit_remaining,
                 settings,
             )
-            if count > 0:
+            if metrics.has_activity():
                 async with session.begin():
                     await metrics.persist_snapshot(session, claimed.log_source_id)
 
@@ -357,12 +263,22 @@ async def _run_one_range(
         return count, log_url, False, observation, None
     except RateLimitError as exc:
         _logger.warning("rate limited backfill range=%s: %s", claimed.id, exc)
+        metrics.record_retryable_errors(1)
+        if metrics.has_activity():
+            async with session_factory() as session:
+                async with session.begin():
+                    await metrics.persist_snapshot(session, claimed.log_source_id)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_pending(session, claimed.id)
         return 0, "", True, DbContentionObservation(0, 0), exc.retry_after_seconds
     except FetchError as exc:
         _logger.error("fetch error backfill range=%s: %s", claimed.id, exc)
+        metrics.record_retryable_errors(1)
+        if metrics.has_activity():
+            async with session_factory() as session:
+                async with session.begin():
+                    await metrics.persist_snapshot(session, claimed.log_source_id)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_failed(session, claimed.id, str(exc))
@@ -374,6 +290,10 @@ async def _run_one_range(
             exc.__class__.__name__,
             exc,
         )
+        if metrics.has_activity():
+            async with session_factory() as session:
+                async with session.begin():
+                    await metrics.persist_snapshot(session, claimed.log_source_id)
         async with session_factory() as session:
             async with session.begin():
                 await mark_range_failed(session, claimed.id, str(exc))
@@ -391,8 +311,66 @@ async def run_backfill(
     on_batch: Callable[[str, int, int], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     batch_size: int | None = None,
+    dispatch_mode: str | None = None,
 ) -> None:
-    """Main backfill worker loop.
+    """Backfill worker entry point — dispatches to per-log or legacy mode.
+
+    The selected mode comes from ``settings.ct_backfill_dispatch_mode``
+    (default ``per-log``) unless ``dispatch_mode`` overrides it explicitly.
+
+    The ``per-log`` path is the normal runtime model and uses
+    ``ct_log_backfill_state``. The ``legacy-ranges`` path uses the historical
+    ``ct_log_backfill_ranges`` table and is retained for repair/audit/legacy
+    workflows.
+    """
+    from ctpool.backfill_per_log import run_backfill_per_log
+
+    mode = dispatch_mode or settings.ct_backfill_dispatch_mode
+    if mode == "per-log":
+        await run_backfill_per_log(
+            session_factory,
+            settings,
+            once=once,
+            limit=limit,
+            days=days,
+            log_id=log_id,
+            on_batch=on_batch,
+            on_status=on_status,
+            batch_size=batch_size,
+        )
+        return
+    if mode == "legacy-ranges":
+        await run_backfill_legacy(
+            session_factory,
+            settings,
+            once=once,
+            limit=limit,
+            days=days,
+            log_id=log_id,
+            on_batch=on_batch,
+            on_status=on_status,
+            batch_size=batch_size,
+        )
+        return
+    raise ValueError(
+        f"unknown ct_backfill_dispatch_mode={mode!r}; "
+        "expected 'per-log' or 'legacy-ranges'"
+    )
+
+
+async def run_backfill_legacy(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    *,
+    once: bool = False,
+    limit: int | None = None,
+    days: int | None = None,
+    log_id: _uuid.UUID | None = None,
+    on_batch: Callable[[str, int, int], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    batch_size: int | None = None,
+) -> None:
+    """Legacy range-based backfill loop (compatibility / repair only).
 
     Claims pending ranges from the database and processes them sequentially.
     Seeds new ranges from the current STH on first run. Pauses when disk is
@@ -424,147 +402,178 @@ async def run_backfill(
         if log_id is not None:
             logs = [lg for lg in logs if lg.id == log_id]
         for log in logs:
-            await _seed_ranges_for_log(
+            await seed_ranges_for_log(
                 log, session_factory, settings, client, _days, on_status
             )
 
-        while True:
-            if is_disk_critical(
-                settings.ct_critical_free_disk_gb, settings.ct_disk_check_path
-            ):
-                _logger.critical("disk critical — halting backfill worker")
-                # Exit non-zero so Docker applies restart backoff instead of
-                # immediately relaunching and looping on the same condition.
-                raise SystemExit(1)
-
-            if is_disk_low(settings.ct_min_free_disk_gb, settings.ct_disk_check_path):
-                _logger.warning(
-                    "disk low — pausing backfill for %ds", _SLEEP_DISK_LOW_SECONDS
+        async with session_factory() as session:
+            async with session.begin():
+                _registry_row = await register_worker(
+                    session,
+                    worker_id=worker,
+                    worker_kind="backfill",
                 )
-                if on_status is not None:
-                    on_status(f"Disk low — pausing {_SLEEP_DISK_LOW_SECONDS} s")
-                await asyncio.sleep(_SLEEP_DISK_LOW_SECONDS)
-                if once:
-                    break
-                continue
+        _registry_id = _registry_row.id
 
-            if limit is not None and total_processed >= limit:
-                return
+        try:
+            while True:
+                async with session_factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=_registry_id,
+                            status="idle",
+                            current_index=None,
+                            batch_start_index=None,
+                            batch_end_index=None,
+                            counters=WorkerCounters(),
+                        )
 
-            limit_remaining = (limit - total_processed) if limit is not None else None
-            now = time.monotonic()
-            excluded_log_ids = {
-                lid for lid, until in rate_limited_until.items() if now < until
-            }
+                if is_disk_critical(
+                    settings.ct_critical_free_disk_gb, settings.ct_disk_check_path
+                ):
+                    _logger.critical("disk critical — halting backfill worker")
+                    # Exit non-zero so Docker applies restart backoff instead of
+                    # immediately relaunching and looping on the same condition.
+                    raise SystemExit(1)
 
-            async with session_factory() as session:
-                async with session.begin():
-                    reaped = await reap_stale_backfill_claims(
-                        session,
-                        settings.ct_backfill_claim_timeout_seconds,
+                check_path = settings.ct_disk_check_path
+                if is_disk_low(settings.ct_min_free_disk_gb, check_path):
+                    _logger.warning(
+                        "disk low — pausing backfill for %ds", _SLEEP_DISK_LOW_SECONDS
                     )
-            if reaped:
-                _logger.info("backfill reaper: reset %d stale claims", len(reaped))
-                for r in reaped:
-                    _logger.debug(
-                        "backfill reaper: range=%s log=%s next_index=%d",
-                        r.id,
-                        r.log_source_id,
-                        r.next_index,
-                    )
+                    if on_status is not None:
+                        on_status(f"Disk low — pausing {_SLEEP_DISK_LOW_SECONDS} s")
+                    await asyncio.sleep(_SLEEP_DISK_LOW_SECONDS)
+                    if once:
+                        break
+                    continue
 
-            directive = await get_db_contention_directive(
-                session_factory,
-                settings,
-                _batch,
-            )
-            effective_batch = resolve_effective_batch_size(_batch, directive)
-            db_sleep = await sleep_for_db_contention(directive, settings)
-            if db_sleep > 0.0 and on_status is not None:
-                on_status(f"DB contention — pacing {db_sleep:.2f} s")
-
-            async with session_factory() as session:
-                async with session.begin():
-                    claimed = await claim_backfill_range(
-                        session,
-                        log_id,
-                        worker,
-                        excluded_log_source_ids=excluded_log_ids,
-                    )
-
-            if claimed is None:
-                _logger.debug(
-                    "backfill: no pending ranges — sleeping %ds",
-                    _SLEEP_NO_RANGES_SECONDS,
-                )
-                if on_status is not None:
-                    on_status(
-                        f"No pending ranges — sleeping {_SLEEP_NO_RANGES_SECONDS} s"
-                    )
-                if once:
+                if limit is not None and total_processed >= limit:
                     return
-                await asyncio.sleep(_SLEEP_NO_RANGES_SECONDS)
-                continue
 
-            if on_status is not None:
-                on_status(
-                    f"Fetching [{claimed.start_index:,}–{claimed.end_index:,}]"
-                    f" ({claimed.end_index - claimed.start_index + 1:,} entries)…"
+                limit_remaining = (
+                    (limit - total_processed) if limit is not None else None
                 )
-            (
-                batch_count,
-                log_url,
-                was_rate_limited,
-                observation,
-                retry_after,
-            ) = await _run_one_range(
-                claimed,
-                session_factory,
-                client,
-                settings,
-                effective_batch,
-                limit_remaining,
-            )
-            if was_rate_limited:
-                hit_count = rate_limit_hits.get(claimed.log_source_id, 0) + 1
-                rate_limit_hits[claimed.log_source_id] = hit_count
-                if retry_after is not None:
-                    backoff_seconds: float = min(
-                        settings.ct_retry_after_max_seconds, retry_after
-                    )
-                else:
-                    backoff_seconds = min(
-                        settings.ct_rate_limit_backoff_max_seconds,
-                        settings.ct_rate_limit_backoff_seconds * (2 ** (hit_count - 1)),
-                    )
-                rate_limited_until[claimed.log_source_id] = now + float(backoff_seconds)
-                if on_status is not None:
-                    on_status(
-                        "Rate limited for log "
-                        f"{claimed.log_source_id} — pausing {backoff_seconds} s"
-                    )
-                if once:
-                    return
-                continue
+                now = time.monotonic()
+                excluded_log_ids = {
+                    lid for lid, until in rate_limited_until.items() if now < until
+                }
 
-            if observation.has_activity:
-                await submit_db_contention_observation(
+                async with session_factory() as session:
+                    async with session.begin():
+                        reaped = await reap_stale_backfill_claims(
+                            session,
+                            settings.ct_backfill_claim_timeout_seconds,
+                        )
+                if reaped:
+                    _logger.info("backfill reaper: reset %d stale claims", len(reaped))
+                    for r in reaped:
+                        _logger.debug(
+                            "backfill reaper: range=%s log=%s next_index=%d",
+                            r.id,
+                            r.log_source_id,
+                            r.next_index,
+                        )
+
+                directive = await get_db_contention_directive(
                     session_factory,
                     settings,
-                    observation,
                     _batch,
                 )
+                effective_batch = resolve_effective_batch_size(_batch, directive)
+                db_sleep = await sleep_for_db_contention(directive, settings)
+                if db_sleep > 0.0 and on_status is not None:
+                    on_status(f"DB contention — pacing {db_sleep:.2f} s")
 
-            if batch_count == 0 and on_status is not None:
-                on_status("  └ fetch error — range marked failed")
+                async with session_factory() as session:
+                    async with session.begin():
+                        claimed = await claim_backfill_range(
+                            session,
+                            log_id,
+                            worker,
+                            excluded_log_source_ids=excluded_log_ids,
+                        )
 
-            if batch_count > 0:
-                rate_limit_hits.pop(claimed.log_source_id, None)
-                rate_limited_until.pop(claimed.log_source_id, None)
+                if claimed is None:
+                    _logger.debug(
+                        "backfill: no pending ranges — sleeping %ds",
+                        _SLEEP_NO_RANGES_SECONDS,
+                    )
+                    if on_status is not None:
+                        on_status(
+                            f"No pending ranges — sleeping {_SLEEP_NO_RANGES_SECONDS} s"
+                        )
+                    if once:
+                        return
+                    await asyncio.sleep(_SLEEP_NO_RANGES_SECONDS)
+                    continue
 
-            total_processed += batch_count
-            if batch_count > 0 and on_batch is not None:
-                on_batch(log_url, batch_count, total_processed)
+                if on_status is not None:
+                    on_status(
+                        f"Fetching [{claimed.start_index:,}–{claimed.end_index:,}]"
+                        f" ({claimed.end_index - claimed.start_index + 1:,} entries)…"
+                    )
+                (
+                    batch_count,
+                    log_url,
+                    was_rate_limited,
+                    observation,
+                    retry_after,
+                ) = await _run_one_range(
+                    claimed,
+                    session_factory,
+                    client,
+                    settings,
+                    effective_batch,
+                    limit_remaining,
+                )
+                if was_rate_limited:
+                    hit_count = rate_limit_hits.get(claimed.log_source_id, 0) + 1
+                    rate_limit_hits[claimed.log_source_id] = hit_count
+                    if retry_after is not None:
+                        backoff_seconds: float = min(
+                            settings.ct_retry_after_max_seconds, retry_after
+                        )
+                    else:
+                        backoff_seconds = min(
+                            settings.ct_rate_limit_backoff_max_seconds,
+                            settings.ct_rate_limit_backoff_seconds
+                            * (2 ** (hit_count - 1)),
+                        )
+                    until = now + float(backoff_seconds)
+                    rate_limited_until[claimed.log_source_id] = until
+                    if on_status is not None:
+                        on_status(
+                            "Rate limited for log "
+                            f"{claimed.log_source_id} — pausing {backoff_seconds} s"
+                        )
+                    if once:
+                        return
+                    continue
 
-            if once:
-                return
+                if observation.has_activity:
+                    await submit_db_contention_observation(
+                        session_factory,
+                        settings,
+                        observation,
+                        _batch,
+                    )
+
+                if batch_count == 0 and on_status is not None:
+                    on_status("  └ fetch error — range marked failed")
+
+                if batch_count > 0:
+                    rate_limit_hits.pop(claimed.log_source_id, None)
+                    rate_limited_until.pop(claimed.log_source_id, None)
+
+                total_processed += batch_count
+                if batch_count > 0 and on_batch is not None:
+                    on_batch(log_url, batch_count, total_processed)
+
+                if once:
+                    return
+        finally:
+            async with session_factory() as session:
+                async with session.begin():
+                    await mark_worker_stopped(session, row_id=_registry_id)

@@ -1,7 +1,11 @@
-"""Tests for ctpool.backfill_worker — run_backfill.
+"""Tests for ctpool.backfill_worker.run_backfill_legacy.
 
-All external boundaries (HTTP fetches, disk guard, database) are mocked
-so tests run without a network or database connection.
+This module covers the retained legacy range-dispatch compatibility path.
+Active per-log runtime behavior is covered separately in
+``tests/test_backfill_per_log.py``.
+
+All external boundaries (HTTP fetches, disk guard, database) are mocked so
+tests run without a network or database connection.
 """
 
 from __future__ import annotations
@@ -12,10 +16,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ctpool.backfill_worker import run_backfill
+from ctpool.backfill_worker import run_backfill_legacy as run_backfill
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
 from ctpool.db_contention_types import DbContentionDirective, DbContentionObservation
+from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.exceptions import FetchError
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -89,6 +94,21 @@ def _make_entries_response(n: int = 1) -> CtEntriesResponse:
     )
 
 
+def _stored_metrics(
+    *,
+    hostnames_observed: int = 0,
+    new_unique_hostnames: int = 0,
+    certificate_inserted: bool = False,
+) -> EntryWriteMetrics:
+    return EntryWriteMetrics(
+        new_unique_certificates=1 if certificate_inserted else 0,
+        duplicate_certificates=0 if certificate_inserted else 1,
+        hostnames_observed=hostnames_observed,
+        new_unique_hostnames=new_unique_hostnames,
+        known_hostnames=hostnames_observed - new_unique_hostnames,
+    )
+
+
 def _make_session_factory() -> MagicMock:
     session = AsyncMock()
     session.begin = MagicMock()
@@ -97,6 +117,7 @@ def _make_session_factory() -> MagicMock:
     session.begin_nested = MagicMock()
     session.begin_nested.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin_nested.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.add = MagicMock()
     factory = MagicMock()
     factory.session = session
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
@@ -119,6 +140,21 @@ def _patch_reap_stale():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _patch_worker_registry():
+    """Prevent worker_registry calls from hitting the mock session."""
+    mock_row = MagicMock()
+    mock_row.id = uuid.uuid4()
+    with (
+        patch(
+            "ctpool.backfill_worker.register_worker", AsyncMock(return_value=mock_row)
+        ),
+        patch("ctpool.backfill_worker.heartbeat_worker", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_worker_stopped", AsyncMock()),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -136,9 +172,9 @@ async def test_backfill_worker_exits_when_no_pending_ranges() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
         ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
@@ -165,9 +201,9 @@ async def test_backfill_worker_marks_range_complete_on_success() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
         ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range",
@@ -189,12 +225,15 @@ async def test_backfill_worker_marks_range_complete_on_success() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
         patch("ctpool.backfill_worker.mark_range_complete", mock_mark_complete),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         factory = _make_session_factory()
@@ -223,9 +262,9 @@ async def test_backfill_worker_marks_range_failed_on_fetch_error() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
         ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range",
@@ -243,7 +282,7 @@ async def test_backfill_worker_marks_range_failed_on_fetch_error() -> None:
         patch("ctpool.backfill_worker.mark_range_failed", mock_mark_failed),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
@@ -267,14 +306,14 @@ async def test_backfill_worker_pauses_when_disk_is_low() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
         ),
         patch("ctpool.backfill_worker.asyncio.sleep", mock_sleep),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
@@ -294,14 +333,14 @@ async def test_backfill_worker_halts_when_disk_is_critical() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
         ),
         patch("ctpool.backfill_worker.claim_backfill_range", AsyncMock()) as mock_claim,
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
         pytest.raises(SystemExit) as exc_info,
     ):
@@ -322,8 +361,9 @@ async def test_backfill_worker_exits_at_entry_limit() -> None:
         session: object,
         entry: object,
         **_: object,
-    ) -> None:
+    ) -> EntryWriteMetrics:
         written.append(entry)
+        return _stored_metrics()
 
     with (
         patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
@@ -332,9 +372,9 @@ async def test_backfill_worker_exits_at_entry_limit() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
         ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range",
@@ -360,7 +400,7 @@ async def test_backfill_worker_exits_at_entry_limit() -> None:
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, limit=1)
@@ -387,7 +427,7 @@ async def test_backfill_worker_on_status_fires_when_no_pending_ranges() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=True)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=True)
         ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
@@ -419,7 +459,7 @@ async def test_backfill_worker_on_status_fires_before_fetching_range() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=True)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=True)
         ),
         patch(
             "ctpool.backfill_worker.claim_backfill_range",
@@ -441,7 +481,10 @@ async def test_backfill_worker_on_status_fires_before_fetching_range() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
@@ -471,7 +514,7 @@ async def test_backfill_worker_applies_shared_db_pacing_before_processing() -> N
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=True)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=True)
         ),
         patch(
             "ctpool.backfill_worker.get_db_contention_directive",
@@ -515,8 +558,8 @@ async def test_backfill_worker_applies_shared_db_pacing_before_processing() -> N
 # ---------------------------------------------------------------------------
 
 
-async def test_backfill_worker_records_hostnames_upserted_per_batch() -> None:
-    """record_hostnames_upserted is called with the sum of hostnames across entries."""
+async def test_backfill_worker_records_hostnames_observed_per_batch() -> None:
+    """record_entry_write_metrics carries observed-hostname totals per entry."""
     from ctpool.metrics import LogMetricsAccumulator
 
     log = _make_log()
@@ -530,11 +573,14 @@ async def test_backfill_worker_records_hostnames_upserted_per_batch() -> None:
     normalized_b.hostnames = ["d.example.com", "e.example.com"]
 
     recorded_counts: list[int] = []
-    original_record = LogMetricsAccumulator.record_hostnames_upserted
+    original_record = LogMetricsAccumulator.record_entry_write_metrics
 
-    def capture_record_hostnames(self: LogMetricsAccumulator, count: int) -> None:
-        recorded_counts.append(count)
-        original_record(self, count)
+    def capture_record_entry_metrics(
+        self: LogMetricsAccumulator,
+        metrics: EntryWriteMetrics,
+    ) -> None:
+        recorded_counts.append(metrics.hostnames_observed)
+        original_record(self, metrics)
 
     with (
         patch("ctpool.backfill_worker.is_disk_critical", return_value=False),
@@ -543,12 +589,12 @@ async def test_backfill_worker_records_hostnames_upserted_per_batch() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(0))),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(0))),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges", AsyncMock(return_value=0)
+            "ctpool.backfill_seeder.create_backfill_ranges", AsyncMock(return_value=0)
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges",
+            "ctpool.backfill_seeder.has_backfill_ranges",
             AsyncMock(side_effect=[True, False]),
         ),
         patch(
@@ -571,7 +617,15 @@ async def test_backfill_worker_records_hostnames_upserted_per_batch() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(side_effect=[normalized_a, normalized_b]),
         ),
-        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(
+                side_effect=[
+                    _stored_metrics(hostnames_observed=3, new_unique_hostnames=1),
+                    _stored_metrics(hostnames_observed=2, new_unique_hostnames=0),
+                ]
+            ),
+        ),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch(
@@ -579,8 +633,8 @@ async def test_backfill_worker_records_hostnames_upserted_per_batch() -> None:
             AsyncMock(),
         ),
         patch(
-            "ctpool.backfill_worker.LogMetricsAccumulator.record_hostnames_upserted",
-            capture_record_hostnames,
+            "ctpool.backfill_worker.LogMetricsAccumulator.record_entry_write_metrics",
+            capture_record_entry_metrics,
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
     ):

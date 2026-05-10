@@ -42,18 +42,8 @@ def _get_settings_service(
 async def get_storage_settings(
     service: Annotated[SettingsService, Depends(_get_settings_service)],
 ) -> StorageSettingsResponse:
-    """Return the active database-backed storage settings.
-
-    Returns 404 if no settings row has been created yet
-    (instance not yet bootstrapped).
-    """
-    result = await service.get_settings()
-    if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No storage settings found. Run the worker to bootstrap.",
-        )
-    return result
+    """Return the active storage settings, bootstrapping on first access."""
+    return await service.get_settings()
 
 
 @settings_router.put(

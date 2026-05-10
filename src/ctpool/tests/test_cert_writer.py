@@ -67,10 +67,11 @@ def _make_parsed(
 async def test_upsert_certificate_inserts_row(db_session: AsyncSession) -> None:
     """First call inserts a certificate and returns a valid UUID."""
     parsed = _make_parsed()
-    cert_id = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
+    result = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
 
-    assert isinstance(cert_id, uuid.UUID)
-    row = await db_session.get(Certificate, cert_id)
+    assert isinstance(result.certificate_id, uuid.UUID)
+    assert result.inserted is True
+    row = await db_session.get(Certificate, result.certificate_id)
     assert row is not None
     assert row.fingerprint_sha256 == parsed.fingerprint_sha256
 
@@ -81,7 +82,9 @@ async def test_upsert_certificate_idempotent(db_session: AsyncSession) -> None:
     id1 = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
     id2 = await upsert_certificate(db_session, parsed, is_wildcard_present=True)
 
-    assert id1 == id2
+    assert id1.certificate_id == id2.certificate_id
+    assert id1.inserted is True
+    assert id2.inserted is False
 
 
 async def test_upsert_certificate_idempotent_noop_conflict(
@@ -92,7 +95,8 @@ async def test_upsert_certificate_idempotent_noop_conflict(
     id1 = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
     id2 = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
 
-    assert id1 == id2
+    assert id1.certificate_id == id2.certificate_id
+    assert id2.inserted is False
 
 
 async def test_upsert_certificate_updates_on_conflict(db_session: AsyncSession) -> None:
@@ -101,11 +105,11 @@ async def test_upsert_certificate_updates_on_conflict(db_session: AsyncSession) 
     cert_id = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
 
     parsed2 = _make_parsed(san_dns_names=["example.com", "www.example.com"])
-    await upsert_certificate(db_session, parsed2, is_wildcard_present=True)
+    updated = await upsert_certificate(db_session, parsed2, is_wildcard_present=True)
 
-    await db_session.refresh(await db_session.get(Certificate, cert_id))  # noqa: E501
-    row = await db_session.get(Certificate, cert_id)
+    row = await db_session.get(Certificate, cert_id.certificate_id)
     assert row is not None
+    assert updated.inserted is False
     assert row.is_wildcard_present is True
     assert row.san_count == 2
 
@@ -118,12 +122,13 @@ async def test_upsert_certificate_updates_on_conflict(db_session: AsyncSession) 
 async def test_upsert_hostname_inserts_row(db_session: AsyncSession) -> None:
     """First call inserts a hostname and returns a valid UUID."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(
+    result = await upsert_hostname(
         db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
     )
 
-    assert isinstance(h_id, uuid.UUID)
-    row = await db_session.get(Hostname, h_id)
+    assert isinstance(result.hostname_id, uuid.UUID)
+    assert result.inserted is True
+    row = await db_session.get(Hostname, result.hostname_id)
     assert row is not None
     assert row.hostname == "example.com"
 
@@ -137,19 +142,21 @@ async def test_upsert_hostname_idempotent(db_session: AsyncSession) -> None:
     id2 = await upsert_hostname(
         db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
     )
-    assert id1 == id2
+    assert id1.hostname_id == id2.hostname_id
+    assert id1.inserted is True
+    assert id2.inserted is False
 
 
 async def test_upsert_hostname_wildcard_detected(db_session: AsyncSession) -> None:
     """Wildcard hostname sets is_wildcard=True."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(
+    result = await upsert_hostname(
         db_session,
         "*.example.com",
         parsed,
         observed_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
-    row = await db_session.get(Hostname, h_id)
+    row = await db_session.get(Hostname, result.hostname_id)
     assert row is not None
     assert row.is_wildcard is True
 
@@ -157,10 +164,10 @@ async def test_upsert_hostname_wildcard_detected(db_session: AsyncSession) -> No
 async def test_upsert_hostname_non_wildcard(db_session: AsyncSession) -> None:
     """Non-wildcard hostname sets is_wildcard=False."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(
+    result = await upsert_hostname(
         db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
     )
-    row = await db_session.get(Hostname, h_id)
+    row = await db_session.get(Hostname, result.hostname_id)
     assert row is not None
     assert row.is_wildcard is False
 
@@ -168,13 +175,13 @@ async def test_upsert_hostname_non_wildcard(db_session: AsyncSession) -> None:
 async def test_upsert_hostname_registrable_domain(db_session: AsyncSession) -> None:
     """Registrable domain is extracted correctly."""
     parsed = _make_parsed()
-    h_id = await upsert_hostname(
+    result = await upsert_hostname(
         db_session,
         "sub.example.com",
         parsed,
         observed_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
-    row = await db_session.get(Hostname, h_id)
+    row = await db_session.get(Hostname, result.hostname_id)
     assert row is not None
     assert row.registrable_domain == "example.com"
 
@@ -189,17 +196,23 @@ async def test_upsert_certificate_hostname_inserts_join_row(
 ) -> None:
     """Join row is created between a certificate and hostname."""
     parsed = _make_parsed()
-    cert_id = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
-    h_id = await upsert_hostname(
+    cert_result = await upsert_certificate(
+        db_session, parsed, is_wildcard_present=False
+    )
+    host_result = await upsert_hostname(
         db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
     )
 
-    await upsert_certificate_hostname(db_session, cert_id, h_id)
+    await upsert_certificate_hostname(
+        db_session,
+        cert_result.certificate_id,
+        host_result.hostname_id,
+    )
 
     result = await db_session.execute(
         select(CertificateHostname).where(
-            CertificateHostname.certificate_id == cert_id,
-            CertificateHostname.hostname_id == h_id,
+            CertificateHostname.certificate_id == cert_result.certificate_id,
+            CertificateHostname.hostname_id == host_result.hostname_id,
         )
     )
     assert result.scalars().first() is not None
@@ -208,10 +221,20 @@ async def test_upsert_certificate_hostname_inserts_join_row(
 async def test_upsert_certificate_hostname_idempotent(db_session: AsyncSession) -> None:
     """Inserting the same join row twice does not raise an error."""
     parsed = _make_parsed()
-    cert_id = await upsert_certificate(db_session, parsed, is_wildcard_present=False)
-    h_id = await upsert_hostname(
+    cert_result = await upsert_certificate(
+        db_session, parsed, is_wildcard_present=False
+    )
+    host_result = await upsert_hostname(
         db_session, "example.com", parsed, observed_at=datetime(2024, 1, 1, tzinfo=UTC)
     )
 
-    await upsert_certificate_hostname(db_session, cert_id, h_id)
-    await upsert_certificate_hostname(db_session, cert_id, h_id)  # must not raise
+    await upsert_certificate_hostname(
+        db_session,
+        cert_result.certificate_id,
+        host_result.hostname_id,
+    )
+    await upsert_certificate_hostname(
+        db_session,
+        cert_result.certificate_id,
+        host_result.hostname_id,
+    )

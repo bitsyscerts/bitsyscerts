@@ -1,9 +1,13 @@
 """Audit and health CLI commands.
 
 Commands:
-    check-audit-gaps   — Detect CT ingestion gaps and persist findings.
-    fix-audit-findings — Apply conservative repairs to open findings.
+    check-audit-gaps   — Advanced diagnostic: legacy range/audit consistency.
+    fix-audit-findings — Advanced repair for audit findings.
     doctor             — Run health checks and report status.
+
+These audit and repair commands are advanced/debug tools. They are not
+required for normal per-log dispatch operation; per-log workers handle
+retryable failures inline.
 """
 
 from __future__ import annotations
@@ -31,7 +35,11 @@ def register(app: typer.Typer) -> None:
             ),
         ] = False,
     ) -> None:
-        """Detect CT ingestion audit gaps and persist new audit findings."""
+        """[advanced/debug] Detect CT ingestion audit gaps and persist findings.
+
+        Advanced diagnostic command for legacy range/audit consistency
+        checks. Not required for normal per-log dispatch operation.
+        """
         from ctpool._cli_check_audit_impl import run_check_audit_gaps
 
         asyncio.run(run_check_audit_gaps(dry_run=dry_run, console=_console))
@@ -83,7 +91,11 @@ def register(app: typer.Typer) -> None:
             ),
         ] = "",
     ) -> None:
-        """Apply conservative repairs to open CT audit findings."""
+        """[advanced/debug] Apply conservative repairs to open CT audit findings.
+
+        Advanced repair command for audit findings. Normal retryable
+        ingestion failures should be handled inline by per-log workers.
+        """
         from ctpool._cli_repair_audit_impl import (
             run_fix_audit_findings,
             run_mark_ignored,

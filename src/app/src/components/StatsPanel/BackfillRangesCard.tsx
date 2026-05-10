@@ -5,23 +5,38 @@ import { BackfillFailedAlert } from "./BackfillFailedAlert";
 
 interface BackfillRangesCardProps {
   backfillRanges: BackfillRangeStats;
+  /**
+   * When true, this card represents the primary backfill source of truth
+   * (legacy-ranges dispatch mode active). When false, it is shown only as
+   * advanced/debug information and warnings are demoted to neutral copy.
+   */
+  isPrimary?: boolean;
 }
 
 /**
- * Displays backfill range status counts and a warning when stale in-progress
- * claims are detected (indicating crashed workers).
+ * Displays backfill range status counts. Renders as primary (red/yellow
+ * alerts) only when the active dispatch mode is legacy-ranges. In per-log
+ * mode the same data is rendered as advanced/debug history.
  */
 export function BackfillRangesCard({
   backfillRanges,
+  isPrimary = true,
 }: BackfillRangesCardProps) {
   const isStale = backfillRanges.stale_in_progress > 0;
 
   return (
     <Stack gap="xs">
       <Text size="sm" fw={600}>
-        Backfill Range Status
+        {isPrimary ? "Backfill Range Status" : "Legacy Backfill Range Status"}
       </Text>
-      {isStale && (
+      {!isPrimary && (
+        <Text size="xs" c="dimmed">
+          Legacy range counters from earlier ingestion runs. Per-log dispatch is
+          the active runtime; these numbers do not reflect current worker
+          health.
+        </Text>
+      )}
+      {isStale && isPrimary && (
         <Alert
           icon={<IconAlertTriangle size={16} />}
           color="yellow"
@@ -35,7 +50,10 @@ export function BackfillRangesCard({
         </Alert>
       )}
       {backfillRanges.failed > 0 && (
-        <BackfillFailedAlert failedCount={backfillRanges.failed} />
+        <BackfillFailedAlert
+          failedCount={backfillRanges.failed}
+          isPrimary={isPrimary}
+        />
       )}
       <Group gap="sm" wrap="wrap">
         <Badge color="gray" variant="light">
@@ -45,7 +63,10 @@ export function BackfillRangesCard({
           In Progress: {backfillRanges.in_progress.toLocaleString()}
         </Badge>
         {isStale && (
-          <Badge color="yellow" variant="filled">
+          <Badge
+            color={isPrimary ? "yellow" : "gray"}
+            variant={isPrimary ? "filled" : "light"}
+          >
             Stale: {backfillRanges.stale_in_progress.toLocaleString()}
           </Badge>
         )}
@@ -53,7 +74,7 @@ export function BackfillRangesCard({
           Completed: {backfillRanges.completed.toLocaleString()}
         </Badge>
         {backfillRanges.failed > 0 && (
-          <Badge color="red" variant="light">
+          <Badge color={isPrimary ? "red" : "gray"} variant="light">
             Failed: {backfillRanges.failed.toLocaleString()}
           </Badge>
         )}
