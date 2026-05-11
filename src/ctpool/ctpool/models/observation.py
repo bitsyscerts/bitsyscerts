@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, UniqueConstraint, text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,6 +25,12 @@ class CtLogObservation(Base):
             "log_source_id",
             "log_index",
             name="uq_ct_log_observations_log_source_id_log_index",
+        ),
+        Index("idx_ct_log_observations_observed_at", "observed_at"),
+        Index(
+            "idx_ct_log_observations_log_index",
+            "log_source_id",
+            "log_index",
         ),
     )
 

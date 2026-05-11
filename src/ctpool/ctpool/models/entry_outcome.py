@@ -18,6 +18,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -46,6 +47,13 @@ class CtEntryOutcome(Base):
             f"outcome IN ({_ALLOWED_SQL})",
             name="outcome",
         ),
+        Index(
+            "idx_ct_entry_outcomes_log_index",
+            "log_source_id",
+            "log_index",
+        ),
+        Index("idx_ct_entry_outcomes_outcome", "outcome"),
+        Index("idx_ct_entry_outcomes_processed_at", "first_seen_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -47,6 +48,7 @@ async def async_engine(
     """Async SQLAlchemy engine connected to a freshly recreated test schema."""
     engine = create_async_engine(str(test_settings.database_url), echo=False)
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine

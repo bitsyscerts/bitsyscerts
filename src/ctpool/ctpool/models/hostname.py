@@ -8,7 +8,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Text, UniqueConstraint, text
+import sqlalchemy as sa
+from sqlalchemy import Boolean, DateTime, Index, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,7 +20,14 @@ class Hostname(Base):
     """A unique normalized hostname observed in a certificate SAN."""
 
     __tablename__ = "hostnames"
-    __table_args__ = (UniqueConstraint("hostname", name="uq_hostnames_hostname"),)
+    __table_args__ = (
+        UniqueConstraint("hostname", name="uq_hostnames_hostname"),
+        Index(
+            "ix_hostnames_hostname_trgm",
+            sa.text("hostname gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

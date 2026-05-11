@@ -22,11 +22,20 @@ from ctpool.models.entry_outcome import CtEntryOutcome  # noqa: F401
 from ctpool.models.hostname import Hostname  # noqa: F401
 from ctpool.models.ingestion_error import IngestionError  # noqa: F401
 from ctpool.models.ingestion_metric import IngestionMetric  # noqa: F401
+from ctpool.models.audit_finding import CtAuditFinding  # noqa: F401
+from ctpool.models.instance_settings import CtInstanceSettings  # noqa: F401
 from ctpool.models.log_backfill_range import CtLogBackfillRange  # noqa: F401
+from ctpool.models.log_backfill_state import CtLogBackfillState  # noqa: F401
 from ctpool.models.log_runtime_state import CtLogRuntimeState  # noqa: F401
 from ctpool.models.log_source import CtLogSource  # noqa: F401
 from ctpool.models.log_tail_cursor import CtLogTailCursor  # noqa: F401
+from ctpool.models.log_tail_lease import CtLogTailLease  # noqa: F401
+from ctpool.models.maintenance_run import CtMaintenanceRun  # noqa: F401
 from ctpool.models.observation import CtLogObservation  # noqa: F401
+from ctpool.models.prune_run import CtPruneRun  # noqa: F401
+from ctpool.models.stats_snapshot import CtStatsSnapshot  # noqa: F401
+from ctpool.models.storage_profile_history import CtStorageProfileHistory  # noqa: F401
+from ctpool.models.worker_runtime import CtWorkerRuntime  # noqa: F401
 
 config = context.config
 target_metadata = Base.metadata

@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Text, text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,6 +22,13 @@ class CtAuditFinding(Base):
     """A single CT audit finding (gap, anomaly, or repair observation)."""
 
     __tablename__ = "ct_audit_findings"
+    __table_args__ = (
+        Index(
+            "idx_ct_audit_findings_status_severity",
+            "status",
+            "severity",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

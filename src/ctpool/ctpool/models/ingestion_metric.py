@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, Numeric, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,7 @@ class IngestionMetric(Base):
     """A single throughput snapshot for a CT log ingestion window."""
 
     __tablename__ = "ingestion_metrics"
+    __table_args__ = (Index("idx_ingestion_metrics_snapshot_at", "snapshot_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
