@@ -19,6 +19,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -144,7 +145,7 @@ async def test_run_one_log_batch_advances_checkpoint_on_success() -> None:
         patch.object(
             backfill_per_log,
             "_process_index_batch",
-            new=AsyncMock(return_value=(0, 0, MagicMock(has_activity=False))),
+            new=AsyncMock(return_value=(0, 0, MagicMock(has_activity=False), None)),
         ),
         patch.object(
             backfill_per_log, "update_log_progress", new=AsyncMock()
@@ -157,6 +158,7 @@ async def test_run_one_log_batch_advances_checkpoint_on_success() -> None:
             retry_after,
             new_checkpoint,
             worker_counters,
+            _oldest,
         ) = await backfill_per_log._run_one_log_batch(
             state_row,
             "https://ct.example.com/",
@@ -208,6 +210,7 @@ async def test_run_one_log_batch_rate_limit_does_not_advance_checkpoint() -> Non
             retry_after,
             new_checkpoint,
             worker_counters,
+            _oldest,
         ) = await backfill_per_log._run_one_log_batch(
             state_row,
             "https://ct.example.com/",
@@ -258,6 +261,7 @@ async def test_run_one_log_batch_fetch_error_marks_retrying() -> None:
             _retry_after,
             new_checkpoint,
             worker_counters,
+            _oldest,
         ) = await backfill_per_log._run_one_log_batch(
             state_row,
             "https://ct.example.com/",
@@ -321,7 +325,9 @@ async def test_drive_one_log_marks_complete_when_checkpoint_passes_end() -> None
         patch.object(
             backfill_per_log,
             "_run_one_log_batch",
-            new=AsyncMock(return_value=(1, False, obs, None, 1000, worker_counters)),
+            new=AsyncMock(
+                return_value=(1, False, obs, None, 1000, worker_counters, None)
+            ),
         ),
         patch.object(
             backfill_per_log, "mark_log_complete", new=AsyncMock()
@@ -388,7 +394,7 @@ async def test_drive_one_log_rate_limited_releases_claim() -> None:
         patch.object(
             backfill_per_log,
             "_run_one_log_batch",
-            new=AsyncMock(return_value=(0, True, obs, 5, 100, WorkerCounters())),
+            new=AsyncMock(return_value=(0, True, obs, 5, 100, WorkerCounters(), None)),
         ),
         patch.object(
             backfill_per_log, "release_log_claim", new=AsyncMock()
@@ -459,6 +465,7 @@ async def test_drive_one_log_heartbeats_assignment_and_progress() -> None:
                     None,
                     200,
                     worker_counters,
+                    None,
                 )
             ),
         ),
@@ -553,6 +560,7 @@ async def test_process_index_batch_happy_path() -> None:
     parsed = MagicMock()
     normalized = MagicMock()
     normalized.hostnames = ["a.example.com"]
+    normalized.parsed_certificate.not_before = datetime(2024, 1, 1, tzinfo=UTC)
 
     with (
         patch.object(
@@ -564,7 +572,12 @@ async def test_process_index_batch_happy_path() -> None:
         ),
         patch.object(backfill_per_log, "persist_entry_with_retry", new=AsyncMock()),
     ):
-        count, _terminal, _obs = await backfill_per_log._process_index_batch(
+        (
+            count,
+            _terminal,
+            _obs,
+            _oldest_nb,
+        ) = await backfill_per_log._process_index_batch(
             log_source_id,
             "https://x/",
             session,
@@ -603,7 +616,12 @@ async def test_process_index_batch_parse_error_recorded() -> None:
             backfill_per_log, "persist_failure_outcome", new=AsyncMock()
         ) as failure_mock,
     ):
-        count, _terminal, _obs = await backfill_per_log._process_index_batch(
+        (
+            count,
+            _terminal,
+            _obs,
+            _oldest_nb,
+        ) = await backfill_per_log._process_index_batch(
             log_source_id,
             "https://x/",
             session,
@@ -646,7 +664,12 @@ async def test_process_index_batch_unsupported_entry_type() -> None:
             backfill_per_log, "persist_failure_outcome", new=AsyncMock()
         ) as failure_mock,
     ):
-        count, _terminal, _obs = await backfill_per_log._process_index_batch(
+        (
+            count,
+            _terminal,
+            _obs,
+            _oldest_nb,
+        ) = await backfill_per_log._process_index_batch(
             log_source_id,
             "https://x/",
             session,
@@ -698,7 +721,12 @@ async def test_process_index_batch_unexpected_exception_recorded_as_write_error(
             backfill_per_log, "persist_failure_outcome", new=AsyncMock()
         ) as failure_mock,
     ):
-        count, _terminal, _obs = await backfill_per_log._process_index_batch(
+        (
+            count,
+            _terminal,
+            _obs,
+            _oldest_nb,
+        ) = await backfill_per_log._process_index_batch(
             log_source_id,
             "https://x/",
             session,

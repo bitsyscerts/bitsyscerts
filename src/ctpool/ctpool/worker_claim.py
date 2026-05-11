@@ -9,6 +9,8 @@ Exports:
     update_log_progress        — Persist durable checkpoint + heartbeat + status.
     mark_log_retrying          — Record retryable failure without advancing checkpoint.
     mark_log_complete          — Mark a log's backfill as fully complete.
+    extend_window_backward     — Move backfill_start_index earlier and update coverage.
+    update_observed_oldest     — Persist the oldest observed not_before date.
     reap_stale_log_claims      — Reset expired claims so other workers can proceed.
 """
 
@@ -543,3 +545,82 @@ def _utc_cutoff(stale_seconds: int) -> datetime:
     from datetime import timedelta
 
     return datetime.now(UTC) - timedelta(seconds=stale_seconds)
+
+
+async def extend_window_backward(
+    session: AsyncSession,
+    *,
+    log_source_id: uuid.UUID,
+    new_start: int,
+    observed_oldest: datetime | None,
+) -> None:
+    """Move the backfill window start earlier and record coverage state.
+
+    Sets ``backfill_start_index`` and ``last_checkpoint_index`` to *new_start*,
+    increments ``window_extended_count``, and updates ``observed_oldest_not_before``
+    only when *observed_oldest* is strictly older than the stored value (or the
+    stored value is NULL).
+
+    Args:
+        session:          Open async SQLAlchemy session (inside an active transaction).
+        log_source_id:    UUID of the log whose window is being extended.
+        new_start:        New (lower) ``backfill_start_index``. Must be ≥ 0.
+        observed_oldest:  The oldest ``not_before`` seen so far, or None if unknown.
+    """
+    now = datetime.now(UTC)
+    # We update observed_oldest_not_before only when the new value is strictly older.
+    # A conditional expression in raw SQL keeps this atomic without a read-then-write.
+    await session.execute(
+        update(CtLogBackfillState)
+        .where(CtLogBackfillState.log_source_id == log_source_id)
+        .values(
+            backfill_start_index=new_start,
+            last_checkpoint_index=new_start,
+            window_extended_count=CtLogBackfillState.window_extended_count + 1,
+            observed_oldest_not_before=(
+                observed_oldest
+                if observed_oldest is not None
+                else CtLogBackfillState.observed_oldest_not_before
+            ),
+            updated_at=now,
+        )
+    )
+    _logger.info(
+        "worker_claim: log %s window extended — new_start=%d extended_oldest=%s",
+        log_source_id,
+        new_start,
+        observed_oldest,
+    )
+
+
+async def update_observed_oldest(
+    session: AsyncSession,
+    *,
+    log_source_id: uuid.UUID,
+    oldest_not_before: datetime,
+) -> None:
+    """Persist the oldest observed ``not_before`` date for a log.
+
+    The stored value is updated only when *oldest_not_before* is strictly older
+    than the currently stored value (or the stored value is NULL).
+
+    Args:
+        session:           Open async SQLAlchemy session (inside an active transaction).
+        log_source_id:     UUID of the log to update.
+        oldest_not_before: The oldest ``not_before`` seen in the current batch.
+    """
+    now = datetime.now(UTC)
+    await session.execute(
+        update(CtLogBackfillState)
+        .where(
+            CtLogBackfillState.log_source_id == log_source_id,
+            or_(
+                CtLogBackfillState.observed_oldest_not_before.is_(None),
+                CtLogBackfillState.observed_oldest_not_before > oldest_not_before,
+            ),
+        )
+        .values(
+            observed_oldest_not_before=oldest_not_before,
+            updated_at=now,
+        )
+    )

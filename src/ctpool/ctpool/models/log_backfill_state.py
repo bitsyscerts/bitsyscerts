@@ -76,5 +76,11 @@ class CtLogBackfillState(Base):
         Integer, nullable=False, server_default=text("0")
     )
     details_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    observed_oldest_not_before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    window_extended_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
 
     log_source: Mapped[object] = relationship("CtLogSource", lazy="select")

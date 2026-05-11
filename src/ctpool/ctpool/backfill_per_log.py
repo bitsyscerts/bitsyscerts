@@ -18,11 +18,18 @@ import socket
 import time
 import uuid as _uuid
 from collections.abc import Callable
+from datetime import datetime
 from os import getpid
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ctpool.backfill_coverage import (
+    compute_extended_start,
+    coverage_reached,
+    coverage_target_date,
+    estimate_extension_entries,
+)
 from ctpool.backfill_state_init import initialize_backfill_state_for_log
 from ctpool.config import Settings
 from ctpool.db_contention_accumulator import DbRetryPressureAccumulator
@@ -60,6 +67,7 @@ from ctpool.parser import parse_leaf_entry
 from ctpool.worker_activity_details import build_worker_counters
 from ctpool.worker_claim import (
     claim_any_eligible_log,
+    extend_window_backward,
     increment_terminal_error_count,
     mark_log_complete,
     mark_log_paused,
@@ -67,6 +75,7 @@ from ctpool.worker_claim import (
     reap_stale_log_claims,
     release_log_claim,
     update_log_progress,
+    update_observed_oldest,
 )
 from ctpool.worker_registry import (
     WorkerCounters,
@@ -79,6 +88,7 @@ _logger = logging.getLogger(__name__)
 
 _SLEEP_NO_LOGS_SECONDS = 30
 _SLEEP_DISK_LOW_SECONDS = 60
+_MAX_WINDOW_EXTENSIONS = 10  # safety cap — stops infinite growth
 
 
 def _worker_id() -> str:
@@ -95,18 +105,24 @@ async def _process_index_batch(
     end_index: int,
     metrics: LogMetricsAccumulator,
     settings: Settings,
-) -> tuple[int, int, DbContentionObservation]:
+) -> tuple[int, int, DbContentionObservation, datetime | None]:
     """Fetch and write one batch of entries in ``[start_index, end_index]``.
 
     Mirrors the legacy ``_process_range_batch`` but is keyed by raw indices
     rather than a range row. Terminal entry failures (parse / unsupported /
     write error) are recorded via ``persist_failure_outcome`` and do not
     abort the batch.
+
+    Returns:
+        (count, terminal_count, observation, oldest_not_before) where
+        *oldest_not_before* is the minimum ``not_before`` across successfully
+        written entries, or ``None`` when no entries were written.
     """
     response = await fetch_entries(log_url, start_index, end_index, client)
     count = 0
     parsed_count = 0
     terminal_count = 0
+    oldest_not_before: datetime | None = None
     retry_accumulator = DbRetryPressureAccumulator()
     for i, raw_entry in enumerate(response.entries):
         entry_index = start_index + i
@@ -143,6 +159,9 @@ async def _process_index_batch(
             )
             count += 1
             metrics.record_entry_write_metrics(write_metrics)
+            entry_nb = normalized.parsed_certificate.not_before
+            if oldest_not_before is None or entry_nb < oldest_not_before:
+                oldest_not_before = entry_nb
         except UnsupportedEntryTypeError as exc:
             _logger.warning(
                 "unsupported entry type backfill log=%s index=%d: %s",
@@ -199,7 +218,7 @@ async def _process_index_batch(
     metrics.record_entries_parsed(parsed_count)
     observation = retry_accumulator.drain()
     metrics.record_retryable_errors(observation.retryable_errors)
-    return count, terminal_count, observation
+    return count, terminal_count, observation, oldest_not_before
 
 
 async def _run_one_log_batch(
@@ -211,7 +230,9 @@ async def _run_one_log_batch(
     batch_size: int,
     limit_remaining: int | None,
     worker_id: str,
-) -> tuple[int, bool, DbContentionObservation, int | None, int, WorkerCounters]:
+) -> tuple[
+    int, bool, DbContentionObservation, int | None, int, WorkerCounters, datetime | None
+]:
     """Process one batch for a claimed log and persist progress.
 
     Computes the next batch from the durable checkpoint and the configured
@@ -220,10 +241,10 @@ async def _run_one_log_batch(
 
     Returns:
         ``(entries_processed, was_rate_limited, contention, retry_after_seconds,
-        next_checkpoint, worker_counters)``. ``next_checkpoint`` is the new
-        ``last_checkpoint_index`` after this batch (regardless of how many
-        cert rows were written, since terminal entry outcomes also advance
-        the checkpoint).
+        next_checkpoint, worker_counters, oldest_not_before)``. ``next_checkpoint``
+        is the new ``last_checkpoint_index`` after this batch. ``oldest_not_before``
+        is the oldest ``not_before`` date seen across successfully written entries
+        in this batch, or ``None`` when none were written.
     """
     assert state_row.last_checkpoint_index is not None  # noqa: S101
     assert state_row.backfill_end_index is not None  # noqa: S101
@@ -238,7 +259,12 @@ async def _run_one_log_batch(
     log_source_id = state_row.log_source_id
     try:
         async with session_factory() as session:
-            count, terminal_count, observation = await _process_index_batch(
+            (
+                count,
+                terminal_count,
+                observation,
+                batch_oldest_not_before,
+            ) = await _process_index_batch(
                 log_source_id,
                 log_url,
                 session,
@@ -270,7 +296,15 @@ async def _run_one_log_batch(
                     await increment_terminal_error_count(
                         session, log_source_id=log_source_id
                     )
-        return count, False, observation, None, new_checkpoint, worker_counters
+        return (
+            count,
+            False,
+            observation,
+            None,
+            new_checkpoint,
+            worker_counters,
+            batch_oldest_not_before,
+        )
     except Exception as exc:
         failure = classify_ingestion_error(exc)
         if failure.is_retryable:
@@ -310,6 +344,7 @@ async def _run_one_log_batch(
             retry_after,
             new_checkpoint,
             worker_counters,
+            None,
         )
 
 
@@ -590,6 +625,9 @@ async def _drive_one_log(
     """
     log_source_id = state_row.log_source_id
     current = state_row
+    # Track the running minimum not_before seen across batches.
+    # Seeded from DB state so worker restarts inherit prior progress.
+    _observed_oldest_running: datetime | None = state_row.observed_oldest_not_before
     while True:
         assert current.last_checkpoint_index is not None  # noqa: S101
         assert current.backfill_end_index is not None  # noqa: S101
@@ -645,6 +683,7 @@ async def _drive_one_log(
             retry_after,
             new_checkpoint,
             worker_counters,
+            batch_oldest_not_before,
         ) = await _run_one_log_batch(
             current,
             log_url,
@@ -699,6 +738,21 @@ async def _drive_one_log(
                 session_factory, settings, observation, base_batch
             )
 
+        # Update the running in-memory oldest-not_before from this batch.
+        if batch_oldest_not_before is not None:
+            if (
+                _observed_oldest_running is None
+                or batch_oldest_not_before < _observed_oldest_running
+            ):
+                _observed_oldest_running = batch_oldest_not_before
+            async with session_factory() as session:
+                async with session.begin():
+                    await update_observed_oldest(
+                        session,
+                        log_source_id=log_source_id,
+                        oldest_not_before=batch_oldest_not_before,
+                    )
+
         if count > 0:
             rate_limit_hits.pop(log_source_id, None)
             rate_limited_until.pop(log_source_id, None)
@@ -706,15 +760,77 @@ async def _drive_one_log(
             if on_batch is not None:
                 on_batch(log_url, count, total_processed_ref[0])
 
-        # Window complete?
+        # Window complete — check date coverage before marking done.
         assert current.backfill_end_index is not None  # noqa: S101
         if new_checkpoint > int(current.backfill_end_index):
-            async with session_factory() as session:
-                async with session.begin():
-                    await mark_log_complete(session, log_source_id=log_source_id)
-            if on_status is not None:
-                on_status(f"Backfill complete for log {log_source_id}")
-            return
+            _target = coverage_target_date(settings.ct_backfill_days)
+            _ext_count = int(current.window_extended_count or 0)
+            _start = (
+                int(current.backfill_start_index)
+                if current.backfill_start_index is not None
+                else 0
+            )
+            if (
+                not coverage_reached(_observed_oldest_running, _target)
+                and _start > 0
+                and _ext_count < _MAX_WINDOW_EXTENSIONS
+            ):
+                # Estimate how far back to go.
+                _batch_newest = batch_oldest_not_before or _target
+                _fallback = _observed_oldest_running or _target
+                _missing = max(
+                    0.0,
+                    (_target - _fallback).total_seconds() / 86_400.0,
+                )
+                _ext_entries = estimate_extension_entries(
+                    count,
+                    _fallback,
+                    _batch_newest,
+                    _missing,
+                )
+                _new_start = compute_extended_start(_start, _ext_entries)
+                _logger.info(
+                    "backfill adaptive window: log=%s extending start %d→%d "
+                    "observed_oldest=%s target=%s missing_days=%.2f",
+                    log_source_id,
+                    _start,
+                    _new_start,
+                    _observed_oldest_running,
+                    _target,
+                    _missing,
+                )
+                async with session_factory() as session:
+                    async with session.begin():
+                        await extend_window_backward(
+                            session,
+                            log_source_id=log_source_id,
+                            new_start=_new_start,
+                            observed_oldest=_observed_oldest_running,
+                        )
+                if on_status is not None:
+                    on_status(
+                        f"Extending backfill window for log {log_source_id}: "
+                        f"{_start:,} → {_new_start:,}"
+                    )
+                # Fall through to the bottom-of-loop refresh which reloads
+                # current with the new start index, then loop continues.
+            else:
+                # Coverage confirmed (or we hit index 0 / extension cap).
+                if not coverage_reached(_observed_oldest_running, _target):
+                    _logger.warning(
+                        "backfill window complete but date coverage unconfirmed: "
+                        "log=%s observed_oldest=%s target=%s start=%d",
+                        log_source_id,
+                        _observed_oldest_running,
+                        _target,
+                        _start,
+                    )
+                async with session_factory() as session:
+                    async with session.begin():
+                        await mark_log_complete(session, log_source_id=log_source_id)
+                if on_status is not None:
+                    on_status(f"Backfill complete for log {log_source_id}")
+                return
 
         # Refresh the in-memory state so the next iteration sees the new checkpoint.
         async with session_factory() as session:
