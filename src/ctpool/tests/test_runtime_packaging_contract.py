@@ -122,7 +122,10 @@ def test_compose_contract_uses_migrate_service_and_lite_backfill_default() -> No
 
     assert "migrate:" in content
     assert "stats-snapshotter:" in content
-    assert 'command: ["ctpool", "apply-migrations"]' in content
+    # migrate runs three bootstrap steps via a shell script
+    assert "ctpool apply-migrations" in content
+    assert "ctpool sync-logs" in content
+    assert "ctpool stats-snapshot" in content
     assert 'command: ["ctpool", "stats-snapshot", "--loop"]' in content
     assert 'command: ["ctpool", "maintenance", "--loop"]' in content
     assert 'CT_BACKFILL_DAYS: "${CT_BACKFILL_DAYS:-30}"' in content
