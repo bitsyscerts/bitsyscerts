@@ -49,7 +49,8 @@ services:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: "no"
     env_file:
-      - .env
+      - path: .env
+        required: false
     command: ["ctpool", "apply-migrations"]
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
@@ -66,7 +67,8 @@ services:
     restart: unless-stopped
     command: ["certsapi", "serve", "--workers", "2"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       BITSYSCERTS_EXPOSE_STATS_API: "${BITSYSCERTS_EXPOSE_STATS_API:-true}"
@@ -114,7 +116,8 @@ services:
     restart: unless-stopped
     command: ["ctpool", "backfill"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CT_BACKFILL_DAYS: "${CT_BACKFILL_DAYS:-30}"
@@ -144,7 +147,8 @@ services:
     restart: unless-stopped
     command: ["ctpool", "tail"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CT_BACKFILL_DISPATCH_MODE: "${CT_BACKFILL_DISPATCH_MODE:-per-log}"
@@ -177,7 +181,8 @@ services:
     restart: unless-stopped
     command: ["ctpool", "stats-snapshot", "--loop"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       CT_STATS_HEAVY_REFRESH_SECONDS: "${CT_STATS_HEAVY_REFRESH_SECONDS:-300}"
@@ -198,7 +203,8 @@ services:
     restart: unless-stopped
     command: ["ctpool", "maintenance", "--loop"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       BITSYSCERTS_ENABLE_SCHEDULED_AUDIT: "${BITSYSCERTS_ENABLE_SCHEDULED_AUDIT:-false}"
