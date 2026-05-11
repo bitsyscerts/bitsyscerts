@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import socket
 import time
 import uuid as _uuid
@@ -421,6 +422,7 @@ async def run_backfill_per_log(
     on_batch: Callable[[str, int, int], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     batch_size: int | None = None,
+    worker_id: str | None = None,
 ) -> None:
     """Per-log backfill dispatch loop entry point.
 
@@ -441,7 +443,7 @@ async def run_backfill_per_log(
         on_status:       Optional callback(status_string) for operator output.
         batch_size:      Optional batch size override.
     """
-    worker = _worker_id()
+    worker = worker_id or _worker_id()
     _logger.info("backfill (per-log) starting worker_id=%s", worker)
     total_processed = 0
     _batch = batch_size or settings.ct_default_batch_size
@@ -526,7 +528,12 @@ async def run_backfill_per_log(
                         )
                     if once:
                         return
-                    await asyncio.sleep(_SLEEP_NO_LOGS_SECONDS)
+                    await asyncio.sleep(
+                        _SLEEP_NO_LOGS_SECONDS
+                        + random.uniform(  # noqa: S311
+                            0, _SLEEP_NO_LOGS_SECONDS * 0.5
+                        )
+                    )
                     continue
 
                 # Resolve URL and drive the log forward.

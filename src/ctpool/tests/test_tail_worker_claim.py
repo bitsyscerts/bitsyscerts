@@ -144,6 +144,7 @@ async def _run_with_patches(
             client,
             MagicMock(has_activity=MagicMock(return_value=False)),
             settings,
+            worker_id=_WORKER,
             batch_size=2,
             limit_remaining=None,
         )
@@ -183,6 +184,7 @@ async def test_claim_called_before_processing() -> None:
             AsyncMock(),
             MagicMock(has_activity=MagicMock(return_value=False)),
             settings,
+            worker_id=_WORKER,
             batch_size=2,
             limit_remaining=None,
         )
@@ -249,6 +251,7 @@ async def test_skips_processing_when_claim_returns_false() -> None:
             AsyncMock(),
             MagicMock(has_activity=MagicMock(return_value=False)),
             settings,
+            worker_id=_WORKER,
             batch_size=2,
             limit_remaining=None,
         )

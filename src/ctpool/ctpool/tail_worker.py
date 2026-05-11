@@ -214,6 +214,7 @@ async def _tail_one_log(
     metrics: LogMetricsAccumulator,
     settings: Settings,
     *,
+    worker_id: str,
     batch_size: int,
     limit_remaining: int | None,
     init_from_end: int = 0,
@@ -228,7 +229,6 @@ async def _tail_one_log(
         ``(entries_processed, is_empty, was_rate_limited, contention,
         retry_after_seconds, worker_counters)``
     """
-    worker_id = _worker_id()
     stale_seconds = settings.ct_worker_stale_seconds
     async with session_factory() as session:
         async with session.begin():
@@ -313,6 +313,7 @@ async def run_tail(
     on_status: Callable[[str], None] | None = None,
     init_from_end: int = 0,
     batch_size: int | None = None,
+    worker_id: str | None = None,
 ) -> None:
     """Main tail worker loop.
 
@@ -334,7 +335,8 @@ async def run_tail(
         init_from_end:   When creating a new cursor, start this many entries
                          before the current tree edge (default 0 = edge).
     """
-    _logger.info("tail worker starting worker_id=%s", _worker_id())
+    _wid = worker_id or _worker_id()
+    _logger.info("tail worker starting worker_id=%s", _wid)
     total_processed = 0
     _batch = batch_size or settings.ct_default_batch_size
     client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
@@ -346,7 +348,7 @@ async def run_tail(
             async with session.begin():
                 _registry_row = await register_worker(
                     session,
-                    worker_id=_worker_id(),
+                    worker_id=_wid,
                     worker_kind="tail",
                 )
         _registry_id = _registry_row.id
@@ -438,6 +440,7 @@ async def run_tail(
                         client,
                         metrics,
                         settings=settings,
+                        worker_id=_wid,
                         batch_size=effective_batch,
                         limit_remaining=limit_remaining,
                         init_from_end=init_from_end,
@@ -515,16 +518,19 @@ async def run_tail(
                     return
 
                 if any_empty:
+                    _sleep = settings.ct_tail_interval_seconds + random.uniform(  # noqa: S311
+                        0, min(settings.ct_tail_interval_seconds * 0.1, 30)
+                    )
                     _logger.debug(
-                        "tail: no new entries — sleeping %ds",
-                        settings.ct_tail_interval_seconds,
+                        "tail: no new entries — sleeping %.1fs",
+                        _sleep,
                     )
                     if on_status is not None:
                         on_status(
                             f"All logs at tree edge — sleeping"
                             f" {settings.ct_tail_interval_seconds} s"
                         )
-                    await asyncio.sleep(settings.ct_tail_interval_seconds)
+                    await asyncio.sleep(_sleep)
         finally:
             async with session_factory() as session:
                 async with session.begin():

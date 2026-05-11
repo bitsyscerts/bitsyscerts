@@ -106,7 +106,6 @@ export interface DbContentionStats {
 
 export interface IngestionRateWindow {
   window_seconds: number;
-  // Legacy fields — kept for backwards compatibility.
   observations_per_sec: number;
   certs_per_min: number;
   hostnames_per_min: number;

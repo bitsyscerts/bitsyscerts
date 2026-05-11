@@ -8,13 +8,21 @@ export type {
 export { DEFAULT_HOSTNAME_SEARCH_PARAMS, SORT_FIELD_LABELS } from "./hostnames";
 export type { CertificateResponse } from "./certificates";
 export type {
+  AuditHealth,
+  AuditHealthStatus,
+  BackfillHealth,
+  BackfillRangeStats,
   DbContentionStats,
   DbContentionStatus,
+  EntryOutcomeStats,
   IngestionRateStats,
   IngestionRateWindow,
   IngestionWorkload,
   LogStatsItem,
+  MetricsRetentionStats,
   ProjectionConfidence,
+  SnapshotMetadata,
+  StorageProfileSettings,
   StorageProjection,
   StorageProjectionStatus,
   StorageStats,
@@ -29,7 +37,6 @@ export type {
   IngestionHealth,
   MaintenanceDeleted,
   MaintenanceStatus,
-  SnapshotMetadata,
 } from "./stats";
 export type {
   StorageSettingsHistoryItem,

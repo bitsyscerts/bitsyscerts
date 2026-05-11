@@ -11,13 +11,11 @@ import { LogStatsList } from "./LogStatsList";
 import { StatsPanelSkeleton } from "./StatsPanelSkeleton";
 import { IngestionRateCard } from "./IngestionRateCard";
 import { IngestionHealthCard } from "./IngestionHealthCard";
-import { LegacyDiagnosticsSection } from "./LegacyDiagnosticsSection";
 import { MaintenancePanel } from "./MaintenancePanel";
 import { SnapshotFreshnessCard } from "./SnapshotFreshnessCard";
 import { TailFreshnessCard } from "./TailFreshnessCard";
 import { WorkerActivityCard } from "./WorkerActivityCard";
 import { HostCapacityCard } from "./HostCapacityCard";
-import { isPerLogPrimaryMode } from "@/utils/statsMode";
 
 /**
  * Collapsible Accordion panel showing ingestion statistics. Uses useStats
@@ -40,7 +38,6 @@ export function StatsPanel() {
         </Alert>
       );
     }
-    const perLogPrimary = isPerLogPrimaryMode(data);
     return (
       <Stack gap="lg">
         <SnapshotFreshnessCard snapshot={data.snapshot} />
@@ -64,14 +61,9 @@ export function StatsPanel() {
         )}
         <TailFreshnessCard tailFreshness={data.tail_freshness} />
         <IngestionRateCard ingestionRate={data.ingestion_rate} />
-        {!perLogPrimary && (
-          <BackfillRangesCard backfillRanges={data.backfill_ranges} isPrimary />
-        )}
-        {!perLogPrimary && data.audit_health && (
-          <AuditHealthCard
-            auditHealth={data.audit_health}
-            isPrimary={!perLogPrimary}
-          />
+        <BackfillRangesCard backfillRanges={data.backfill_ranges} />
+        {data.audit_health && (
+          <AuditHealthCard auditHealth={data.audit_health} />
         )}
         <StorageProfileCard storageProfile={data.storage_profile} />
         <Text size="sm" fw={600}>
@@ -85,12 +77,6 @@ export function StatsPanel() {
           CT Logs
         </Text>
         <LogStatsList logs={data.logs} />
-        {perLogPrimary && (
-          <LegacyDiagnosticsSection
-            backfillRanges={data.backfill_ranges}
-            auditHealth={data.audit_health}
-          />
-        )}
       </Stack>
     );
   }

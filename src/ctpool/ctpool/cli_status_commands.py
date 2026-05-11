@@ -30,7 +30,7 @@ def register(app: typer.Typer) -> None:
         from ctpool.config import get_settings
 
         settings = get_settings()
-        threshold = int(getattr(settings, "stats_stale_seconds", 120))
+        threshold = int(getattr(settings, "stats_stale_seconds", 90))
         asyncio.run(
             run_status(
                 settings=settings,

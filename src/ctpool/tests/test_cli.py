@@ -268,18 +268,10 @@ def test_backfill_command_passes_once_flag() -> None:
 
 
 def test_stats_command_invokes_stats_display() -> None:
-    """stats calls render_stats via asyncio.run."""
-    with (
-        patch("ctpool.cli_ingestion_commands.get_settings", return_value=MagicMock()),
-        patch("ctpool.cli_ingestion_commands.create_engine", return_value=MagicMock()),
-        patch(
-            "ctpool.cli_ingestion_commands.create_session_factory",
-            return_value=MagicMock(),
-        ),
-        patch("ctpool.cli_ingestion_commands.asyncio.run") as mock_run,
-    ):
+    """stats show calls run_stats via asyncio.run."""
+    with patch("ctpool.cli_group_stats.asyncio.run") as mock_run:
         mock_run.side_effect = _discard_asyncio_run()
-        result = _runner.invoke(app, ["stats"])
+        result = _runner.invoke(app, ["stats", "show"])
 
     assert result.exit_code == 0
     mock_run.assert_called_once()

@@ -74,7 +74,7 @@ def register(app: typer.Typer) -> None:
         ] = 0,
     ) -> None:
         """Tail new CT log entries continuously."""
-        from ctpool.tail_worker import run_tail
+        from ctpool.worker_pool import run_tail_pool
 
         settings = get_settings()
         engine = create_engine(settings)
@@ -93,10 +93,12 @@ def register(app: typer.Typer) -> None:
             on_batch = None
             on_status = None
             batch_size = settings.ct_default_batch_size
+        concurrency = 1 if (once or log_id is not None) else None
         asyncio.run(
-            run_tail(
+            run_tail_pool(
                 factory,
                 settings,
+                concurrency=concurrency,
                 once=once,
                 limit=limit,
                 log_id=log_id,
@@ -171,7 +173,7 @@ def register(app: typer.Typer) -> None:
         Per-log dispatch is the default runtime path. ``legacy-ranges`` is a
         compatibility/debug override for older range-based workflows.
         """
-        from ctpool.backfill_worker import run_backfill
+        from ctpool.worker_pool import run_backfill_pool
 
         settings = get_settings()
         engine = create_engine(settings)
@@ -190,10 +192,12 @@ def register(app: typer.Typer) -> None:
             on_batch = None
             on_status = None
             batch_size = settings.ct_default_batch_size
+        concurrency = 1 if (once or log_id is not None) else None
         asyncio.run(
-            run_backfill(
+            run_backfill_pool(
                 factory,
                 settings,
+                concurrency=concurrency,
                 once=once,
                 limit=limit,
                 days=days,

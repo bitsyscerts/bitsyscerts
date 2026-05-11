@@ -13,8 +13,11 @@ import asyncio
 import logging
 import socket
 import time
+from datetime import datetime
 from os import getpid
 from typing import Any
+
+from rich.console import Console
 
 from ctpool.backfill_state_queries import query_backfill_state_summary
 from ctpool.config import Settings
@@ -157,7 +160,10 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
         await engine.dispose()
 
 
-async def run_snapshot_loop(settings: Settings) -> None:
+async def run_snapshot_loop(
+    settings: Settings,
+    console: Console | None = None,
+) -> None:
     """Continuously take stats snapshots at the configured interval.
 
     Runs indefinitely.  Each cycle takes a snapshot then sleeps for
@@ -166,6 +172,7 @@ async def run_snapshot_loop(settings: Settings) -> None:
 
     Args:
         settings: Active application settings.
+        console:  Optional Rich console for operator-visible status lines.
     """
     interval = settings.ct_stats_heavy_refresh_seconds
     engine = create_engine(settings)
@@ -184,6 +191,12 @@ async def run_snapshot_loop(settings: Settings) -> None:
         interval,
         _SNAPSHOT_TYPE,
     )
+    if console:
+        console.print(
+            f"[cyan]Stats snapshot loop started.[/cyan] "
+            f"Refreshing every [bold]{interval}[/bold] s. "
+            f"Press [bold]Ctrl+C[/bold] to stop."
+        )
     try:
         while True:
             try:
@@ -200,7 +213,7 @@ async def run_snapshot_loop(settings: Settings) -> None:
                             session,
                             stale_seconds=settings.ct_worker_stale_seconds,
                         )
-                await take_snapshot_once(settings)
+                payload = await take_snapshot_once(settings)
                 async with factory() as session:
                     async with session.begin():
                         await heartbeat_worker(
@@ -210,6 +223,14 @@ async def run_snapshot_loop(settings: Settings) -> None:
                             direction="snapshot",
                             counters=WorkerCounters(),
                         )
+                if console:
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    db_size = payload.get("storage", {}).get("total_size_pretty", "?")
+                    console.print(
+                        f"[green]  ✓[/green] [{ts}] Snapshot captured "
+                        f"(db size: [bold]{db_size}[/bold]) — "
+                        f"sleeping {interval} s…"
+                    )
             except Exception as exc:
                 async with factory() as session:
                     async with session.begin():
@@ -224,6 +245,11 @@ async def run_snapshot_loop(settings: Settings) -> None:
                             ),
                         )
                 _logger.exception("Stats snapshot failed; will retry after interval")
+                if console:
+                    console.print(
+                        f"[yellow]  ⚠ Snapshot failed: {exc} — "
+                        f"retrying in {interval} s[/yellow]"
+                    )
             await asyncio.sleep(interval)
     finally:
         async with factory() as session:

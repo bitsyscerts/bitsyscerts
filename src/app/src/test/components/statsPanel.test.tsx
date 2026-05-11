@@ -228,7 +228,7 @@ describe("StatsPanel per-log primary mode", () => {
       in_progress: 0,
       stale_in_progress: 0,
       completed: 0,
-      failed: 198,
+      failed: 0,
       dispatch_mode: "per-log",
       is_primary: false,
     },
@@ -251,18 +251,16 @@ describe("StatsPanel per-log primary mode", () => {
     expect(screen.getByText("Per-Log Backfill State")).toBeInTheDocument();
   });
 
-  it("renders the advanced/legacy section heading", () => {
+  it("renders the backfill ranges card heading", () => {
     render(
       <AllProviders>
         <StatsPanel />
       </AllProviders>,
     );
-    expect(
-      screen.getByText("Advanced / Legacy Range State"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Backfill Range Status")).toBeInTheDocument();
   });
 
-  it("does NOT show legacy failed ranges as primary red alert", () => {
+  it("does NOT show failed ranges alert when no failures", () => {
     render(
       <AllProviders>
         <StatsPanel />
@@ -273,7 +271,7 @@ describe("StatsPanel per-log primary mode", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("uses backfill_ranges metadata when backfill_state is absent", () => {
+  it("shows failed ranges alert when backfill_ranges has failures", () => {
     mockUseStats.mockReturnValue({
       data: {
         ...MOCK_DATA,
@@ -285,52 +283,6 @@ describe("StatsPanel per-log primary mode", () => {
           failed: 5,
           dispatch_mode: "per-log",
           is_primary: false,
-        },
-      },
-      isLoading: false,
-      isError: false,
-    } as unknown as ReturnType<typeof useStats>);
-    render(
-      <AllProviders>
-        <StatsPanel />
-      </AllProviders>,
-    );
-    expect(
-      screen.getByText("Advanced / Legacy Range State"),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Failed backfill ranges detected/i),
-    ).not.toBeInTheDocument();
-  });
-});
-
-describe("StatsPanel legacy-ranges primary mode", () => {
-  it("renders failed ranges alert as primary when is_primary=true", () => {
-    mockUseStats.mockReturnValue({
-      data: {
-        ...MOCK_DATA,
-        backfill_state: {
-          total_logs: 0,
-          pending: 0,
-          claimed: 0,
-          processing: 0,
-          retrying: 0,
-          paused: 0,
-          complete: 0,
-          error: 0,
-          stale: 0,
-          items: [],
-          dispatch_mode: "legacy-ranges",
-          is_primary: false,
-        },
-        backfill_ranges: {
-          pending: 0,
-          in_progress: 0,
-          stale_in_progress: 0,
-          completed: 0,
-          failed: 5,
-          dispatch_mode: "legacy-ranges",
-          is_primary: true,
         },
       },
       isLoading: false,

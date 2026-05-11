@@ -49,7 +49,7 @@ def register(app: typer.Typer) -> None:
 
         settings = get_settings()
         if loop:
-            asyncio.run(run_snapshot_loop(settings))
+            asyncio.run(run_snapshot_loop(settings, console=_console))
         else:
             asyncio.run(take_snapshot_once(settings))
             _console.print("[green]Snapshot taken.[/green]")

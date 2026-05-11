@@ -56,6 +56,8 @@ const STATS_FIXTURE = {
     effective_batch_size_cap: null,
     updated_at: "2025-01-01T00:00:00Z",
     notes: ["Shared DB contention control is active and not throttling."],
+    total_retryable_errors: 0,
+    retryable_errors_per_min_5min: null,
   },
   ingestion_rate: { windows: [] },
   tail_freshness: {
@@ -171,13 +173,12 @@ describe("DashboardPage with data", () => {
     } as unknown as ReturnType<typeof useStats>);
   });
 
-  it("renders operational panel headings", () => {
+  it("renders summary card headings from DashboardOverview", () => {
     renderPage();
-    expect(screen.getByText("Worker Activity")).toBeInTheDocument();
-    expect(screen.getByText("Storage Projection")).toBeInTheDocument();
-    expect(screen.getByText("DB Contention Control")).toBeInTheDocument();
-    expect(screen.getByText("Database Storage")).toBeInTheDocument();
-    expect(screen.getAllByText("CT Logs").length).toBeGreaterThan(0);
+    expect(screen.getByText("Index Summary")).toBeInTheDocument();
+    expect(screen.getByText("Indexer Activity")).toBeInTheDocument();
+    expect(screen.getByText("Storage")).toBeInTheDocument();
+    expect(screen.getByText("Advanced diagnostics")).toBeInTheDocument();
   });
 
   it("renders a manual Refresh button", () => {
@@ -193,17 +194,18 @@ describe("DashboardPage with data", () => {
     expect(screen.getByText(/Updated /i)).toBeInTheDocument();
   });
 
-  it("does not render StorageProfileCard when profile is null", () => {
+  it("does not render profile badge when storage_profile is null", () => {
     renderPage();
-    expect(screen.queryByText("Storage Profile")).toBeNull();
+    // ProfileBadge is only rendered when a storage_profile is present
+    expect(screen.queryByText("current-osint")).toBeNull();
   });
 
-  it("renders StorageProfileCard when profile is present", () => {
+  it("renders profile badge in StorageSummary when profile is present", () => {
     mockUseStats.mockReturnValue({
       data: {
         ...STATS_FIXTURE,
         storage_profile: {
-          storage_profile: "standard",
+          storage_profile: "current-osint",
           cert_storage_mode: "fingerprint_only",
           hostname_retention_mode: "rolling",
           backfill_days: 90,
@@ -221,10 +223,10 @@ describe("DashboardPage with data", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useStats>);
     renderPage();
-    expect(screen.getByText("Storage Profile")).toBeInTheDocument();
+    expect(screen.getByText("current-osint")).toBeInTheDocument();
   });
 
-  it("demotes legacy range diagnostics when per-log mode is primary", () => {
+  it("renders per-log diagnostics accordion when per-log mode is primary", () => {
     mockUseStats.mockReturnValue({
       data: {
         ...STATS_FIXTURE,
@@ -235,16 +237,9 @@ describe("DashboardPage with data", () => {
           completed: 0,
           failed: 5,
           dispatch_mode: "per-log",
-          is_primary: false,
+          is_primary: true,
         },
-        audit_health: {
-          open_critical: 0,
-          open_error: 1,
-          open_warning: 0,
-          open_info: 0,
-          total_open: 1,
-          status: "attention_needed" as const,
-        },
+        audit_health: null,
       },
       isLoading: false,
       isError: false,
@@ -252,12 +247,7 @@ describe("DashboardPage with data", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useStats>);
     renderPage();
-    expect(
-      screen.getByText("Advanced / Legacy Range Diagnostics"),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText(/Failed backfill ranges detected/i),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText("Advanced diagnostics")).toBeInTheDocument();
   });
 });
 

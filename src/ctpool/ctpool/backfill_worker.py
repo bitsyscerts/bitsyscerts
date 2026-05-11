@@ -343,6 +343,7 @@ async def run_backfill(
     on_status: Callable[[str], None] | None = None,
     batch_size: int | None = None,
     dispatch_mode: str | None = None,
+    worker_id: str | None = None,
 ) -> None:
     """Backfill worker entry point — dispatches to per-log or legacy mode.
 
@@ -368,6 +369,7 @@ async def run_backfill(
             on_batch=on_batch,
             on_status=on_status,
             batch_size=batch_size,
+            worker_id=worker_id,
         )
         return
     if mode == "legacy-ranges":

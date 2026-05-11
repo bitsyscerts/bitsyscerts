@@ -40,27 +40,3 @@ describe("BackfillFailedAlert", () => {
     expect(screen.getByText(/1 range\(s\)/i)).toBeTruthy();
   });
 });
-
-describe("BackfillFailedAlert advanced/legacy mode", () => {
-  it("renders informational title when isPrimary=false", () => {
-    render(
-      <AllProviders>
-        <BackfillFailedAlert failedCount={3} isPrimary={false} />
-      </AllProviders>,
-    );
-    expect(
-      screen.getByText(/Legacy failed ranges/i),
-    ).toBeInTheDocument();
-  });
-
-  it("does NOT render the primary 'Failed backfill ranges detected' title when isPrimary=false", () => {
-    render(
-      <AllProviders>
-        <BackfillFailedAlert failedCount={3} isPrimary={false} />
-      </AllProviders>,
-    );
-    expect(
-      screen.queryByText(/Failed backfill ranges detected/i),
-    ).not.toBeInTheDocument();
-  });
-});
