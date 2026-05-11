@@ -213,7 +213,12 @@ def test_maintenance_group_help_is_registered() -> None:
     """``ctpool maintenance --help`` shows --loop option."""
     result = _runner.invoke(app, ["maintenance", "--help"])
     assert result.exit_code == 0
-    assert "--loop" in result.output
+    # Strip ANSI escape codes before asserting — CI runs with FORCE_COLOR=1
+    # which causes Rich to inject codes that split "--loop" into "-\x1b[...]loop".
+    import re
+
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert "--loop" in plain
 
 
 def test_maintenance_run_invokes_run_maintenance_once() -> None:
