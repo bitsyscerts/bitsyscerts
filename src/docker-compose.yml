@@ -2,12 +2,15 @@
 #
 # Run from the directory containing this file:
 #   cp .env.compose.example .env
-#   docker compose up -d postgres
-#   docker compose run --rm migrate ctpool apply-migrations
-#   docker compose run --rm migrate ctpool sync-logs
-#   docker compose run --rm migrate ctpool stats-snapshot
-#   docker compose run --rm migrate ctpool maintenance
 #   docker compose up -d
+#
+# The migrate service automatically applies migrations, syncs CT log sources,
+# and writes an initial stats snapshot on first start.  All other services
+# wait for it to complete before starting.
+#
+# For manual operator tasks use the migrate service image directly, e.g.:
+#   docker compose run --rm migrate ctpool maintenance
+#   docker compose run --rm migrate ctpool init-db --force
 #
 # Services:
 #   postgres    — PostgreSQL 17 (omit if using an external managed DB)
@@ -38,20 +41,25 @@ services:
     networks:
       - internal
 
-  # ── One-shot DB bootstrap and repair ───────────────────────────────────────
-  # Use `docker compose run --rm migrate ctpool <command>` for supported
-  # one-shot operator actions such as apply-migrations, sync-logs,
-  # stats-snapshot, maintenance, and status.
-  #
-  # Use `docker compose run --rm migrate ctpool init-db --force` for a
-  # destructive reset against the configured application database.
+  # ── DB bootstrap (migrations + log sync + initial snapshot) ────────────────
+  # For one-shot operator actions: docker compose run --rm migrate ctpool <cmd>
   migrate:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: "no"
     env_file:
       - path: .env
         required: false
-    command: ["ctpool", "apply-migrations"]
+    # Run three bootstrap steps in order:
+    #   1. apply-migrations  — bring the schema to head
+    #   2. sync-logs         — upsert CT log sources so workers have targets
+    #   3. stats-snapshot    — write an initial snapshot so the UI isn't stale
+    command:
+      - /bin/sh
+      - -c
+      - |
+        ctpool apply-migrations &&
+        ctpool sync-logs &&
+        ctpool stats-snapshot
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"

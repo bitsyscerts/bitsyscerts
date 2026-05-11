@@ -41,7 +41,6 @@ import ctpool.cli_diagnostics_commands as _diagnostics
 import ctpool.cli_group_db as _group_db
 import ctpool.cli_group_diagnostics as _group_diagnostics
 import ctpool.cli_group_logs as _group_logs
-import ctpool.cli_group_maintenance as _group_maintenance
 import ctpool.cli_group_stats as _group_stats
 import ctpool.cli_group_storage as _group_storage
 import ctpool.cli_group_workers as _group_workers
@@ -63,7 +62,6 @@ _group_db.register(app)
 _group_logs.register(app)
 _group_stats.register(app)
 _group_storage.register(app)
-_group_maintenance.register(app)
 _group_workers.register(app)
 _group_diagnostics.register(app)
 

@@ -210,25 +210,24 @@ def test_storage_prune_dry_run_dispatches_asyncio_run() -> None:
 
 
 def test_maintenance_group_help_is_registered() -> None:
-    """``ctpool maintenance --help`` lists sub-commands."""
+    """``ctpool maintenance --help`` shows --loop option."""
     result = _runner.invoke(app, ["maintenance", "--help"])
     assert result.exit_code == 0
-    assert "run" in result.output
-    assert "loop" in result.output
+    assert "--loop" in result.output
 
 
 def test_maintenance_run_invokes_run_maintenance_once() -> None:
-    """``ctpool maintenance run`` calls asyncio.run."""
+    """``ctpool maintenance`` (no flags) calls run_maintenance_once."""
     with (
-        patch("ctpool.cli_group_maintenance.asyncio.run") as mock_run,
+        patch("ctpool.cli_maintenance_commands.asyncio.run") as mock_run,
         patch(
-            "ctpool.cli_group_maintenance.get_settings",
+            "ctpool.cli_maintenance_commands.get_settings",
             return_value=MagicMock(),
             create=True,
         ),
     ):
         mock_run.side_effect = _discard_asyncio_run()
-        result = _runner.invoke(app, ["maintenance", "run"])
+        result = _runner.invoke(app, ["maintenance"])
     assert result.exit_code == 0
     mock_run.assert_called_once()
 
