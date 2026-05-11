@@ -189,9 +189,14 @@ class TestAssembleStatsPayload:
         result = _call_assemble()
         assert result["entry_outcomes"]["stored"] == 900
 
-    def test_projection_status_insufficient_when_zero_obs(self) -> None:
+    def test_projection_available_when_zero_obs_with_valid_plan(self) -> None:
+        # obs_count=0 (fresh install) no longer gates projection when
+        # planned_total is non-zero — user approved Option A removal.
         result = _call_assemble(obs_count=0)
-        assert result["storage_projection"]["status"] == "insufficient_observations"
+        assert result["storage_projection"]["status"] in (
+            "available",
+            "insufficient_backfill_plan",
+        )
 
     def test_projection_status_insufficient_when_zero_planned(self) -> None:
         result = _call_assemble(planned_total=0)
@@ -203,7 +208,6 @@ class TestAssembleStatsPayload:
         assert result["storage_projection"]["status"] in (
             "available",
             "insufficient_backfill_plan",
-            "insufficient_observations",
         )
 
     def test_metrics_retention_days_defaults_to_30_when_no_settings(self) -> None:

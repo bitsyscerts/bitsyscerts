@@ -395,6 +395,24 @@ class SnapshotMetadata(BaseModel):
     source: Literal["snapshot", "live", "none"] = "live"
 
 
+class HostCapacityStats(BaseModel):
+    """Host-level resource metrics collected via psutil by the ctpool worker."""
+
+    cpu_percent: float | None = None
+    memory_total_bytes: int | None = None
+    memory_available_bytes: int | None = None
+    memory_used_bytes: int | None = None
+    memory_percent: float | None = None
+    disk_total_bytes: int | None = None
+    disk_used_bytes: int | None = None
+    disk_free_bytes: int | None = None
+    disk_percent: float | None = None
+    disk_io_read_bytes: int | None = None
+    disk_io_write_bytes: int | None = None
+    net_bytes_sent: int | None = None
+    net_bytes_recv: int | None = None
+
+
 class StatsResponse(BaseModel):
     """Global ingestion statistics."""
 
@@ -418,6 +436,7 @@ class StatsResponse(BaseModel):
     backfill_state: BackfillStateSummary | None = None
     ingestion_health: IngestionHealth | None = None
     maintenance: MaintenanceStatus | None = None
+    host_capacity: HostCapacityStats | None = None
 
 
 # Resolve the forward reference to SnapshotMetadata, which is defined

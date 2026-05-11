@@ -18,6 +18,7 @@ from ctpool.models.base import Base
 if TYPE_CHECKING:
     from ctpool.models.log_runtime_state import CtLogRuntimeState
     from ctpool.models.log_tail_cursor import CtLogTailCursor
+    from ctpool.models.log_tail_lease import CtLogTailLease
 
 
 class CtLogSource(Base):
@@ -66,4 +67,7 @@ class CtLogSource(Base):
     )
     tail_cursor: Mapped[CtLogTailCursor | None] = relationship(
         "CtLogTailCursor", back_populates="log_source", uselist=False
+    )
+    tail_lease: Mapped[CtLogTailLease | None] = relationship(
+        "CtLogTailLease", back_populates="log_source", uselist=False
     )

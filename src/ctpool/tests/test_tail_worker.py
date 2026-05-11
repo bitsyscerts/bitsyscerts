@@ -133,9 +133,13 @@ def _make_session_factory(
 @pytest.fixture(autouse=True)
 def _mock_tail_log_claim() -> object:
     """All tail-worker tests assume the log lease is available."""
-    with patch(
-        "ctpool.tail_worker.try_claim_tail_log", AsyncMock(return_value=True)
-    ) as claim_mock:
+    with (
+        patch(
+            "ctpool.tail_worker.claim_tail_log", AsyncMock(return_value=True)
+        ) as claim_mock,
+        patch("ctpool.tail_worker.release_tail_log", AsyncMock()),
+        patch("ctpool.tail_worker.heartbeat_tail_lease", AsyncMock()),
+    ):
         yield claim_mock
 
 

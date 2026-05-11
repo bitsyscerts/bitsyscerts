@@ -25,6 +25,7 @@ export type {
   WorkerSummaryItem,
   BackfillStateItem,
   BackfillStateSummary,
+  HostCapacityStats,
   IngestionHealth,
   MaintenanceDeleted,
   MaintenanceStatus,

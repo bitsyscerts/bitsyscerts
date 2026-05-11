@@ -20,11 +20,13 @@ from ctpool.backfill_state_queries import query_backfill_state_summary
 from ctpool.config import Settings
 from ctpool.db import create_engine, create_session_factory
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
+from ctpool.host_capacity import collect_host_capacity
 from ctpool.stats_assembler import assemble_stats_payload
 from ctpool.stats_queries import (
     query_active_instance_settings,
     query_backfill_planned_counts,
     query_backfill_range_status_counts,
+    query_ct_log_progress_totals,
     query_database_size_bytes,
     query_db_storage,
     query_entry_outcome_counts,
@@ -101,6 +103,9 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
             from ctpool.maintenance_queries import query_latest_maintenance_run
 
             maintenance_run = await query_latest_maintenance_run(session)
+            ct_log_progress = await query_ct_log_progress_totals(session)
+
+        host_capacity = collect_host_capacity()
 
         payload = assemble_stats_payload(
             global_counts=global_counts,
@@ -121,6 +126,8 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
             maintenance_run=maintenance_run,
             maintenance_interval_seconds=settings.ct_maintenance_interval_seconds,
             dispatch_mode=settings.ct_backfill_dispatch_mode,
+            ct_log_progress=ct_log_progress,
+            host_capacity=host_capacity,
         )
 
         duration_ms = int((time.monotonic() - t0) * 1000)

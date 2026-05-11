@@ -12,11 +12,13 @@ import pytest
 from ctpool.db_contention_types import DbContentionOperatorSnapshot
 
 from certsapi.stats.models import StatsResponse
-from certsapi.stats.service import (
-    StatsService,
-    _build_ingestion_rate_stats,
-    _build_tail_freshness_stats,
+from certsapi.stats.response_builders import (
+    build_ingestion_rate_stats as _build_ingestion_rate_stats,
 )
+from certsapi.stats.response_builders import (
+    build_tail_freshness_stats as _build_tail_freshness_stats,
+)
+from certsapi.stats.service import StatsService
 
 
 def _make_row(
@@ -202,6 +204,10 @@ def _repo_with_defaults(**overrides: object) -> AsyncMock:
     repo.get_latest_snapshot.return_value = overrides.get(
         "latest_snapshot",
         None,
+    )
+    repo.ct_log_progress_totals.return_value = overrides.get(
+        "ct_log_progress_totals",
+        {"planned_total": 0, "planned_completed": 0},
     )
     repo._ctpool_settings = overrides.get("ctpool_settings", None)
     return repo

@@ -16,6 +16,7 @@ import { MaintenancePanel } from "./MaintenancePanel";
 import { SnapshotFreshnessCard } from "./SnapshotFreshnessCard";
 import { TailFreshnessCard } from "./TailFreshnessCard";
 import { WorkerActivityCard } from "./WorkerActivityCard";
+import { HostCapacityCard } from "./HostCapacityCard";
 import { isPerLogPrimaryMode } from "@/utils/statsMode";
 
 /**
@@ -54,6 +55,9 @@ export function StatsPanel() {
         )}
         {data.maintenance && (
           <MaintenancePanel maintenance={data.maintenance} />
+        )}
+        {data.host_capacity && (
+          <HostCapacityCard capacity={data.host_capacity} />
         )}
         {data.backfill_state && (
           <BackfillStateCard state={data.backfill_state} />

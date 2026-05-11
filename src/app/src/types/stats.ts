@@ -340,4 +340,21 @@ export interface StatsResponse {
   backfill_state: BackfillStateSummary | null;
   ingestion_health?: IngestionHealth | null;
   maintenance?: MaintenanceStatus | null;
+  host_capacity?: HostCapacityStats | null;
+}
+
+export interface HostCapacityStats {
+  cpu_percent: number | null;
+  memory_total_bytes: number | null;
+  memory_available_bytes: number | null;
+  memory_used_bytes: number | null;
+  memory_percent: number | null;
+  disk_total_bytes: number | null;
+  disk_used_bytes: number | null;
+  disk_free_bytes: number | null;
+  disk_percent: number | null;
+  disk_io_read_bytes: number | null;
+  disk_io_write_bytes: number | null;
+  net_bytes_sent: number | null;
+  net_bytes_recv: number | null;
 }

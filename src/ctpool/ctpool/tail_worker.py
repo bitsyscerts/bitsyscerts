@@ -33,10 +33,12 @@ from ctpool.db_contention_types import DbContentionObservation
 from ctpool.disk_guard import is_disk_critical, is_disk_low
 from ctpool.dispatcher import (
     advance_tail_cursor,
+    claim_tail_log,
     ensure_tail_cursor,
     get_eligible_tail_logs,
+    heartbeat_tail_lease,
+    release_tail_log,
     reset_tail_cursor,
-    try_claim_tail_log,
 )
 from ctpool.entry_persistence import persist_entry_with_retry, persist_failure_outcome
 from ctpool.exceptions import (
@@ -218,22 +220,31 @@ async def _tail_one_log(
 ) -> tuple[int, bool, bool, DbContentionObservation, int | None, WorkerCounters]:
     """Run one tail batch for *log* in its own session/transaction.
 
+    Uses a persistent lease (``ct_log_tail_leases``) so only one worker
+    processes a given CT log at a time.  The lease is held for the full
+    duration of batch processing and released in a ``finally`` block.
+
     Returns:
         ``(entries_processed, is_empty, was_rate_limited, contention,
         retry_after_seconds, worker_counters)``
     """
+    worker_id = _worker_id()
+    stale_seconds = settings.ct_worker_stale_seconds
     async with session_factory() as session:
         async with session.begin():
-            if not await try_claim_tail_log(session, log.id):
-                return (
-                    0,
-                    True,
-                    False,
-                    DbContentionObservation(0, 0),
-                    None,
-                    WorkerCounters(),
-                )
-        try:
+            claimed = await claim_tail_log(session, log.id, worker_id, stale_seconds)
+        if not claimed:
+            return (
+                0,
+                True,
+                False,
+                DbContentionObservation(0, 0),
+                None,
+                WorkerCounters(),
+            )
+
+    try:
+        async with session_factory() as session:
             count, is_empty, observation = await _process_log_batch(
                 log,
                 session,
@@ -244,51 +255,51 @@ async def _tail_one_log(
                 settings=settings,
                 init_from_end=init_from_end,
             )
-            worker_counters = build_worker_counters(metrics)
-            if metrics.has_activity():
+            async with session.begin():
+                await heartbeat_tail_lease(session, log.id, worker_id)
+        worker_counters = build_worker_counters(metrics)
+        if metrics.has_activity():
+            async with session_factory() as session:
                 async with session.begin():
                     await metrics.persist_snapshot(session, log.id)
-            return count, is_empty, False, observation, None, worker_counters
-        except RateLimitError as exc:
-            _logger.warning("rate limited tail log=%s: %s", log.id, exc)
-            metrics.record_retryable_errors(1)
-            worker_counters = build_worker_counters(
-                metrics,
-                last_error_type=exc.__class__.__name__,
-                last_error_message=str(exc),
-            )
-            if metrics.has_activity():
-                async with session_factory() as session:
-                    async with session.begin():
-                        await metrics.persist_snapshot(session, log.id)
-            return (
-                0,
-                True,
-                True,
-                DbContentionObservation(0, 0),
-                exc.retry_after_seconds,
-                worker_counters,
-            )
-        except FetchError as exc:
-            _logger.error("fetch error tail log=%s: %s", log.id, exc)
-            metrics.record_retryable_errors(1)
-            worker_counters = build_worker_counters(
-                metrics,
-                last_error_type=exc.__class__.__name__,
-                last_error_message=str(exc),
-            )
-            if metrics.has_activity():
-                async with session_factory() as session:
-                    async with session.begin():
-                        await metrics.persist_snapshot(session, log.id)
-            return (
-                0,
-                False,
-                False,
-                DbContentionObservation(0, 0),
-                None,
-                worker_counters,
-            )
+        return count, is_empty, False, observation, None, worker_counters
+    except RateLimitError as exc:
+        _logger.warning("rate limited tail log=%s: %s", log.id, exc)
+        metrics.record_retryable_errors(1)
+        worker_counters = build_worker_counters(
+            metrics,
+            last_error_type=exc.__class__.__name__,
+            last_error_message=str(exc),
+        )
+        if metrics.has_activity():
+            async with session_factory() as session:
+                async with session.begin():
+                    await metrics.persist_snapshot(session, log.id)
+        return (
+            0,
+            True,
+            True,
+            DbContentionObservation(0, 0),
+            exc.retry_after_seconds,
+            worker_counters,
+        )
+    except FetchError as exc:
+        _logger.error("fetch error tail log=%s: %s", log.id, exc)
+        metrics.record_retryable_errors(1)
+        worker_counters = build_worker_counters(
+            metrics,
+            last_error_type=exc.__class__.__name__,
+            last_error_message=str(exc),
+        )
+        if metrics.has_activity():
+            async with session_factory() as session:
+                async with session.begin():
+                    await metrics.persist_snapshot(session, log.id)
+        return (0, False, False, DbContentionObservation(0, 0), None, worker_counters)
+    finally:
+        async with session_factory() as session:
+            async with session.begin():
+                await release_tail_log(session, log.id, worker_id)
 
 
 async def run_tail(

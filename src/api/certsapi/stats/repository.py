@@ -443,3 +443,42 @@ class StatsRepository:
     async def latest_maintenance_run(self) -> dict[str, object] | None:
         """Return the most recent maintenance run for live stats responses."""
         return await query_latest_maintenance_run(self._session)
+
+    async def ct_log_progress_totals(self) -> dict[str, int]:
+        """Return SUM(tree_size) and SUM(next_index) for eligible logs.
+
+        Used as a projection fallback when ``ct_log_backfill_ranges`` is empty
+        (fresh installs or lite-mode deployments without backfill).
+
+        Returns:
+            Dict with ``planned_total`` (SUM of tree_size for eligible logs)
+            and ``planned_completed`` (SUM of next_index for eligible tail
+            cursors joined to eligible log sources).  Zeros when no eligible
+            logs exist.
+        """
+        from ctpool.models.log_runtime_state import CtLogRuntimeState
+
+        runtime_stmt = (
+            select(func.coalesce(func.sum(CtLogRuntimeState.tree_size), 0))
+            .join(
+                CtLogSource,
+                CtLogSource.id == CtLogRuntimeState.log_source_id,
+            )
+            .where(CtLogSource.is_eligible_for_tail.is_(True))
+        )
+        planned_total = int((await self._session.execute(runtime_stmt)).scalar_one())
+
+        cursor_stmt = (
+            select(func.coalesce(func.sum(CtLogTailCursor.next_index), 0))
+            .join(
+                CtLogSource,
+                CtLogSource.id == CtLogTailCursor.log_source_id,
+            )
+            .where(CtLogSource.is_eligible_for_tail.is_(True))
+        )
+        planned_completed = int((await self._session.execute(cursor_stmt)).scalar_one())
+
+        return {
+            "planned_total": planned_total,
+            "planned_completed": planned_completed,
+        }

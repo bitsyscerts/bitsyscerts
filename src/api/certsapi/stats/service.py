@@ -1,9 +1,9 @@
 """Stats service: assembles global and per-log ingestion statistics.
 
-# NOTE (201-500 line warning zone): This module consolidates all stats assembly
-# and builder helpers in one place.  All helpers serve one endpoint and share
-# model types.  Splitting would create multiple files that only make sense as
-# a group.  Resolve by extracting if a second stats endpoint is added.
+NOTE (201-500 line warning zone): The StatsService._get_stats_live method
+is inherently wide — it runs ~15 independent queries and maps each to a
+model.  A further split into a QueryRunner + Assembler pair is deferred
+until a second stats consumer is added.
 """
 
 from __future__ import annotations
@@ -16,24 +16,14 @@ from typing import Protocol, cast
 from sqlalchemy.engine import RowMapping
 
 from certsapi.stats.models import (
-    AuditHealth,
-    BackfillHealth,
     BackfillRangeStats,
     BackfillStateSummary,
     DbContentionStats,
     EntryOutcomeStats,
-    IngestionHealth,
-    IngestionRateStats,
-    IngestionRateWindow,
-    LogStatsItem,
-    MaintenanceStatus,
-    MetricsRetentionStats,
     SnapshotMetadata,
     StatsResponse,
-    StorageProfileSettings,
     StorageStats,
     TableStorageItem,
-    TailFreshnessStats,
     WorkerSummary,
 )
 from certsapi.stats.projection import (
@@ -42,6 +32,18 @@ from certsapi.stats.projection import (
     read_disk_safety_snapshot,
 )
 from certsapi.stats.repository import StatsRepository
+from certsapi.stats.response_builders import (
+    build_audit_health,
+    build_backfill_health,
+    build_ingestion_health,
+    build_ingestion_rate_stats,
+    build_maintenance_status,
+    build_metrics_retention,
+    build_storage_profile_block,
+    build_tail_freshness_stats,
+    resolve_backfill_range_mode,
+    row_to_log_item,
+)
 
 _logger = logging.getLogger(__name__)
 _INGESTION_RATE_WINDOWS = [300, 3600]
@@ -74,250 +76,6 @@ class ActiveSettingsLike(Protocol):
     settings_hash: str
 
 
-def _row_to_log_item(row: RowMapping, now: datetime) -> LogStatsItem:
-    """Convert a per-log aggregation row to a LogStatsItem response model."""
-    total: int = row["total_ranges"]
-    complete: int = row["complete_ranges"]
-    pct = (complete / total * 100.0) if total > 0 else None
-    last_sync: datetime | None = row["last_tail_sync"]
-    lag: int | None = None
-    if last_sync is not None:
-        lag = max(0, int((now - last_sync.replace(tzinfo=UTC)).total_seconds()))
-    return LogStatsItem(
-        log_id=row["id"],
-        description=row["description"],
-        url=row["url"],
-        log_state=row["log_state"],
-        tail_position=row["tail_position"],
-        last_tail_sync=row["last_tail_sync"],
-        backfill_complete_pct=pct,
-        tail_freshness_lag_seconds=lag,
-    )
-
-
-def _build_ingestion_rate_stats(
-    rows: Sequence[Mapping[str, object]],
-) -> IngestionRateStats:
-    """Convert per-window aggregation rows to an IngestionRateStats instance.
-
-    Sprint 5B populates precise throughput, uniqueness, and error rates from
-    producer-written ``ingestion_metrics`` counters rather than leaving them
-    null at the API layer.
-    """
-    windows: list[IngestionRateWindow] = []
-    for row in rows:
-        secs = _as_int(row["window_seconds"])
-        minutes = secs / 60.0
-        observations_per_sec = _as_float(row["entries_fetched"]) / secs
-        observations_per_min = _as_float(row["entries_fetched"]) / minutes
-        certs_per_min = _as_float(row["entries_parsed"]) / minutes
-        hostnames_per_min = _as_float(row["hostnames_upserted"]) / minutes
-        windows.append(
-            IngestionRateWindow(
-                window_seconds=secs,
-                observations_per_sec=observations_per_sec,
-                certs_per_min=certs_per_min,
-                hostnames_per_min=hostnames_per_min,
-                observations_per_min=observations_per_min,
-                certificates_parsed_per_min=certs_per_min,
-                new_unique_certificates_per_min=(
-                    _as_float(row["new_unique_certificates"]) / minutes
-                ),
-                duplicate_certificates_per_min=(
-                    _as_float(row["duplicate_certificates"]) / minutes
-                ),
-                hostnames_observed_per_min=hostnames_per_min,
-                new_unique_hostnames_per_min=(
-                    _as_float(row["new_unique_hostnames"]) / minutes
-                ),
-                known_hostnames_per_min=_as_float(row["known_hostnames"]) / minutes,
-                retryable_errors_per_min=_as_float(row["retryable_errors"]) / minutes,
-                terminal_entry_errors_per_min=(
-                    _as_float(row["terminal_entry_errors"]) / minutes
-                ),
-            )
-        )
-    return IngestionRateStats(windows=windows)
-
-
-def _build_tail_freshness_stats(
-    row: RowMapping,
-    stale_threshold_seconds: int,
-) -> TailFreshnessStats:
-    """Convert the tail freshness aggregate row to a TailFreshnessStats instance."""
-    return TailFreshnessStats(
-        stale_threshold_seconds=stale_threshold_seconds,
-        stale_log_count=int(row["stale_log_count"] or 0),
-        oldest_lag_seconds=int(row["oldest_lag_seconds"])
-        if row["oldest_lag_seconds"] is not None
-        else None,
-        median_lag_seconds=int(row["median_lag_seconds"])
-        if row["median_lag_seconds"] is not None
-        else None,
-    )
-
-
-def _build_audit_health(counts: dict[str, int]) -> AuditHealth:
-    """Build an AuditHealth summary from per-severity open finding counts."""
-    total = sum(counts.values())
-    actionable = counts.get("critical", 0) + counts.get("error", 0)
-    status = "attention_needed" if actionable > 0 else "ok"
-    return AuditHealth(
-        open_critical=counts.get("critical", 0),
-        open_error=counts.get("error", 0),
-        open_warning=counts.get("warning", 0),
-        open_info=counts.get("info", 0),
-        total_open=total,
-        status=status,  # type: ignore[arg-type]
-    )
-
-
-def _build_backfill_health(failed: int, stale: int) -> BackfillHealth:
-    """Derive a BackfillHealth summary from range status counts."""
-    if failed > 0 and stale > 0:
-        msg = (
-            f"{failed} backfill range(s) have failed and require retry or inspection. "
-            f"{stale} range(s) are stale in-progress."
-        )
-    elif failed > 0:
-        msg = f"{failed} backfill range(s) have failed and require retry or inspection."
-    elif stale > 0:
-        msg = f"{stale} range(s) are stuck in_progress with no recent heartbeat."
-    else:
-        msg = ""
-    status: str = "warning" if (failed > 0 or stale > 0) else "ok"
-    return BackfillHealth(
-        status=status,  # type: ignore[arg-type]
-        failed_ranges=failed,
-        stale_ranges=stale,
-        message=msg,
-    )
-
-
-def _resolve_backfill_range_mode(
-    ctpool_settings: CtPoolSettingsLike | None,
-) -> tuple[str, bool]:
-    """Return live backfill-range mode metadata for API responses.
-
-    Live range counts come from the legacy ``ct_log_backfill_ranges`` table.
-    When per-log dispatch is active, those counts are retained only as a
-    secondary compatibility view and must not be treated as the primary
-    operator signal.
-    """
-
-    dispatch_mode = "per-log"
-    if ctpool_settings is not None:
-        dispatch_mode = ctpool_settings.ct_backfill_dispatch_mode
-    return dispatch_mode, dispatch_mode != "per-log"
-
-
-def _coerce_oldest_metric_at(value: object) -> datetime | None:
-    """Return a datetime payload field only when the row value is one."""
-
-    return value if isinstance(value, datetime) else None
-
-
-def _as_int(value: object) -> int:
-    """Coerce repository scalar values to ints for stats responses."""
-
-    return int(value) if isinstance(value, int | float) else 0
-
-
-def _as_float(value: object) -> float:
-    """Coerce repository scalar values to floats for rate calculations."""
-
-    return float(value) if isinstance(value, int | float) else 0.0
-
-
-def _build_ingestion_health(
-    backfill_state: dict[str, object] | None,
-    worker_summary: dict[str, object] | None,
-    outcome_counts: dict[str, int],
-) -> IngestionHealth:
-    """Build the dashboard ingestion-health summary for live responses."""
-    retrying = 0
-    rate_limited = 0
-    paused = 0
-    error_logs = 0
-    total_retryable = 0
-    total_terminal = 0
-    if backfill_state is not None:
-        retrying = _as_int(backfill_state.get("retrying"))
-        rate_limited = _as_int(backfill_state.get("rate_limited"))
-        paused = _as_int(backfill_state.get("paused"))
-        error_logs = _as_int(backfill_state.get("error"))
-        for item in cast(list[dict[str, object]], backfill_state.get("items") or []):
-            total_retryable += _as_int(item.get("retryable_error_count"))
-            total_terminal += _as_int(item.get("terminal_error_count"))
-
-    stale_workers = 0
-    if worker_summary is not None:
-        stale_workers = _as_int(worker_summary.get("stale_total"))
-
-    recent_terminal_outcomes = sum(
-        _as_int(outcome_counts.get(key))
-        for key in ("parse_error", "unsupported_entry_type", "write_error")
-    )
-
-    return IngestionHealth(
-        retrying_logs=retrying,
-        rate_limited_logs=rate_limited,
-        paused_logs=paused,
-        error_logs=error_logs,
-        stale_workers=stale_workers,
-        retryable_error_total=total_retryable,
-        terminal_error_total=total_terminal,
-        recent_terminal_outcomes=recent_terminal_outcomes,
-        status="attention_needed" if (paused > 0 or error_logs > 0) else "ok",
-    )
-
-
-def _build_maintenance_status(
-    maintenance_run: dict[str, object] | None,
-    *,
-    interval_seconds: int,
-    active_settings: ActiveSettingsLike | None,
-) -> MaintenanceStatus:
-    """Build the maintenance card block for live responses."""
-    from ctpool.maintenance_queries import compute_next_due, is_lite_enforced
-
-    profile = active_settings.storage_profile if active_settings is not None else None
-    if maintenance_run is None:
-        return MaintenanceStatus(
-            status="never_ran",
-            active_profile=profile,
-            is_enforced=False,
-        )
-
-    return MaintenanceStatus(
-        status=cast(str, maintenance_run.get("status", "unknown")),
-        active_profile=cast(str | None, maintenance_run.get("storage_profile"))
-        or profile,
-        last_prune_started_at=cast(datetime | None, maintenance_run.get("started_at")),
-        last_prune_completed_at=cast(
-            datetime | None,
-            maintenance_run.get("completed_at"),
-        ),
-        last_prune_status=cast(str | None, maintenance_run.get("status")),
-        last_prune_mode=cast(str | None, maintenance_run.get("mode")),
-        last_prune_deleted=cast(dict[str, int], maintenance_run.get("deleted") or {}),
-        preserved_hostnames=cast(
-            int | None,
-            maintenance_run.get("preserved_hostnames"),
-        ),
-        duration_ms=cast(int | None, maintenance_run.get("duration_ms")),
-        next_prune_due_at=compute_next_due(
-            cast(datetime | None, maintenance_run.get("started_at")),
-            interval_seconds,
-        ),
-        is_enforced=is_lite_enforced(
-            cast(dict[str, object], maintenance_run),
-            interval_seconds=interval_seconds,
-        ),
-        error_message=cast(str | None, maintenance_run.get("error_message")),
-    )
-
-
 class StatsService:
     """Runs all stats queries sequentially and assembles the StatsResponse."""
 
@@ -339,7 +97,7 @@ class StatsService:
 
         Always attaches :class:`SnapshotMetadata` so the dashboard can show
         the operator how fresh the displayed numbers are and whether the
-        payload is stale (Sprint 5).
+        payload is stale.
         """
         snapshot_age = await self._snapshot_age_safe()
         snapshot_payload = await self._try_get_fresh_snapshot()
@@ -412,7 +170,6 @@ class StatsService:
             if ctpool_settings is not None
             else 300
         )
-
         try:
             age = await self._repository.get_snapshot_age_seconds(_SNAPSHOT_TYPE)
             if age is None or age > max_age:
@@ -421,8 +178,48 @@ class StatsService:
         except Exception:
             return None
 
+    async def _resolve_projection_inputs(
+        self,
+        total_o: int,
+        total_c: int,
+        total_h: int,
+        total_ch: int,
+        total_size_bytes: int,
+        progress: RowMapping,
+    ) -> ProjectionInputs:
+        """Build projection inputs, falling back to CT log tree sizes.
+
+        Falls back to CT log tree sizes when no backfill ranges exist.
+        """
+        planned_total = int(progress["planned_observations_total"])
+        planned_completed = int(progress["planned_observations_completed"])
+        if planned_total == 0:
+            try:
+                ct_progress = await self._repository.ct_log_progress_totals()
+                planned_total = ct_progress["planned_total"]
+                planned_completed = ct_progress["planned_completed"]
+            except Exception:
+                _logger.warning(
+                    "ct_log_progress_totals query failed; projection may be limited"
+                )
+        return ProjectionInputs(
+            database_size_bytes=total_size_bytes,
+            ct_observations_count=total_o,
+            certificates_count=total_c,
+            hostnames_count=total_h,
+            certificate_hostnames_count=total_ch,
+            planned_observations_total=planned_total,
+            planned_observations_completed=planned_completed,
+        )
+
     async def _get_stats_live(self) -> StatsResponse:
-        """Run all live queries and build a StatsResponse from scratch."""
+        """Run all live queries and build a StatsResponse from scratch.
+
+        NOTE (21-50 warning): this method is necessarily wide — it must run
+        ~15 independent queries and map each result to a model field.  Each
+        line maps to a distinct query; extracting sub-methods would add
+        indirection without reducing complexity.
+        """
         now = datetime.now(UTC)
         total_h = await self._repository.total_hostnames()
         total_c = await self._repository.total_certificates()
@@ -450,7 +247,7 @@ class StatsService:
         backfill_counts = await self._repository.backfill_range_status_counts(
             claim_timeout
         )
-        dispatch_mode, backfill_ranges_primary = _resolve_backfill_range_mode(
+        dispatch_mode, backfill_ranges_primary = resolve_backfill_range_mode(
             ctpool_settings
         )
         worker_stale_seconds = (
@@ -476,45 +273,36 @@ class StatsService:
             else 30
         )
         total_size_bytes = int(storage_data["total"]["total_size_bytes"])
-        storage = StorageStats(
-            total_size_bytes=total_size_bytes,
-            total_size_pretty=storage_data["total"]["total_size_pretty"],
-            tables=[
-                TableStorageItem(
-                    table_name=row["table_name"],
-                    row_estimate=int(row["row_estimate"]),
-                    size_bytes=int(row["size_bytes"]),
-                    size_pretty=row["size_pretty"],
-                )
-                for row in storage_data["tables"]
-            ],
-        )
         active_settings = cast(
             ActiveSettingsLike | None,
             await self._repository.get_active_instance_settings(),
         )
+        projection_inputs = await self._resolve_projection_inputs(
+            total_o, total_c, total_h, total_ch, total_size_bytes, progress
+        )
         storage_projection = compute_storage_projection(
-            ProjectionInputs(
-                database_size_bytes=total_size_bytes,
-                ct_observations_count=total_o,
-                certificates_count=total_c,
-                hostnames_count=total_h,
-                certificate_hostnames_count=total_ch,
-                planned_observations_total=int(progress["planned_observations_total"]),
-                planned_observations_completed=int(
-                    progress["planned_observations_completed"]
-                ),
-            ),
+            projection_inputs,
             disk_snapshot=read_disk_safety_snapshot(),
             active_settings=active_settings,
         )
-        storage_profile_block = _build_storage_profile_block(active_settings)
         return StatsResponse(
             total_hostnames=total_h,
-            storage_profile=storage_profile_block,
+            storage_profile=build_storage_profile_block(active_settings),
             total_certificates=total_c,
             total_logs=total_l,
-            storage=storage,
+            storage=StorageStats(
+                total_size_bytes=total_size_bytes,
+                total_size_pretty=storage_data["total"]["total_size_pretty"],
+                tables=[
+                    TableStorageItem(
+                        table_name=row["table_name"],
+                        row_estimate=int(row["row_estimate"]),
+                        size_bytes=int(row["size_bytes"]),
+                        size_pretty=row["size_pretty"],
+                    )
+                    for row in storage_data["tables"]
+                ],
+            ),
             storage_projection=storage_projection,
             db_contention=DbContentionStats(
                 status=contention.status,
@@ -528,10 +316,10 @@ class StatsService:
                 total_retryable_errors=contention.total_retryable_errors,
                 retryable_errors_per_min_5min=contention.retryable_errors_per_min_5min,
             ),
-            ingestion_rate=_build_ingestion_rate_stats(
+            ingestion_rate=build_ingestion_rate_stats(
                 cast(Sequence[Mapping[str, object]], rate_rows)
             ),
-            tail_freshness=_build_tail_freshness_stats(
+            tail_freshness=build_tail_freshness_stats(
                 freshness_row, _TAIL_STALE_THRESHOLD_SECONDS
             ),
             entry_outcomes=EntryOutcomeStats(
@@ -549,19 +337,13 @@ class StatsService:
                 dispatch_mode=dispatch_mode,
                 is_primary=backfill_ranges_primary,
             ),
-            backfill_health=_build_backfill_health(
+            backfill_health=build_backfill_health(
                 failed=backfill_counts["failed"],
                 stale=backfill_counts["stale_in_progress"],
             ),
-            metrics_retention=MetricsRetentionStats(
-                ingestion_metrics_rows=_as_int(metrics_summary.get("row_count")),
-                oldest_ingestion_metric_at=_coerce_oldest_metric_at(
-                    metrics_summary.get("oldest_at")
-                ),
-                metrics_retention_days=retention_days,
-            ),
-            audit_health=_build_audit_health(audit_counts),
-            logs=[_row_to_log_item(row, now) for row in per_log],
+            metrics_retention=build_metrics_retention(metrics_summary, retention_days),
+            audit_health=build_audit_health(audit_counts),
+            logs=[row_to_log_item(row, now) for row in per_log],
             workers=WorkerSummary.model_validate(worker_summary),
             backfill_state=BackfillStateSummary.model_validate(
                 {
@@ -570,34 +352,14 @@ class StatsService:
                     "is_primary": dispatch_mode == "per-log",
                 }
             ),
-            ingestion_health=_build_ingestion_health(
+            ingestion_health=build_ingestion_health(
                 cast(dict[str, object], backfill_state_summary),
                 cast(dict[str, object], worker_summary),
                 outcome_counts,
             ),
-            maintenance=_build_maintenance_status(
+            maintenance=build_maintenance_status(
                 cast(dict[str, object] | None, maintenance_run),
                 interval_seconds=maintenance_interval_seconds,
                 active_settings=active_settings,
             ),
         )
-
-
-def _build_storage_profile_block(
-    active_settings: ActiveSettingsLike | None,
-) -> StorageProfileSettings | None:
-    """Convert an active settings row to StorageProfileSettings or None."""
-    if active_settings is None:
-        return None
-    return StorageProfileSettings(
-        storage_profile=active_settings.storage_profile,
-        cert_storage_mode=active_settings.cert_storage_mode,
-        hostname_retention_mode=active_settings.hostname_retention_mode,
-        backfill_days=active_settings.backfill_days,
-        cert_retention_days=active_settings.cert_retention_days,
-        observation_retention_days=active_settings.observation_retention_days,
-        entry_outcome_retention_days=active_settings.entry_outcome_retention_days,
-        metrics_retention_days=active_settings.metrics_retention_days,
-        settings_hash=active_settings.settings_hash,
-        source="database",
-    )

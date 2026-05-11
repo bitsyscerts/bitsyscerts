@@ -362,3 +362,45 @@ async def query_active_instance_settings(
     stmt = select(CtInstanceSettings).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def query_ct_log_progress_totals(
+    session: AsyncSession,
+) -> dict[str, int]:
+    """Return SUM(tree_size) and SUM(next_index) for eligible CT logs.
+
+    Used as a storage-projection fallback when
+    ``ct_log_backfill_ranges`` is empty — e.g. on fresh installs or in
+    lite-mode deployments without backfill ranges.
+
+    Only logs with ``is_eligible_for_tail=True`` are included.
+
+    Args:
+        session: Active async SQLAlchemy session.
+
+    Returns:
+        Dict with ``planned_total`` (tree_size sum) and
+        ``planned_completed`` (next_index sum).  Both default to 0.
+    """
+    from ctpool.models.log_runtime_state import CtLogRuntimeState
+    from ctpool.models.log_source import CtLogSource
+    from ctpool.models.log_tail_cursor import CtLogTailCursor
+
+    runtime_stmt = (
+        select(func.coalesce(func.sum(CtLogRuntimeState.tree_size), 0))
+        .join(CtLogSource, CtLogSource.id == CtLogRuntimeState.log_source_id)
+        .where(CtLogSource.is_eligible_for_tail.is_(True))
+    )
+    planned_total = int((await session.execute(runtime_stmt)).scalar_one())
+
+    cursor_stmt = (
+        select(func.coalesce(func.sum(CtLogTailCursor.next_index), 0))
+        .join(CtLogSource, CtLogSource.id == CtLogTailCursor.log_source_id)
+        .where(CtLogSource.is_eligible_for_tail.is_(True))
+    )
+    planned_completed = int((await session.execute(cursor_stmt)).scalar_one())
+
+    return {
+        "planned_total": planned_total,
+        "planned_completed": planned_completed,
+    }
