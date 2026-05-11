@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { StorageSummary } from "@/components/StatsPanel/StorageSummary";
 import type {
   MaintenanceStatus,
@@ -106,7 +105,7 @@ describe("StorageSummary", () => {
     expect(screen.getByText("Never ran")).toBeInTheDocument();
   });
 
-  it("calls onStorageDetails when button is clicked", async () => {
+  it("calls onStorageDetails when button is clicked", () => {
     const onStorageDetails = vi.fn();
     render(
       <AllProviders>
@@ -118,7 +117,7 @@ describe("StorageSummary", () => {
         />
       </AllProviders>,
     );
-    await userEvent.click(screen.getByRole("button", { name: /storage details/i }));
+    fireEvent.click(screen.getByRole("button", { name: /storage details/i }));
     expect(onStorageDetails).toHaveBeenCalledOnce();
   });
 });

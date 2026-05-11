@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { WorkerDetailsDrawer } from "@/components/StatsPanel/WorkerDetailsDrawer";
 import type { WorkerSummary } from "@/types";
 import { AllProviders } from "../AllProviders";
@@ -45,7 +44,7 @@ describe("WorkerDetailsDrawer", () => {
     expect(screen.getAllByText("Worker Activity").length).toBeGreaterThan(0);
   });
 
-  it("calls onClose when close button is clicked", async () => {
+  it("calls onClose when close button is clicked", () => {
     const onClose = vi.fn();
     render(
       <AllProviders>
@@ -53,7 +52,7 @@ describe("WorkerDetailsDrawer", () => {
       </AllProviders>,
     );
     const backBtn = screen.getByRole("button", { name: /back/i });
-    await userEvent.click(backBtn);
+    fireEvent.click(backBtn);
     expect(onClose).toHaveBeenCalledOnce();
   });
 });

@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { CTLogsDrawer } from "@/components/StatsPanel/CTLogsDrawer";
 import type { BackfillStateSummary, LogStatsItem } from "@/types";
 import { AllProviders } from "../AllProviders";
@@ -91,7 +90,7 @@ describe("CTLogsDrawer", () => {
     expect(container).toBeTruthy();
   });
 
-  it("calls onClose when back button is clicked", async () => {
+  it("calls onClose when back button is clicked", () => {
     const onClose = vi.fn();
     render(
       <AllProviders>
@@ -104,7 +103,7 @@ describe("CTLogsDrawer", () => {
       </AllProviders>,
     );
     const backBtn = screen.getByRole("button", { name: /back/i });
-    await userEvent.click(backBtn);
+    fireEvent.click(backBtn);
     expect(onClose).toHaveBeenCalledOnce();
   });
 });

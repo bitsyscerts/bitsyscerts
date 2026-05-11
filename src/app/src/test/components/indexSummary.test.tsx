@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { IndexSummary } from "@/components/StatsPanel/IndexSummary";
 import type { SnapshotMetadata } from "@/types";
 import { AllProviders } from "../AllProviders";
@@ -66,7 +65,7 @@ describe("IndexSummary", () => {
     expect(screen.getByText("No snapshot yet")).toBeInTheDocument();
   });
 
-  it("calls onInspectLogs when button is clicked", async () => {
+  it("calls onInspectLogs when button is clicked", () => {
     const onInspectLogs = vi.fn();
     render(
       <AllProviders>
@@ -79,7 +78,7 @@ describe("IndexSummary", () => {
         />
       </AllProviders>,
     );
-    await userEvent.click(screen.getByRole("button", { name: /inspect ct logs/i }));
+    fireEvent.click(screen.getByRole("button", { name: /inspect ct logs/i }));
     expect(onInspectLogs).toHaveBeenCalledOnce();
   });
 });

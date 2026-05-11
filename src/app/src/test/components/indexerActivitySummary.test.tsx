@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { IndexerActivitySummary } from "@/components/StatsPanel/IndexerActivitySummary";
 import type { IngestionRateStats, WorkerSummary } from "@/types";
 import { AllProviders } from "../AllProviders";
@@ -96,7 +95,7 @@ describe("IndexerActivitySummary", () => {
     expect(screen.getByText(/obs\/min/i)).toBeInTheDocument();
   });
 
-  it("calls onInspectWorkers when inspect button is clicked", async () => {
+  it("calls onInspectWorkers when inspect button is clicked", () => {
     const onInspectWorkers = vi.fn();
     render(
       <AllProviders>
@@ -107,7 +106,7 @@ describe("IndexerActivitySummary", () => {
         />
       </AllProviders>,
     );
-    await userEvent.click(
+    fireEvent.click(
       screen.getByRole("button", { name: /inspect workers/i }),
     );
     expect(onInspectWorkers).toHaveBeenCalledOnce();

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { DiagnosticsSection } from "@/components/StatsPanel/DiagnosticsSection";
 import type {
   AuditHealth,
@@ -55,7 +54,7 @@ describe("DiagnosticsSection", () => {
     expect(screen.getByText("Advanced diagnostics")).toBeInTheDocument();
   });
 
-  it("renders with audit health provided", async () => {
+  it("renders with audit health provided", () => {
     const { container } = render(
       <AllProviders>
         <DiagnosticsSection
@@ -65,11 +64,11 @@ describe("DiagnosticsSection", () => {
         />
       </AllProviders>,
     );
-    await userEvent.click(screen.getByText("Advanced diagnostics"));
+    fireEvent.click(screen.getByText("Advanced diagnostics"));
     expect(container).toBeTruthy();
   });
 
-  it("renders without audit health", async () => {
+  it("renders without audit health", () => {
     const { container } = render(
       <AllProviders>
         <DiagnosticsSection
@@ -79,11 +78,11 @@ describe("DiagnosticsSection", () => {
         />
       </AllProviders>,
     );
-    await userEvent.click(screen.getByText("Advanced diagnostics"));
+    fireEvent.click(screen.getByText("Advanced diagnostics"));
     expect(container).toBeTruthy();
   });
 
-  it("renders DbContentionCard inside the accordion", async () => {
+  it("renders DbContentionCard inside the accordion", () => {
     const { container } = render(
       <AllProviders>
         <DiagnosticsSection
@@ -93,7 +92,7 @@ describe("DiagnosticsSection", () => {
         />
       </AllProviders>,
     );
-    await userEvent.click(screen.getByText("Advanced diagnostics"));
+    fireEvent.click(screen.getByText("Advanced diagnostics"));
     expect(container).toBeTruthy();
   });
 });
