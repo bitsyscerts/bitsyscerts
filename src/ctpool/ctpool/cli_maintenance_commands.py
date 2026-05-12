@@ -28,7 +28,12 @@ def register(app: typer.Typer) -> None:
             ),
         ] = False,
     ) -> None:
-        """Run maintenance tasks: prune expired rows and check audit gaps.
+        """Run lightweight profile-aware maintenance.
+
+        By default this runs ``prune-for-storage-profile`` only.  Deep
+        ``check-audit-gaps`` scans are **disabled unless**
+        ``BITSYSCERTS_ENABLE_SCHEDULED_AUDIT=true``; when enabled they run
+        on ``BITSYSCERTS_AUDIT_INTERVAL_SECONDS`` and never block prune.
 
         Use ``--loop`` to run as a persistent service that repeats on the
         ``ct_maintenance_interval_seconds`` interval (default 3600 s).
@@ -38,7 +43,20 @@ def register(app: typer.Typer) -> None:
 
         settings = get_settings()
         if loop:
-            asyncio.run(run_maintenance_loop(settings))
+            audit_enabled = getattr(
+                settings, "bitsyscerts_enable_scheduled_audit", False
+            )
+            _console.print(
+                f"[cyan]Maintenance loop starting.[/cyan]  "
+                f"interval=[bold]{settings.ct_maintenance_interval_seconds}[/bold] s  "
+                f"audit=[bold]{audit_enabled}[/bold]"
+            )
+            try:
+                asyncio.run(run_maintenance_loop(settings))
+            except KeyboardInterrupt:
+                pass
+            finally:
+                _console.print("[yellow]Maintenance loop stopped.[/yellow]")
         else:
             asyncio.run(run_maintenance_once(settings))
             _console.print("[green]Maintenance run complete.[/green]")

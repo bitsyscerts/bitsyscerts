@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import type { ReactNode } from "react";
 import type { CertEmbedResponse, HostnameResult } from "@/types";
@@ -80,8 +80,21 @@ describe("HostnameResultRow", () => {
     render(<HostnameResultRow item={MOCK_ITEM} onClick={onClick} />, {
       wrapper,
     });
-    // Click the button wrapper
-    screen.getAllByText("example.com")[0].click();
+    screen.getByRole("button", { name: "Open hostname example.com" }).click();
+    expect(onClick).toHaveBeenCalledWith(MOCK_ITEM);
+  });
+
+  it("supports keyboard activation", () => {
+    const onClick = vi.fn();
+    render(<HostnameResultRow item={MOCK_ITEM} onClick={onClick} />, {
+      wrapper,
+    });
+
+    fireEvent.keyDown(
+      screen.getByRole("button", { name: "Open hostname example.com" }),
+      { key: "Enter" },
+    );
+
     expect(onClick).toHaveBeenCalledWith(MOCK_ITEM);
   });
 
@@ -91,6 +104,37 @@ describe("HostnameResultRow", () => {
     });
     // CertEmbedRow shows truncated fingerprint
     expect(screen.getByText(/abababab/)).toBeInTheDocument();
+  });
+
+  it("keeps the embedded cert row clickable without nested button warnings", () => {
+    const onClick = vi.fn();
+    const onCertClick = vi.fn();
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    render(
+      <HostnameResultRow
+        item={MOCK_ITEM}
+        onClick={onClick}
+        onCertClick={onCertClick}
+      />,
+      { wrapper },
+    );
+
+    screen
+      .getByRole("button", { name: "Open embedded certificate details" })
+      .click();
+
+    expect(onCertClick).toHaveBeenCalledWith(MOCK_CERT);
+    expect(onClick).not.toHaveBeenCalled();
+    expect(
+      consoleError.mock.calls.some(([message]) =>
+        String(message).includes("cannot appear as a descendant of <button>"),
+      ),
+    ).toBe(false);
+
+    consoleError.mockRestore();
   });
 });
 

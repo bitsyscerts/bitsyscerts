@@ -169,23 +169,62 @@ def register(app: typer.Typer) -> None:
 
     @app.command("prune-for-storage-profile")
     def prune_for_storage_profile(
+        execute: Annotated[
+            bool,
+            typer.Option(
+                "--execute",
+                help="Actually delete eligible rows. Without this flag the "
+                "command runs in safe dry-run mode and only counts candidates.",
+            ),
+        ] = False,
         dry_run: Annotated[
             bool,
-            typer.Option("--dry-run", help="Count rows that would be deleted."),
+            typer.Option(
+                "--dry-run",
+                help="(Default) count rows that would be deleted; no changes.",
+            ),
+        ] = False,
+        limit: Annotated[
+            int,
+            typer.Option(
+                "--limit",
+                help="Maximum rows to delete per category (0 = unlimited).",
+            ),
+        ] = 0,
+        batch_size: Annotated[
+            int,
+            typer.Option(
+                "--batch-size",
+                help="Per-transaction batch size for DELETE statements.",
+            ),
+        ] = 5000,
+        json_output: Annotated[
+            bool,
+            typer.Option(
+                "--json",
+                help="Emit a JSON summary instead of human-readable output.",
+            ),
         ] = False,
     ) -> None:
-        """Run all prune operations appropriate for the active storage profile.
+        """Enforce the active storage profile retention policy.
 
-        Dispatches: prune-metrics, prune-observations, prune-entry-outcomes.
-        Certificate pruning is not included here — use prune-expired-certs
-        separately as it has additional safety checks.
-
-        Pass --dry-run to count candidates without deleting.
+        Dry-run by default. Pass --execute to delete eligible retained data.
+        Hostnames and the latest-cert summary on each hostname are NEVER
+        deleted. retention_days=0 means retain indefinitely (skip category).
         """
         from ctpool._cli_prune_storage_profile_impl import (
             run_prune_for_storage_profile,
         )
 
+        # --dry-run is informational; the destructive switch is --execute.
+        effective_execute = execute and not dry_run
+
         asyncio.run(
-            run_prune_for_storage_profile(execute=not dry_run, console=_console)
+            run_prune_for_storage_profile(
+                execute=effective_execute,
+                limit=limit,
+                batch_size=batch_size,
+                json_output=json_output,
+                console=_console,
+            )
         )

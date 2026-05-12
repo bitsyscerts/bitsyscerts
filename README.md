@@ -63,7 +63,7 @@ relying on external services.
   in a certificate, not that it currently resolves or is reachable.
 - A complete replacement for `crt.sh` — BitsysCerts is a complementary, present-focused,
   self-hosted enrichment tool.
-- A full historical CT warehouse by default — the `current-osint` profile retains a
+- A full historical CT warehouse by default — the `lite` profile retains a
   rolling window, not the complete CT history.
 
 ---
@@ -79,6 +79,24 @@ relying on external services.
 
 ---
 
+## Runtime Modes
+
+BitsysCerts supports three local/runtime modes. They share the same logical
+defaults, but each mode has its own environment template and startup path.
+
+| Mode | Use when | Canonical env file | Notes |
+|---|---|---|---|
+| Developer mode | Contributing from the monorepo in a Dev Container or local checkout | `src/.env.development.example` | Assumes repository structure and editable installs |
+| User local Python mode | Running `ctpool` and `certsapi` without Docker | `src/.env.local.example` | PostgreSQL recommended; SQLite is not currently supported |
+| User Docker Compose mode | Preferred self-hosted operator runtime | `src/.env.compose.example` | Uses GHCR images, bundled PostgreSQL, dashboard, snapshotter, and maintenance |
+
+GitHub Releases attach curated runtime bundles for the two user-facing modes:
+
+- `bitsyscerts-compose-<version>.zip`
+- `bitsyscerts-python-<version>.zip`
+
+The source checkout remains the preferred workflow for contributors.
+
 ## Storage Profiles
 
 BitsysCerts supports multiple storage profiles so operators can choose between disk
@@ -88,16 +106,18 @@ startup.
 
 | Profile | Storage class | Recommended for |
 |---|---|---|
-| `current-osint` | GB-class | **Default.** Fresh OSINT; rolling retention windows. Start here. |
+| `lite` | GB-class | **Default.** Fresh OSINT; rolling retention windows. Start here. |
+| `standard` | GB-class | Balanced metadata retention for operators who want more history than Lite |
 | `research` | GB–TB-class | Longer lookback; richer certificate metadata for deeper pivots |
 | `archive` | TB-class+ | Broad/full retention; **must be explicitly configured** |
+| `custom` | Varies | Manual retention tuning when the built-in profiles are not sufficient |
 
 The active profile can be changed at runtime via `PUT /v1/settings/storage` or the
 Settings page in the UI. Switching profiles does not delete existing data — the next
 prune cycle enforces the new retention windows.
 
 > [!TIP]
-> First-time operators should start with `current-osint`. It is the most disk-efficient
+> First-time operators should start with `lite`. It is the bootstrap default, the most disk-efficient
 > profile and suitable for the majority of security research and OSINT workflows.
 
 > [!CAUTION]
@@ -124,10 +144,11 @@ and freshness of their local index.
 
 ---
 
-## Quick Start (Self-Hosted)
+## Docker Compose Quick Start (Preferred)
 
-BitsysCerts ships as a Docker Compose stack. You do not need the source repository on
-your server — just three files.
+Docker Compose is the preferred operator/runtime path. It gives you the bundled
+dashboard, PostgreSQL, API, backfill worker, tail worker, stats snapshotter, and
+maintenance loop with the least setup churn.
 
 ### Requirements
 
@@ -136,63 +157,138 @@ your server — just three files.
 - Outbound HTTPS to public CT log URLs
 - Port 80 (or your chosen `FRONTEND_PORT`) reachable from your browser
 
-### 1 — Download the runtime files
+### Release bundle path
+
+Download `bitsyscerts-compose-<version>.zip` from GitHub Releases, extract it, then run:
 
 ```sh
-mkdir bitsyscerts && cd bitsyscerts
-
-BASE=https://raw.githubusercontent.com/bitsyscerts/bitsyscerts/main/src
-curl -sSfO "${BASE}/docker-compose.yml"
-curl -sSfO "${BASE}/.env.example"
-curl -sSfO "${BASE}/server-deploy.sh"
-chmod +x server-deploy.sh
-```
-
-### 2 — Configure
-
-```sh
-cp .env.example .env
+cp .env.compose.example .env
 $EDITOR .env
+
+./server-deploy.sh
+docker compose run --rm migrate ctpool status
+docker compose run --rm migrate ctpool workers list
+docker compose run --rm migrate ctpool backfill-state
+docker compose run --rm migrate ctpool prune-for-storage-profile --dry-run
 ```
 
-| Variable | Required | Description |
-|---|---|---|
-| `POSTGRES_PASSWORD` | Yes | Password for the bundled PostgreSQL service |
-| `DATABASE_URL` | Yes | Async DSN — use `postgres` as the host; password must match above |
-| `IMAGE_TAG` | Yes | GHCR image tag, e.g. `latest` or a pinned version like `26.504.913` |
-| `CT_BACKFILL_DAYS` | No | Days of history to backfill on first run (default: `30`) |
-| `FRONTEND_PORT` | No | Host port for the web UI (default: `80`) |
-
-> [!NOTE]
-> Using the bundled PostgreSQL service? The one-role setup is sufficient. Set
-> `DATABASE_ADMIN_URL` only if you are connecting to an external PostgreSQL server
-> where the application role does not have database-create privileges.
-
-### 3 — Deploy
+`server-deploy.sh` runs migrations, syncs the CT log list, seeds one stats snapshot,
+and runs one maintenance pass before starting the long-running services. If the
+dashboard still says no snapshot yet after startup, run:
 
 ```sh
-./server-deploy.sh
+docker compose run --rm migrate ctpool stats-snapshot
 ```
 
-The script:
-1. Pulls all images from GHCR
-2. Starts PostgreSQL and waits until it is healthy
-3. Runs schema migrations
-4. Fetches the current CT log list (`ctpool sync-logs`)
-5. Brings up the full stack: API, web UI, backfill worker, tail worker
-
-Once it completes, open `http://<your-host>/` in a browser. The dashboard shows ingestion
-progress — backfill will run in the background for the configured lookback window.
-
-### Updating
+To validate a downloaded compose bundle before first boot, extract it and run:
 
 ```sh
-# Edit IMAGE_TAG in .env to pin a new version (optional), then:
-./server-deploy.sh
+cp .env.compose.example .env
+docker compose config >/dev/null
 ```
 
-Pass `--skip-migrate` if you know the schema is already current. Pass `--skip-sync-logs`
-if the CT log list was recently synced.
+### Source checkout path
+
+If you are running from the repository instead of a release bundle:
+
+```sh
+cd src
+cp .env.compose.example .env
+$EDITOR .env
+
+./deploy.sh
+docker compose run --rm migrate ctpool status
+docker compose run --rm migrate ctpool workers list
+docker compose run --rm migrate ctpool backfill-state
+docker compose run --rm migrate ctpool prune-for-storage-profile --dry-run
+```
+
+Once the stack is up, open `http://<your-host>/` in a browser. `/v1/stats` is enabled by
+default in this mode because the bundled dashboard depends on it.
+
+## Local Python Quick Start
+
+Local Python mode is supported for users who cannot run Docker but can run Python.
+It does not assume a process supervisor or container paths.
+
+> [!IMPORTANT]
+> PostgreSQL is recommended for sustained ingestion. SQLite is not currently
+> supported by the packaged runtime.
+
+Use either the full source checkout or `bitsyscerts-python-<version>.zip`, then:
+
+```sh
+python -m venv .venv
+source .venv/bin/activate
+
+pip install ./src/ctpool ./src/api
+```
+
+If you are running from the extracted python bundle:
+
+```sh
+cp .env.local.example .env
+$EDITOR .env
+set -a
+source .env
+set +a
+```
+
+If you are running from the source checkout:
+
+```sh
+cp src/.env.local.example src/.env
+$EDITOR src/.env
+set -a
+source src/.env
+set +a
+```
+
+Then start the services:
+
+```sh
+cd src/ctpool
+ctpool apply-migrations
+ctpool sync-logs
+ctpool stats-snapshot
+ctpool maintenance
+ctpool status
+
+cd ../api
+certsapi serve --host 127.0.0.1 --port 8000
+```
+
+If you want the bundled dashboard from a full checkout or runtime bundle and you have Node
+available, start it separately:
+
+```sh
+cd src/app
+npm ci
+npm run dev -- --host 127.0.0.1
+```
+
+## Developer Mode
+
+Developer mode keeps the monorepo layout intact and assumes editable installs, a source
+checkout, and repository-local commands.
+
+```sh
+cp src/.env.development.example src/.env
+set -a
+source src/.env
+set +a
+
+cd src/ctpool
+python -m pytest -q
+
+cd ../api
+python -m pytest -q
+
+cd ../app
+npm run test -- --run
+```
+
+For the full contributor setup, see [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ---
 
@@ -255,24 +351,34 @@ docs/
 
 ## Manual Operations (CLI)
 
-The `ctpool` CLI is available inside the running `api` container for maintenance tasks:
+In Docker Compose mode, prefer the one-shot `migrate` service for ad hoc operator commands:
 
 ```sh
-# View ingestion statistics
-docker compose exec api ctpool stats
+# Snapshot and status
+docker compose run --rm migrate ctpool stats-snapshot
+docker compose run --rm migrate ctpool status
 
-# Run a data integrity audit
-docker compose exec api ctpool check-audit-gaps
+# Sync logs or run maintenance once
+docker compose run --rm migrate ctpool sync-logs
+docker compose run --rm migrate ctpool maintenance
 
-# Repair audit findings
-docker compose exec api ctpool fix-audit-findings
+# Advanced / debug legacy compatibility tools
+docker compose run --rm migrate ctpool legacy-ranges status
+docker compose run --rm migrate ctpool reap-stale-backfill-claims
 
-# Manually prune to the active retention profile
-docker compose exec api ctpool prune-for-storage-profile
+# Advanced / debug audit tools
+docker compose run --rm migrate ctpool check-audit-gaps
+
+# Preview audit repairs
+docker compose run --rm migrate ctpool fix-audit-findings --dry-run
 
 # Reset migrations and reinitialise (destructive)
 docker compose run --rm migrate ctpool init-db --force
 ```
+
+`ctpool backfill` uses per-log dispatch by default. `legacy-ranges`,
+`reap-stale-backfill-claims`, `check-audit-gaps`, and `fix-audit-findings`
+are retained for compatibility, troubleshooting, and one-off historical repair.
 
 ---
 

@@ -85,22 +85,47 @@ Before filing, check:
 git clone https://github.com/bitsyscerts/bitsyscerts.git
 cd bitsyscerts
 
+# Create a Python environment for the two Python sub-projects
+python -m venv .venv
+source .venv/bin/activate
+
+# Install editable Python packages (ctpool first, then api)
+cd src/ctpool
+pip install -e ".[dev]"
+
+cd ../api
+pip install -e ".[dev]"
+
+# Install frontend dependencies
+cd ../app
+npm install
+
+# Return to the repository root
+cd ../..
+
 # Install Git hooks (ruff, eslint pre-commit checks)
 bash src/install-hooks.sh
 
-# Start the full stack
+# Create the developer-mode environment file
+cp src/.env.development.example src/.env
+```
+
+### Start PostgreSQL for local development
+
+For most contributors, the fastest path is the bundled PostgreSQL service from the source
+checkout:
+
+```bash
 cd src
-cp .env.example .env          # edit to set POSTGRES_PASSWORD
-docker compose up postgres -d
-docker compose run --rm migrate
-docker compose up
+docker compose up -d postgres
+docker compose run --rm migrate ctpool apply-migrations
+docker compose run --rm migrate ctpool sync-logs
 ```
 
 ### Running the API in development
 
 ```bash
 cd src/api
-pip install -e ".[dev]"
 certsapi serve --reload
 ```
 
@@ -108,7 +133,6 @@ certsapi serve --reload
 
 ```bash
 cd src/app
-npm install
 npm run dev
 ```
 
@@ -116,9 +140,23 @@ npm run dev
 
 ```bash
 cd src/ctpool
-pip install -e ".[dev]"
 ctpool sync-logs
 ctpool tail --progress
+```
+
+### Running the validation gates
+
+```bash
+cd src/ctpool
+python -m pytest -q
+
+cd ../api
+python -m pytest -q
+
+cd ../app
+npm run lint
+npm run typecheck
+npm run test -- --run
 ```
 
 ---

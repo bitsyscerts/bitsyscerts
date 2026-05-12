@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Numeric, text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, Numeric, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,7 @@ class IngestionMetric(Base):
     """A single throughput snapshot for a CT log ingestion window."""
 
     __tablename__ = "ingestion_metrics"
+    __table_args__ = (Index("idx_ingestion_metrics_snapshot_at", "snapshot_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -38,6 +39,20 @@ class IngestionMetric(Base):
     entries_parsed: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     certs_upserted: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     hostnames_upserted: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    new_unique_certificates: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    duplicate_certificates: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    new_unique_hostnames: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0
+    )
+    known_hostnames: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    retryable_errors: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    terminal_entry_errors: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0
     )
     parse_errors: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

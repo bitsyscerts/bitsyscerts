@@ -14,6 +14,7 @@ from sqlalchemy import (
     BigInteger,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -35,6 +36,17 @@ class CtLogBackfillRange(Base):
             "start_index",
             "end_index",
             name="uq_ct_log_backfill_ranges_log_source_start_end",
+        ),
+        Index("idx_ct_log_backfill_ranges_status", "status"),
+        Index(
+            "idx_ct_log_backfill_ranges_log_status",
+            "log_source_id",
+            "status",
+        ),
+        Index(
+            "idx_ct_log_backfill_ranges_status_heartbeat",
+            "status",
+            "heartbeat_at",
         ),
     )
 

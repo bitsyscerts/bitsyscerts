@@ -5,7 +5,7 @@ Commands:
     tail                         — Run the tail worker loop.
     reset-tail-cursors           — Reset tail cursors to the current edge.
     backfill                     — Run the backfill worker loop.
-    reap-stale-backfill-claims   — Reset stale in_progress backfill claims.
+    reap-stale-backfill-claims   — Advanced/legacy: reset stale range claims.
     stats                        — Display per-log ingestion statistics.
     logs-follow                  — Stream application log output.
     rebuild-hostname-latest-certs — Rebuild latest-cert summary for all hostnames.
@@ -17,7 +17,7 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Callable
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 from rich.console import Console
@@ -39,6 +39,13 @@ def register(app: typer.Typer) -> None:
         from ctpool._cli_ops_impl import run_sync_logs
 
         asyncio.run(run_sync_logs(_console))
+
+    @app.command("backfill-state")
+    def backfill_state() -> None:
+        """Show per-log backfill state from ct_log_backfill_state."""
+        from ctpool._cli_backfill_state_impl import run_list_backfill_state
+
+        asyncio.run(run_list_backfill_state())
 
     @app.command("tail")
     def tail(
@@ -67,7 +74,7 @@ def register(app: typer.Typer) -> None:
         ] = 0,
     ) -> None:
         """Tail new CT log entries continuously."""
-        from ctpool.tail_worker import run_tail
+        from ctpool.worker_pool import run_tail_pool
 
         settings = get_settings()
         engine = create_engine(settings)
@@ -86,19 +93,33 @@ def register(app: typer.Typer) -> None:
             on_batch = None
             on_status = None
             batch_size = settings.ct_default_batch_size
-        asyncio.run(
-            run_tail(
-                factory,
-                settings,
-                once=once,
-                limit=limit,
-                log_id=log_id,
-                on_batch=on_batch,
-                on_status=on_status,
-                init_from_end=init_from_end,
-                batch_size=batch_size,
-            )
+        concurrency = 1 if (once or log_id is not None) else None
+        effective_workers = 1 if concurrency == 1 else settings.ct_tail_concurrency
+        _console.print(
+            f"[cyan]Tail worker starting.[/cyan]  "
+            f"workers=[bold]{effective_workers}[/bold]  "
+            f"batch=[bold]{batch_size}[/bold]  "
+            f"interval=[bold]{settings.ct_tail_interval_seconds}[/bold] s"
         )
+        try:
+            asyncio.run(
+                run_tail_pool(
+                    factory,
+                    settings,
+                    concurrency=concurrency,
+                    once=once,
+                    limit=limit,
+                    log_id=log_id,
+                    on_batch=on_batch,
+                    on_status=on_status,
+                    init_from_end=init_from_end,
+                    batch_size=batch_size,
+                )
+            )
+        except KeyboardInterrupt:
+            pass
+        finally:
+            _console.print("[yellow]Tail worker stopped.[/yellow]")
 
     @app.command("reset-tail-cursors")
     def reset_tail_cursors_cmd(
@@ -131,7 +152,7 @@ def register(app: typer.Typer) -> None:
     @app.command("backfill")
     def backfill(
         once: Annotated[
-            bool, typer.Option("--once", help="Process one range then exit.")
+            bool, typer.Option("--once", help="Process one batch then exit.")
         ] = False,
         limit: Annotated[
             int | None, typer.Option("--limit", help="Stop after N entries.")
@@ -147,9 +168,24 @@ def register(app: typer.Typer) -> None:
         progress: Annotated[
             bool, typer.Option("--progress", help="Print a line per batch.")
         ] = False,
+        dispatch_mode: Annotated[
+            Literal["per-log", "legacy-ranges"] | None,
+            typer.Option(
+                "--dispatch-mode",
+                help=(
+                    "Override CT_BACKFILL_DISPATCH_MODE: 'per-log' "
+                    "(default runtime) or 'legacy-ranges' "
+                    "(compatibility/debug only)."
+                ),
+            ),
+        ] = None,
     ) -> None:
-        """Claim and process historical CT log backfill ranges."""
-        from ctpool.backfill_worker import run_backfill
+        """Run the backfill worker.
+
+        Per-log dispatch is the default runtime path. ``legacy-ranges`` is a
+        compatibility/debug override for older range-based workflows.
+        """
+        from ctpool.worker_pool import run_backfill_pool
 
         settings = get_settings()
         engine = create_engine(settings)
@@ -168,19 +204,37 @@ def register(app: typer.Typer) -> None:
             on_batch = None
             on_status = None
             batch_size = settings.ct_default_batch_size
-        asyncio.run(
-            run_backfill(
-                factory,
-                settings,
-                once=once,
-                limit=limit,
-                days=days,
-                log_id=log_id,
-                on_batch=on_batch,
-                on_status=on_status,
-                batch_size=batch_size,
-            )
+        concurrency = 1 if (once or log_id is not None) else None
+        effective_workers = 1 if concurrency == 1 else settings.ct_backfill_concurrency
+        effective_days = days if days is not None else settings.ct_backfill_days
+        effective_mode = dispatch_mode or settings.ct_backfill_dispatch_mode
+        _console.print(
+            f"[cyan]Backfill worker starting.[/cyan]  "
+            f"workers=[bold]{effective_workers}[/bold]  "
+            f"days=[bold]{effective_days}[/bold]  "
+            f"batch=[bold]{batch_size}[/bold]  "
+            f"mode=[bold]{effective_mode}[/bold]"
         )
+        try:
+            asyncio.run(
+                run_backfill_pool(
+                    factory,
+                    settings,
+                    concurrency=concurrency,
+                    once=once,
+                    limit=limit,
+                    days=days,
+                    log_id=log_id,
+                    on_batch=on_batch,
+                    on_status=on_status,
+                    batch_size=batch_size,
+                    dispatch_mode=dispatch_mode,
+                )
+            )
+        except KeyboardInterrupt:
+            pass
+        finally:
+            _console.print("[yellow]Backfill worker stopped.[/yellow]")
 
     @app.command("reap-stale-backfill-claims")
     def reap_stale_backfill_claims(
@@ -198,7 +252,11 @@ def register(app: typer.Typer) -> None:
             ),
         ] = None,
     ) -> None:
-        """Reset in_progress backfill ranges with stale heartbeats to pending."""
+        """Reset stale legacy range claims back to pending.
+
+        This only affects ``ct_log_backfill_ranges`` compatibility state. It
+        is not part of the normal per-log runtime path.
+        """
         from ctpool._cli_reap_impl import run_reap_stale
 
         asyncio.run(

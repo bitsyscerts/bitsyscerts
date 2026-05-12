@@ -44,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url=None,  # Replaced by Scalar below
         redoc_url=None,
     )
+    app.state.settings = resolved
 
     # Domain exception → HTTP status mappings
     app.add_exception_handler(CertificateNotFoundError, _cert_not_found)
@@ -54,7 +55,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(hostname_router)
     app.include_router(certificate_router)
     app.include_router(health_router)
-    app.include_router(stats_router)
+    if resolved.expose_stats_api:
+        app.include_router(stats_router)
     app.include_router(settings_router)
     app.include_router(root_router)
 

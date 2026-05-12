@@ -6,6 +6,11 @@ Accepts dicts produced by :mod:`ctpool.stats_queries` and an optional
 
 This module has no dependency on certsapi — it can be used by the ctpool
 snapshotting worker without importing the API package.
+
+NOTE (201-500 line warning zone): Each builder function is a single-purpose
+dict factory for one stats card.  Splitting across many files would fragment
+closely related output shapes.  Resolve by extracting per-domain builder
+packages when a second consumer is added.
 """
 
 from __future__ import annotations
@@ -20,7 +25,6 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 _TAIL_STALE_THRESHOLD_SECONDS = 300
-_INGESTION_RATE_WINDOWS = [300, 3600]
 
 
 def assemble_stats_payload(
@@ -39,245 +43,182 @@ def assemble_stats_payload(
     per_log_rows: list[dict[str, Any]],
     active_settings: CtInstanceSettings | None,
     now: datetime | None = None,
+    worker_summary: dict[str, Any] | None = None,
+    backfill_state: dict[str, Any] | None = None,
+    maintenance_run: dict[str, Any] | None = None,
+    maintenance_interval_seconds: int = 3600,
+    dispatch_mode: str = "per-log",
+    ct_log_progress: dict[str, int] | None = None,
+    host_capacity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a stats payload dict from pre-fetched query results.
 
     Args:
-        global_counts: Output of :func:`~ctpool.stats_queries.query_global_counts`.
+        global_counts: Output of query_global_counts.
         database_size_bytes: Total database size in bytes.
-        backfill_progress: Output of backfill planned counts query.
-        backfill_status_counts: Output of range status counts query.
-        storage_data: Dict with ``total`` and ``tables`` keys (DB storage query).
-        contention_snapshot: CtDbContentionState ORM row or compatible object.
-        rate_rows: Output of ingestion rate windows query.
-        freshness_row: Output of tail freshness query.
-        outcome_counts: Output of entry outcome counts query.
-        metrics_summary: Output of ingestion metrics summary query.
-        audit_counts: Output of audit health counts query.
-        per_log_rows: Output of per-log stats query.
-        active_settings: Active ``CtInstanceSettings`` row, or ``None``.
-        now: Timestamp to use as "now" (defaults to ``datetime.now(UTC)``).
+        backfill_progress: Output of query_backfill_planned_counts.
+        backfill_status_counts: Output of query_backfill_range_status_counts.
+        storage_data: Dict with ``total`` and ``tables`` keys.
+        contention_snapshot: DbContentionState ORM row or compatible object.
+        rate_rows: Output of query_ingestion_rate_windows.
+        freshness_row: Output of query_tail_freshness.
+        outcome_counts: Output of query_entry_outcome_counts.
+        metrics_summary: Output of query_ingestion_metrics_summary.
+        audit_counts: Per-severity open audit finding counts.
+        per_log_rows: Output of query_log_stats.
+        active_settings: Active CtInstanceSettings row, or None.
+        now: Timestamp to use as "now" (defaults to datetime.now(UTC)).
+        worker_summary: Optional worker summary dict.
+        backfill_state: Optional per-log backfill state dict.
+        maintenance_run: Optional latest maintenance run dict.
+        maintenance_interval_seconds: Seconds between scheduled maintenance runs.
+        dispatch_mode: Active backfill dispatch mode string.
+        ct_log_progress: Output of query_ct_log_progress_totals; fallback
+            for projection when backfill_progress.planned_total is zero.
+        host_capacity: Output of collect_host_capacity, or None.
 
     Returns:
-        A dict that can be validated against ``StatsResponse``.
+        A dict that can be validated against StatsResponse.
     """
     if now is None:
         now = datetime.now(UTC)
 
-    metrics_retention_days = (
-        active_settings.metrics_retention_days if active_settings is not None else 30
+    sections = _collect_sections(
+        global_counts=global_counts,
+        database_size_bytes=database_size_bytes,
+        backfill_progress=backfill_progress,
+        backfill_status_counts=backfill_status_counts,
+        storage_data=storage_data,
+        contention_snapshot=contention_snapshot,
+        rate_rows=rate_rows,
+        freshness_row=freshness_row,
+        outcome_counts=outcome_counts,
+        metrics_summary=metrics_summary,
+        audit_counts=audit_counts,
+        per_log_rows=per_log_rows,
+        active_settings=active_settings,
+        now=now,
+        worker_summary=worker_summary,
+        backfill_state=backfill_state,
+        maintenance_run=maintenance_run,
+        maintenance_interval_seconds=maintenance_interval_seconds,
+        dispatch_mode=dispatch_mode,
+        ct_log_progress=ct_log_progress,
+        host_capacity=host_capacity,
     )
-
-    total_size_bytes = int(storage_data["total"]["total_size_bytes"])
-    tables_list = [
-        {
-            "table_name": row["table_name"],
-            "row_estimate": int(row["row_estimate"]),
-            "size_bytes": int(row["size_bytes"]),
-            "size_pretty": row["size_pretty"],
-        }
-        for row in storage_data["tables"]
-    ]
-
-    contention_dict = _build_contention_dict(contention_snapshot)
-    rate_list = _build_ingestion_rate_list(rate_rows)
-    freshness_dict = _build_freshness_dict(freshness_row)
-    entry_outcomes_dict = _build_entry_outcomes_dict(outcome_counts)
-    backfill_ranges_dict = _build_backfill_ranges_dict(backfill_status_counts)
-    backfill_health_dict = _build_backfill_health_dict(
-        backfill_status_counts["failed"],
-        backfill_status_counts["stale_in_progress"],
-    )
-    storage_profile_dict = _build_storage_profile_dict(active_settings)
-    logs_list = [_build_log_item_dict(row, now) for row in per_log_rows]
-
     return {
         "total_hostnames": global_counts["hostnames"],
         "total_certificates": global_counts["certificates"],
         "total_logs": len(per_log_rows),
-        "storage_profile": storage_profile_dict,
-        "storage": {
-            "total_size_bytes": total_size_bytes,
-            "total_size_pretty": storage_data["total"]["total_size_pretty"],
-            "tables": tables_list,
-        },
-        "storage_projection": _build_projection_dict(
+        **sections,
+    }
+
+
+def _collect_sections(
+    *,
+    global_counts: dict[str, int],
+    database_size_bytes: int,
+    backfill_progress: dict[str, int],
+    backfill_status_counts: dict[str, int],
+    storage_data: dict[str, Any],
+    contention_snapshot: Any,
+    rate_rows: list[dict[str, Any]],
+    freshness_row: dict[str, Any],
+    outcome_counts: dict[str, int],
+    metrics_summary: dict[str, Any],
+    audit_counts: dict[str, int],
+    per_log_rows: list[dict[str, Any]],
+    active_settings: Any,
+    now: datetime,
+    worker_summary: dict[str, Any] | None,
+    backfill_state: dict[str, Any] | None,
+    maintenance_run: dict[str, Any] | None,
+    maintenance_interval_seconds: int,
+    dispatch_mode: str,
+    ct_log_progress: dict[str, int] | None,
+    host_capacity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build every named section dict and return them keyed by section name.
+
+    NOTE (21-50 warning): this coordinator is necessarily dense — it wires
+    ~15 independent sections that share no sub-dependencies among themselves.
+    """
+    from ctpool.stats_maintenance_builder import build_maintenance_dict
+    from ctpool.stats_projection_builder import build_projection_dict
+
+    metrics_retention_days = (
+        active_settings.metrics_retention_days if active_settings is not None else 30
+    )
+    total_size_bytes = int(storage_data["total"]["total_size_bytes"])
+    per_log_primary = dispatch_mode == "per-log"
+
+    if backfill_state is not None:
+        backfill_state = {
+            **backfill_state,
+            "dispatch_mode": dispatch_mode,
+            "is_primary": per_log_primary,
+        }
+
+    backfill_ranges_dict = _build_backfill_ranges_dict(backfill_status_counts)
+    backfill_ranges_dict["dispatch_mode"] = dispatch_mode
+    backfill_ranges_dict["is_primary"] = not per_log_primary
+
+    return {
+        "storage_profile": _build_storage_profile_dict(active_settings),
+        "storage": _build_storage_dict(storage_data, total_size_bytes),
+        "storage_projection": build_projection_dict(
             global_counts=global_counts,
             database_size_bytes=total_size_bytes,
             backfill_progress=backfill_progress,
             active_settings=active_settings,
+            ct_log_progress=ct_log_progress,
         ),
-        "db_contention": contention_dict,
-        "ingestion_rate": {"windows": rate_list},
-        "tail_freshness": freshness_dict,
-        "entry_outcomes": entry_outcomes_dict,
+        "db_contention": _build_contention_dict(contention_snapshot),
+        "ingestion_rate": {"windows": _build_ingestion_rate_list(rate_rows)},
+        "tail_freshness": _build_freshness_dict(freshness_row),
+        "entry_outcomes": _build_entry_outcomes_dict(outcome_counts),
         "backfill_ranges": backfill_ranges_dict,
-        "backfill_health": backfill_health_dict,
+        "backfill_health": _build_backfill_health_dict(
+            backfill_status_counts["failed"],
+            backfill_status_counts["stale_in_progress"],
+        ),
         "metrics_retention": {
             "ingestion_metrics_rows": int(metrics_summary["row_count"]),
             "oldest_ingestion_metric_at": metrics_summary["oldest_at"],
             "metrics_retention_days": metrics_retention_days,
         },
         "audit_health": _build_audit_health_dict(audit_counts),
-        "logs": logs_list,
+        "logs": [_build_log_item_dict(row, now) for row in per_log_rows],
+        "workers": worker_summary,
+        "backfill_state": backfill_state,
+        "ingestion_health": _build_ingestion_health_dict(
+            backfill_state, worker_summary, outcome_counts
+        ),
+        "maintenance": build_maintenance_dict(
+            maintenance_run, maintenance_interval_seconds, active_settings
+        ),
+        "host_capacity": host_capacity,
     }
 
 
-def _build_projection_dict(
-    *,
-    global_counts: dict[str, int],
-    database_size_bytes: int,
-    backfill_progress: dict[str, int],
-    active_settings: Any,
+def _build_storage_dict(
+    storage_data: dict[str, Any],
+    total_size_bytes: int,
 ) -> dict[str, Any]:
-    """Build the storage_projection sub-dict without importing certsapi.
-
-    Uses only ctpool types so the snapshot worker has no API dependency.
-    """
-    try:
-        from ctpool.profile_projection import (
-            compute_profile_aware_projection,
-            compute_projection_confidence,
-        )
-    except ImportError:
-        _logger.warning("profile_projection unavailable; projection omitted")
-        return {"status": "insufficient_backfill_plan", "notes": []}
-
-    planned_total = backfill_progress.get("planned_total", 0)
-    planned_completed = backfill_progress.get("planned_completed", 0)
-    obs_count = global_counts["observations"]
-    remaining = max(planned_total - planned_completed, 0)
-
-    base: dict[str, Any] = {
-        "database_size_bytes": database_size_bytes,
-        "ct_observations_count": obs_count,
-        "certificates_count": global_counts["certificates"],
-        "hostnames_count": global_counts["hostnames"],
-        "certificate_hostnames_count": global_counts["cert_hostnames"],
-        "planned_observations_total": planned_total,
-        "planned_observations_completed": min(planned_completed, planned_total),
-        "planned_observations_remaining": remaining,
-    }
-
-    if planned_total <= 0:
-        return {
-            **base,
-            "status": "insufficient_backfill_plan",
-            "sync_percent_by_observation": None,
-            "bytes_per_observation_current": None,
-            "projected_remaining_database_size_bytes": None,
-            "projected_final_database_size_bytes": None,
-            "storage_percent_of_projected": None,
-            "projection_low_bytes": None,
-            "projection_current_bytes": None,
-            "projection_high_bytes": None,
-            "notes": [
-                "Storage projection unavailable. Backfill ranges are not available yet."
-            ],
-        }
-
-    if obs_count <= 0:
-        return {
-            **base,
-            "status": "insufficient_observations",
-            "sync_percent_by_observation": None,
-            "bytes_per_observation_current": None,
-            "projected_remaining_database_size_bytes": None,
-            "projected_final_database_size_bytes": None,
-            "storage_percent_of_projected": None,
-            "projection_low_bytes": None,
-            "projection_current_bytes": None,
-            "projection_high_bytes": None,
-            "notes": [
-                "Storage projection unavailable. "
-                "Observation counts are not available yet."
-            ],
-        }
-
-    confidence = compute_projection_confidence(obs_count)
-    profile_result = None
-    category_breakdown: dict[str, Any] | None = None
-
-    if active_settings is not None:
-        try:
-            profile_result = compute_profile_aware_projection(
-                profile=active_settings.storage_profile,
-                cert_storage_mode=active_settings.cert_storage_mode,
-                hostname_count=global_counts["hostnames"],
-                cert_count=global_counts["certificates"],
-                obs_count=obs_count,
-                cert_hostname_count=global_counts["cert_hostnames"],
-                backfill_days=active_settings.backfill_days,
-                cert_retention_days=active_settings.cert_retention_days,
-                observation_retention_days=active_settings.observation_retention_days,
-                entry_outcome_retention_days=(
-                    active_settings.entry_outcome_retention_days
-                ),
-            )
-            category_breakdown = {
-                "hostname_index_bytes": profile_result.hostname_index_bytes,
-                "certificate_metadata_bytes": (
-                    profile_result.certificate_metadata_bytes
-                ),
-                "certificate_public_key_bytes": (
-                    profile_result.certificate_public_key_bytes
-                ),
-                "raw_cert_der_bytes": profile_result.raw_cert_der_bytes,
-                "ct_observations_bytes": profile_result.ct_observations_bytes,
-                "entry_outcomes_bytes": profile_result.entry_outcomes_bytes,
-                "cert_hostname_relationships_bytes": (
-                    profile_result.cert_hostname_relationships_bytes
-                ),
-                "metrics_and_ops_bytes": profile_result.metrics_and_ops_bytes,
-                "index_overhead_bytes": profile_result.index_overhead_bytes,
+    """Build the storage sub-dict from db_storage query output."""
+    return {
+        "total_size_bytes": total_size_bytes,
+        "total_size_pretty": storage_data["total"]["total_size_pretty"],
+        "tables": [
+            {
+                "table_name": row["table_name"],
+                "row_estimate": int(row["row_estimate"]),
+                "size_bytes": int(row["size_bytes"]),
+                "size_pretty": row["size_pretty"],
             }
-        except Exception:
-            _logger.warning("Profile projection failed; falling back to linear")
-
-    # Use profile-aware total as the projected retained size
-    if profile_result is not None:
-        projected_final = profile_result.projected_total_bytes
-        projected_remaining = max(projected_final - database_size_bytes, 0)
-        bytes_per_obs = database_size_bytes / obs_count
-        notes = list(profile_result.notes)
-        projection_basis = "profile_aware_category_estimate"
-        profile_name = profile_result.profile
-    else:
-        bytes_per_obs = database_size_bytes / obs_count
-        projected_remaining = int(round(remaining * bytes_per_obs))
-        projected_final = database_size_bytes + projected_remaining
-        notes = [
-            "Projection is based on current bytes per CT observation.",
-        ]
-        projection_basis = "linear_per_observation"
-        profile_name = None
-
-    sync_pct = (
-        min(planned_completed, planned_total) / planned_total
-        if planned_total > 0
-        else None
-    )
-    storage_pct = database_size_bytes / projected_final if projected_final > 0 else None
-    projection: dict[str, Any] = {
-        **base,
-        "status": "available",
-        "confidence": confidence,
-        "projection_basis": projection_basis,
-        "sync_percent_by_observation": sync_pct,
-        "bytes_per_observation_current": bytes_per_obs,
-        "projected_remaining_database_size_bytes": projected_remaining,
-        "projected_final_database_size_bytes": projected_final,
-        "storage_percent_of_projected": storage_pct,
-        "projection_low_bytes": int(projected_final * 0.75),
-        "projection_current_bytes": projected_final,
-        "projection_high_bytes": int(projected_final * 1.5),
-        "notes": notes,
+            for row in storage_data["tables"]
+        ],
     }
-    if profile_name is not None:
-        projection["profile"] = profile_name
-    if category_breakdown is not None:
-        projection["category_breakdown"] = category_breakdown
-    return projection
 
 
 def _build_contention_dict(contention: Any) -> dict[str, Any]:
@@ -304,12 +245,32 @@ def _build_ingestion_rate_list(
     for row in rate_rows:
         secs = int(row["window_seconds"])
         minutes = secs / 60.0
+        obs_pm = float(row["entries_fetched"]) / minutes
+        certs_pm = float(row["entries_parsed"]) / minutes
+        hosts_pm = float(row["hostnames_upserted"]) / minutes
         windows.append(
             {
                 "window_seconds": secs,
                 "observations_per_sec": float(row["entries_fetched"]) / secs,
-                "certs_per_min": float(row["certs_upserted"]) / minutes,
-                "hostnames_per_min": float(row["hostnames_upserted"]) / minutes,
+                "certs_per_min": certs_pm,
+                "hostnames_per_min": hosts_pm,
+                "observations_per_min": obs_pm,
+                "certificates_parsed_per_min": certs_pm,
+                "new_unique_certificates_per_min": (
+                    float(row["new_unique_certificates"]) / minutes
+                ),
+                "duplicate_certificates_per_min": (
+                    float(row["duplicate_certificates"]) / minutes
+                ),
+                "hostnames_observed_per_min": hosts_pm,
+                "new_unique_hostnames_per_min": (
+                    float(row["new_unique_hostnames"]) / minutes
+                ),
+                "known_hostnames_per_min": float(row["known_hostnames"]) / minutes,
+                "retryable_errors_per_min": (float(row["retryable_errors"]) / minutes),
+                "terminal_entry_errors_per_min": (
+                    float(row["terminal_entry_errors"]) / minutes
+                ),
             }
         )
     return windows
@@ -375,9 +336,7 @@ def _build_backfill_health_dict(failed: int, stale: int) -> dict[str, Any]:
     }
 
 
-def _build_storage_profile_dict(
-    active_settings: Any,
-) -> dict[str, Any] | None:
+def _build_storage_profile_dict(active_settings: Any) -> dict[str, Any] | None:
     """Build storage_profile sub-dict from active settings, or None."""
     if active_settings is None:
         return None
@@ -409,19 +368,58 @@ def _build_audit_health_dict(counts: dict[str, int]) -> dict[str, Any]:
     }
 
 
-def _build_log_item_dict(
-    row: dict[str, Any],
-    now: datetime,
+def _build_ingestion_health_dict(
+    backfill_state: dict[str, Any] | None,
+    worker_summary: dict[str, Any] | list[Any] | None,
+    outcome_counts: dict[str, int] | None,
 ) -> dict[str, Any]:
+    """Build the ingestion_health summary card dict.
+
+    NOTE (21-50 warning): many independent counters are gathered from three
+    different input dicts; extraction would only produce trivial helpers.
+    """
+    retrying = rate_limited = paused = error_logs = 0
+    total_retryable = total_terminal = 0
+    if backfill_state is not None:
+        retrying = int(backfill_state.get("retrying") or 0)
+        rate_limited = int(backfill_state.get("rate_limited") or 0)
+        paused = int(backfill_state.get("paused") or 0)
+        error_logs = int(backfill_state.get("error") or 0)
+        for item in backfill_state.get("items") or []:
+            total_retryable += int(item.get("retryable_error_count") or 0)
+            total_terminal += int(item.get("terminal_error_count") or 0)
+
+    stale_workers = (
+        int(worker_summary.get("stale") or 0) if isinstance(worker_summary, dict) else 0
+    )
+
+    recent_terminal = 0
+    if outcome_counts is not None:
+        for key in ("parse_error", "unsupported_entry_type", "write_error"):
+            recent_terminal += int(outcome_counts.get(key) or 0)
+
+    return {
+        "retrying_logs": retrying,
+        "rate_limited_logs": rate_limited,
+        "paused_logs": paused,
+        "error_logs": error_logs,
+        "stale_workers": stale_workers,
+        "retryable_error_total": total_retryable,
+        "terminal_error_total": total_terminal,
+        "recent_terminal_outcomes": recent_terminal,
+        "status": "attention_needed" if (paused > 0 or error_logs > 0) else "ok",
+    }
+
+
+def _build_log_item_dict(row: dict[str, Any], now: datetime) -> dict[str, Any]:
     """Convert a per-log row to the LogStatsItem dict format."""
     total: int = int(row.get("total_ranges") or 0)
     complete: int = int(row.get("complete_ranges") or 0)
     pct = (complete / total * 100.0) if total > 0 else None
     last_sync = row.get("last_tail_sync")
     lag: int | None = None
-    if last_sync is not None:
-        if hasattr(last_sync, "replace"):
-            lag = max(0, int((now - last_sync.replace(tzinfo=UTC)).total_seconds()))
+    if last_sync is not None and hasattr(last_sync, "replace"):
+        lag = max(0, int((now - last_sync.replace(tzinfo=UTC)).total_seconds()))
     return {
         "log_id": str(row["id"]),
         "description": row["description"],

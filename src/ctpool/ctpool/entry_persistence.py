@@ -15,6 +15,7 @@ from collections.abc import Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.outcome_constants import OUTCOME_STORED
 from ctpool.outcome_writer import upsert_entry_outcome
 from ctpool.pipeline_schemas import NormalizedEntry
@@ -30,7 +31,7 @@ async def persist_entry_with_retry(
     base_backoff_seconds: float,
     max_backoff_seconds: float,
     on_retry: Callable[[int, BaseException, float], None] | None = None,
-) -> None:
+) -> EntryWriteMetrics:
     """Write one normalized entry and record outcome=stored atomically.
 
     Both the certificate/hostname/observation data and the terminal outcome
@@ -46,9 +47,9 @@ async def persist_entry_with_retry(
         on_retry: Optional retry callback for logging.
     """
 
-    async def _write_once() -> None:
+    async def _write_once() -> EntryWriteMetrics:
         async with session.begin():
-            await write_normalized_entry(session, entry)
+            result = await write_normalized_entry(session, entry)
             await upsert_entry_outcome(
                 session,
                 entry.log_source_id,
@@ -58,8 +59,9 @@ async def persist_entry_with_retry(
                     entry.parsed_certificate.fingerprint_sha256
                 ),
             )
+            return result
 
-    await run_with_db_retry(
+    return await run_with_db_retry(
         _write_once,
         max_retries=max_retries,
         base_backoff_seconds=base_backoff_seconds,

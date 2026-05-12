@@ -56,6 +56,8 @@ const STATS_FIXTURE = {
     effective_batch_size_cap: null,
     updated_at: "2025-01-01T00:00:00Z",
     notes: ["Shared DB contention control is active and not throttling."],
+    total_retryable_errors: 0,
+    retryable_errors_per_min_5min: null,
   },
   ingestion_rate: { windows: [] },
   tail_freshness: {
@@ -69,6 +71,53 @@ const STATS_FIXTURE = {
     parse_error: 0,
     unsupported_entry_type: 0,
     skipped_by_policy: 0,
+  },
+  workers: {
+    active_total: 1,
+    stale_total: 0,
+    tail_active: 1,
+    backfill_active: 0,
+    stats_active: 0,
+    maintenance_active: 0,
+    unknown_active: 0,
+    items: [
+      {
+        worker_id: "host:1234",
+        worker_kind: "tail",
+        log_source_id: "log-1",
+        log_name: "Test Log",
+        log_url: null,
+        log_operator: "Test Operator",
+        direction: "forward",
+        status: "processing",
+        is_stale: false,
+        last_heartbeat_at: "2025-01-01T00:00:00Z",
+        last_heartbeat_age_seconds: 5,
+        started_at: "2025-01-01T00:00:00Z",
+        current_index: 100,
+        checkpoint_index: null,
+        batch_start_index: null,
+        batch_end_index: null,
+        processed_entries: 10,
+        stored_certificates: 8,
+        duplicate_certificates: 2,
+        observed_hostnames: 4,
+        new_hostnames: 1,
+        parse_errors: 0,
+        retryable_errors: 0,
+        terminal_errors: 0,
+        observations_per_min: 60,
+        new_unique_certificates_per_min: 12,
+        duplicate_certificates_per_min: 3,
+        new_unique_hostnames_per_min: 2,
+        known_hostnames_per_min: 2,
+        retry_count: null,
+        next_retry_at: null,
+        rate_limited_until: null,
+        last_error_type: null,
+        last_error_message: null,
+      },
+    ],
   },
   backfill_ranges: {
     pending: 0,
@@ -124,12 +173,12 @@ describe("DashboardPage with data", () => {
     } as unknown as ReturnType<typeof useStats>);
   });
 
-  it("renders operational panel headings", () => {
+  it("renders summary card headings from DashboardOverview", () => {
     renderPage();
-    expect(screen.getByText("Storage Projection")).toBeInTheDocument();
-    expect(screen.getByText("DB Contention Control")).toBeInTheDocument();
-    expect(screen.getByText("Database Storage")).toBeInTheDocument();
-    expect(screen.getAllByText("CT Logs").length).toBeGreaterThan(0);
+    expect(screen.getByText("Index Summary")).toBeInTheDocument();
+    expect(screen.getByText("Indexer Activity")).toBeInTheDocument();
+    expect(screen.getByText("Storage")).toBeInTheDocument();
+    expect(screen.getByText("Advanced diagnostics")).toBeInTheDocument();
   });
 
   it("renders a manual Refresh button", () => {
@@ -145,17 +194,18 @@ describe("DashboardPage with data", () => {
     expect(screen.getByText(/Updated /i)).toBeInTheDocument();
   });
 
-  it("does not render StorageProfileCard when profile is null", () => {
+  it("does not render profile badge when storage_profile is null", () => {
     renderPage();
-    expect(screen.queryByText("Storage Profile")).toBeNull();
+    // ProfileBadge is only rendered when a storage_profile is present
+    expect(screen.queryByText("current-osint")).toBeNull();
   });
 
-  it("renders StorageProfileCard when profile is present", () => {
+  it("renders profile badge in StorageSummary when profile is present", () => {
     mockUseStats.mockReturnValue({
       data: {
         ...STATS_FIXTURE,
         storage_profile: {
-          storage_profile: "standard",
+          storage_profile: "current-osint",
           cert_storage_mode: "fingerprint_only",
           hostname_retention_mode: "rolling",
           backfill_days: 90,
@@ -173,7 +223,31 @@ describe("DashboardPage with data", () => {
       refetch: vi.fn(),
     } as unknown as ReturnType<typeof useStats>);
     renderPage();
-    expect(screen.getByText("Storage Profile")).toBeInTheDocument();
+    expect(screen.getByText("current-osint")).toBeInTheDocument();
+  });
+
+  it("renders per-log diagnostics accordion when per-log mode is primary", () => {
+    mockUseStats.mockReturnValue({
+      data: {
+        ...STATS_FIXTURE,
+        backfill_ranges: {
+          pending: 0,
+          in_progress: 0,
+          stale_in_progress: 0,
+          completed: 0,
+          failed: 5,
+          dispatch_mode: "per-log",
+          is_primary: true,
+        },
+        audit_health: null,
+      },
+      isLoading: false,
+      isError: false,
+      dataUpdatedAt: Date.now(),
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useStats>);
+    renderPage();
+    expect(screen.getByText("Advanced diagnostics")).toBeInTheDocument();
   });
 });
 

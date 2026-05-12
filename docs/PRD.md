@@ -118,12 +118,15 @@ glance without querying the database directly.
 **Dashboard surfaces:**
 
 - Total hostname and certificate counts
+- Worker activity (per-worker status, assigned log, heartbeat)
+- Per-log backfill state (status, checkpoint, window, progress) — primary
+  backfill health source under default per-log dispatch
 - Per-CT-log tail position and ingestion rate
-- Backfill job queue (pending / in-progress / completed / failed)
 - Database contention metrics (deadlock rate, adaptive batch sizing)
 - Storage usage by table
 - Active storage profile and retention windows
-- Audit health (data integrity gap count)
+- Legacy range status and audit findings — surfaced under an
+  Advanced / Legacy section; not primary operator workflow
 
 ---
 
@@ -350,6 +353,7 @@ source**, not a guaranteed complete or real-time authority.
 | **SPKI SHA-256** | The SHA-256 hash of the Subject Public Key Info structure |
 | **Registrable domain** | The effective TLD+1 component of a hostname (e.g., `example.com` from `api.example.com`) |
 | **Tail cursor** | The current CT log tree index up to which entries have been fetched by the tail worker |
-| **Backfill range** | A contiguous slice of CT log entry indices assigned to a backfill worker job |
+| **Per-log backfill state** | The current dispatch model: each CT log has one row in `ct_log_backfill_state` tracking checkpoint, window, claim, and status. Default since Sprint 1B. |
+| **Backfill range** | Legacy concept: a contiguous slice of CT log entry indices stored in `ct_log_backfill_ranges`. Retained for compatibility with the legacy dispatcher and audit/repair workflows; not primary in default per-log dispatch. |
 | **Storage profile** | A named configuration (`current-osint`, `research`, `archive`) that controls retention windows and data richness |
 | **OSINT** | Open Source Intelligence — intelligence gathered from publicly available sources |

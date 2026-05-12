@@ -19,6 +19,12 @@ from ctpool.instance_settings import (
 from ctpool.models.instance_settings import CtInstanceSettings
 
 
+def _make_session() -> MagicMock:
+    session = MagicMock()
+    session.execute = AsyncMock()
+    return session
+
+
 def _make_valid_payload(**overrides: object) -> dict:
     base: dict = {
         "storage_profile": "lite",
@@ -37,7 +43,7 @@ def _make_valid_payload(**overrides: object) -> dict:
 @pytest.mark.asyncio
 async def test_get_active_settings_returns_none_when_empty() -> None:
     """get_active_settings returns None when the table is empty."""
-    session = AsyncMock()
+    session = _make_session()
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = None
     session.execute.return_value = result_mock
@@ -50,7 +56,7 @@ async def test_get_active_settings_returns_none_when_empty() -> None:
 async def test_get_active_settings_returns_row() -> None:
     """get_active_settings returns the ORM row when one exists."""
     row = MagicMock(spec=CtInstanceSettings)
-    session = AsyncMock()
+    session = _make_session()
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = row
     session.execute.return_value = result_mock
@@ -63,7 +69,7 @@ async def test_get_active_settings_returns_row() -> None:
 async def test_bootstrap_skips_when_row_exists() -> None:
     """bootstrap_settings_from_env returns existing row without inserting."""
     existing = MagicMock(spec=CtInstanceSettings)
-    session = AsyncMock()
+    session = _make_session()
     result_mock = MagicMock()
     result_mock.scalar_one_or_none.return_value = existing
     session.execute.return_value = result_mock
@@ -89,7 +95,7 @@ async def test_bootstrap_seeds_when_table_empty() -> None:
         mock.scalar_one_or_none.return_value = None
         return mock
 
-    session = AsyncMock()
+    session = _make_session()
     session.execute.side_effect = fake_execute
 
     config = BootstrapConfig(profile="lite")
@@ -123,7 +129,7 @@ def test_validate_payload_rejects_invalid_mode() -> None:
 @pytest.mark.asyncio
 async def test_update_settings_raises_on_invalid_profile() -> None:
     """update_settings propagates ValueError for invalid profile."""
-    session = AsyncMock()
+    session = _make_session()
     with pytest.raises(ValueError, match="Invalid storage_profile"):
         await update_settings(
             session,
@@ -134,7 +140,7 @@ async def test_update_settings_raises_on_invalid_profile() -> None:
 @pytest.mark.asyncio
 async def test_update_settings_creates_row() -> None:
     """update_settings creates and adds a new settings row."""
-    session = AsyncMock()
+    session = _make_session()
 
     with patch(
         "ctpool.instance_settings.record_profile_from_dict", new_callable=AsyncMock

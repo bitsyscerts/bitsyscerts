@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy.exc import DBAPIError
 
 from ctpool.entry_persistence import persist_entry_with_retry
+from ctpool.entry_write_result import EntryWriteMetrics
 
 
 class _DeadlockError(Exception):
@@ -40,11 +41,11 @@ async def test_persist_entry_with_retry_uses_short_transaction() -> None:
     with (
         patch(
             "ctpool.entry_persistence.write_normalized_entry",
-            AsyncMock(),
+            AsyncMock(return_value=EntryWriteMetrics()),
         ) as write_mock,
         patch("ctpool.entry_persistence.upsert_entry_outcome", AsyncMock()),
     ):
-        await persist_entry_with_retry(
+        result = await persist_entry_with_retry(
             session,
             entry,
             max_retries=3,
@@ -54,6 +55,7 @@ async def test_persist_entry_with_retry_uses_short_transaction() -> None:
 
     session.begin.assert_called_once()
     write_mock.assert_awaited_once_with(session, entry)
+    assert result == EntryWriteMetrics()
 
 
 async def test_persist_entry_with_retry_retries_with_new_transaction() -> None:
@@ -61,7 +63,7 @@ async def test_persist_entry_with_retry_retries_with_new_transaction() -> None:
 
     session = _session_with_begin()
     entry = MagicMock()
-    write_mock = AsyncMock(side_effect=[_deadlock_error(), None])
+    write_mock = AsyncMock(side_effect=[_deadlock_error(), EntryWriteMetrics()])
 
     with (
         patch(
@@ -71,7 +73,7 @@ async def test_persist_entry_with_retry_retries_with_new_transaction() -> None:
         patch("ctpool.entry_persistence.upsert_entry_outcome", AsyncMock()),
         patch("ctpool.retry.asyncio.sleep", AsyncMock()),
     ):
-        await persist_entry_with_retry(
+        result = await persist_entry_with_retry(
             session,
             entry,
             max_retries=3,
@@ -81,3 +83,4 @@ async def test_persist_entry_with_retry_retries_with_new_transaction() -> None:
 
     assert session.begin.call_count == 2
     assert write_mock.await_count == 2
+    assert result == EntryWriteMetrics()

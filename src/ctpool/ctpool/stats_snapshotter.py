@@ -11,17 +11,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import time
+from datetime import datetime
+from os import getpid
 from typing import Any
 
+from rich.console import Console
+
+from ctpool.backfill_state_queries import query_backfill_state_summary
 from ctpool.config import Settings
 from ctpool.db import create_engine, create_session_factory
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
+from ctpool.host_capacity import collect_host_capacity
 from ctpool.stats_assembler import assemble_stats_payload
 from ctpool.stats_queries import (
     query_active_instance_settings,
     query_backfill_planned_counts,
     query_backfill_range_status_counts,
+    query_ct_log_progress_totals,
     query_database_size_bytes,
     query_db_storage,
     query_entry_outcome_counts,
@@ -32,12 +40,25 @@ from ctpool.stats_queries import (
     query_tail_freshness,
 )
 from ctpool.stats_snapshot_repository import StatsSnapshotRepository
+from ctpool.worker_queries import query_worker_summary
+from ctpool.worker_reaper import reap_stale_worker_rows
+from ctpool.worker_registry import (
+    WorkerCounters,
+    heartbeat_worker,
+    mark_worker_stopped,
+    register_worker,
+)
 
 _logger = logging.getLogger(__name__)
 
 _INGESTION_RATE_WINDOWS = [300, 3600]
 _TAIL_STALE_THRESHOLD_SECONDS = 300
 _SNAPSHOT_TYPE = "full"
+
+
+def _worker_id() -> str:
+    """Return a stable identity string for the snapshot singleton worker."""
+    return f"{socket.gethostname()}:{getpid()}"
 
 
 async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
@@ -76,6 +97,18 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
             audit_counts = await _query_audit_counts(session)
             per_log_rows = await query_log_stats(session)
             active_settings = await query_active_instance_settings(session)
+            worker_summary = await query_worker_summary(
+                session, stale_seconds=settings.ct_worker_stale_seconds
+            )
+            backfill_state = await query_backfill_state_summary(
+                session, stale_seconds=settings.ct_worker_stale_seconds
+            )
+            from ctpool.maintenance_queries import query_latest_maintenance_run
+
+            maintenance_run = await query_latest_maintenance_run(session)
+            ct_log_progress = await query_ct_log_progress_totals(session)
+
+        host_capacity = collect_host_capacity()
 
         payload = assemble_stats_payload(
             global_counts=global_counts,
@@ -91,6 +124,13 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
             audit_counts=audit_counts,
             per_log_rows=per_log_rows,
             active_settings=active_settings,
+            worker_summary=worker_summary,
+            backfill_state=backfill_state,
+            maintenance_run=maintenance_run,
+            maintenance_interval_seconds=settings.ct_maintenance_interval_seconds,
+            dispatch_mode=settings.ct_backfill_dispatch_mode,
+            ct_log_progress=ct_log_progress,
+            host_capacity=host_capacity,
         )
 
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -120,7 +160,10 @@ async def take_snapshot_once(settings: Settings) -> dict[str, Any]:
         await engine.dispose()
 
 
-async def run_snapshot_loop(settings: Settings) -> None:
+async def run_snapshot_loop(
+    settings: Settings,
+    console: Console | None = None,
+) -> None:
     """Continuously take stats snapshots at the configured interval.
 
     Runs indefinitely.  Each cycle takes a snapshot then sleeps for
@@ -129,19 +172,92 @@ async def run_snapshot_loop(settings: Settings) -> None:
 
     Args:
         settings: Active application settings.
+        console:  Optional Rich console for operator-visible status lines.
     """
     interval = settings.ct_stats_heavy_refresh_seconds
+    engine = create_engine(settings)
+    factory = create_session_factory(engine)
+    async with factory() as session:
+        async with session.begin():
+            registry_row = await register_worker(
+                session,
+                worker_id=_worker_id(),
+                worker_kind="stats-snapshotter",
+            )
+    registry_id = registry_row.id
+
     _logger.info(
         "Stats snapshot loop starting (interval=%d s, type=%s)",
         interval,
         _SNAPSHOT_TYPE,
     )
-    while True:
-        try:
-            await take_snapshot_once(settings)
-        except Exception:
-            _logger.exception("Stats snapshot failed; will retry after interval")
-        await asyncio.sleep(interval)
+    if console:
+        console.print(
+            f"[cyan]Stats snapshot loop started.[/cyan] "
+            f"Refreshing every [bold]{interval}[/bold] s. "
+            f"Press [bold]Ctrl+C[/bold] to stop."
+        )
+    try:
+        while True:
+            try:
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="processing",
+                            direction="snapshot",
+                            counters=WorkerCounters(),
+                        )
+                        await reap_stale_worker_rows(
+                            session,
+                            stale_seconds=settings.ct_worker_stale_seconds,
+                        )
+                payload = await take_snapshot_once(settings)
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="idle",
+                            direction="snapshot",
+                            counters=WorkerCounters(),
+                        )
+                if console:
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    db_size = payload.get("storage", {}).get("total_size_pretty", "?")
+                    console.print(
+                        f"[green]  ✓[/green] [{ts}] Snapshot captured "
+                        f"(db size: [bold]{db_size}[/bold]) — "
+                        f"sleeping {interval} s…"
+                    )
+            except Exception as exc:
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="error",
+                            direction="snapshot",
+                            counters=WorkerCounters(
+                                last_error_type=exc.__class__.__name__,
+                                last_error_message=str(exc),
+                            ),
+                        )
+                _logger.exception("Stats snapshot failed; will retry after interval")
+                if console:
+                    console.print(
+                        f"[yellow]  ⚠ Snapshot failed: {exc} — "
+                        f"retrying in {interval} s[/yellow]"
+                    )
+            await asyncio.sleep(interval)
+    finally:
+        async with factory() as session:
+            async with session.begin():
+                await mark_worker_stopped(session, row_id=registry_id)
+        await engine.dispose()
+        if console:
+            console.print("[yellow]Stats snapshot loop stopped.[/yellow]")
 
 
 def _serialise_payload(payload: dict[str, Any]) -> dict[str, Any]:

@@ -23,19 +23,19 @@ interface StatCardProps {
 
 function StatCard({ icon, label, value }: StatCardProps) {
   return (
-    <Paper p="md" radius="md" withBorder>
-      <Group gap="sm" wrap="nowrap">
-        <ThemeIcon variant="light" size="lg" radius="md">
-          {icon}
-        </ThemeIcon>
-        <Stack gap={2}>
-          <Text size="xl" fw={700} lh={1}>
-            {formatNumber(value)}
-          </Text>
-          <Text size="xs" c="dimmed">
+    <Paper p="sm" radius="md" withBorder>
+      <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
+        <Stack gap={1}>
+          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
             {label}
           </Text>
+          <Text size="lg" fw={700} lh={1.1}>
+            {formatNumber(value)}
+          </Text>
         </Stack>
+        <ThemeIcon variant="light" size="md" radius="xl">
+          {icon}
+        </ThemeIcon>
       </Group>
     </Paper>
   );
@@ -50,7 +50,7 @@ export function StatsSummary({
   totalLogs,
 }: StatsSummaryProps) {
   return (
-    <SimpleGrid cols={1} spacing="md">
+    <SimpleGrid cols={{ base: 1, xs: 3 }} spacing="sm">
       <StatCard
         icon={<IconServer size={18} />}
         label="Hostnames"

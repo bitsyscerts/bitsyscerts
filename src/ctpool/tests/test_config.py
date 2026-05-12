@@ -62,6 +62,20 @@ def test_invalid_database_url_raises_validation_error() -> None:
         Settings.model_validate({"database_url": "sqlite:///local.db"})
 
 
+def test_ignores_unrelated_api_env_vars(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Shared environments may include API-only flags that ctpool must ignore."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@localhost:5432/db")
+    monkeypatch.setenv("BITSYSCERTS_EXPOSE_STATS_API", "true")
+
+    settings = Settings()
+
+    assert str(settings.database_url).startswith("postgresql")
+
+
 def test_get_settings_returns_singleton() -> None:
     """Two calls to get_settings() return the identical object."""
     # get_settings() requires DATABASE_URL in the environment; it will only

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import (
 
 from ctpool.config import Settings
 from ctpool.models import Base, CtLogSource
+from ctpool.test_database_url import TEST_DATABASE_URL_ENV, resolve_test_database_url
 
 _DEFAULT_TEST_DB = "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
 
@@ -27,10 +29,15 @@ _DEFAULT_TEST_DB = "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_tes
 def test_settings() -> Settings:
     """Settings pointing at the integration-test database.
 
-    Reads DATABASE_URL from the environment so CI can supply its own
-    credentials without hard-coding them here.
+    Prefers ``BITSYSCERTS_TEST_DATABASE_URL`` when present. Otherwise derives a
+    sibling ``*_test`` database from ``DATABASE_URL`` so test teardown never
+    targets the live development database by accident.
     """
-    db_url = os.environ.get("DATABASE_URL", _DEFAULT_TEST_DB)
+    db_url = resolve_test_database_url(
+        source_database_url=os.environ.get("DATABASE_URL"),
+        explicit_test_database_url=os.environ.get(TEST_DATABASE_URL_ENV),
+        fallback_database_url=_DEFAULT_TEST_DB,
+    )
     return Settings.model_validate({"database_url": db_url})
 
 
@@ -38,9 +45,11 @@ def test_settings() -> Settings:
 async def async_engine(
     test_settings: Settings,
 ) -> AsyncGenerator[AsyncEngine, None]:
-    """Async SQLAlchemy engine connected to ctpool_test."""
+    """Async SQLAlchemy engine connected to a freshly recreated test schema."""
     engine = create_async_engine(str(test_settings.database_url), echo=False)
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -9,6 +10,7 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 from ctpool.models import Base, Certificate, CtLogSource, Hostname
+from ctpool.test_database_url import TEST_DATABASE_URL_ENV, resolve_test_database_url
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -18,7 +20,6 @@ from sqlalchemy.ext.asyncio import (
 )
 
 import certsapi.database as database_module
-import certsapi.root.router as root_router_module
 from certsapi.app import create_app
 from certsapi.config import Settings
 
@@ -27,7 +28,10 @@ _TEST_DB_URL = "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
 # Credential-free Settings used by all unit tests that call create_app().
 # PostgresDsn requires a valid URL structure but no password is needed.
 _UNIT_TEST_SETTINGS = Settings.model_validate(
-    {"database_url": "postgresql+psycopg://localhost/test"}
+    {
+        "database_url": "postgresql+psycopg://localhost/test",
+        "expose_stats_api": True,
+    }
 )
 
 
@@ -35,18 +39,24 @@ _UNIT_TEST_SETTINGS = Settings.model_validate(
 def _patch_settings_imports(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch direct get_settings imports used by request-path dependencies.
 
-    Some runtime paths (DB dependency and root index route) call module-level
-    imports of ``get_settings`` directly, bypassing create_app(...). This keeps
-    unit tests independent from DATABASE_URL in the environment.
+    The DB dependency calls a module-level import of ``get_settings`` directly,
+    bypassing create_app(...). This keeps unit tests independent from
+    DATABASE_URL in the environment.
     """
     monkeypatch.setattr(database_module, "get_settings", lambda: _UNIT_TEST_SETTINGS)
-    monkeypatch.setattr(root_router_module, "get_settings", lambda: _UNIT_TEST_SETTINGS)
 
 
 @pytest_asyncio.fixture(scope="session")
 async def async_engine() -> AsyncGenerator[AsyncEngine, None]:
     """Async engine connected to ctpool_test; creates/drops schema once per session."""
-    engine = create_async_engine(_TEST_DB_URL, echo=False)
+    engine = create_async_engine(
+        resolve_test_database_url(
+            source_database_url=os.environ.get("DATABASE_URL"),
+            explicit_test_database_url=os.environ.get(TEST_DATABASE_URL_ENV),
+            fallback_database_url=_TEST_DB_URL,
+        ),
+        echo=False,
+    )
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine

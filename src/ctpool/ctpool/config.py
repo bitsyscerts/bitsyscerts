@@ -7,6 +7,7 @@ All configuration values are validated at import time. Missing required fields
 from __future__ import annotations
 
 import functools
+import os
 
 from pydantic import Field, PostgresDsn, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
     # Database — required; no default
@@ -73,6 +75,60 @@ class Settings(BaseSettings):
     """
     ct_backfill_heartbeat_seconds: int = 60
     """Interval in seconds at which active backfill workers refresh heartbeat_at."""
+
+    # Worker runtime / ownership
+    ct_worker_heartbeat_seconds: int = 15
+    """Interval (s) at which workers refresh their ct_worker_runtime heartbeat."""
+    ct_worker_stale_seconds: int = 300
+    """Seconds without a heartbeat after which a worker claim is considered stale."""
+    ct_worker_assignment_refresh_seconds: int = 30
+    """Seconds between log assignment refresh checks in the worker loop."""
+
+    # Worker pool concurrency
+    ct_tail_concurrency: int = Field(
+        default_factory=lambda: os.cpu_count() or 4,
+        ge=0,
+    )
+    """Number of concurrent tail worker tasks launched by the pool.
+
+    Defaults to ``os.cpu_count()`` (logical CPUs on the host), falling back
+    to 4 when that cannot be determined.  CT log ingestion is I/O and network
+    bound, so matching CPU count is a reasonable default.  Set to ``0`` to
+    disable the tail pool entirely (useful when debugging or when tail is
+    handled externally).  Override via ``CT_TAIL_CONCURRENCY=<n>``.
+    """
+    ct_backfill_concurrency: int = Field(
+        default_factory=lambda: os.cpu_count() or 4,
+        ge=0,
+    )
+    """Number of concurrent backfill worker tasks launched by the pool.
+
+    Same default logic as ``ct_tail_concurrency``.  Once all CT logs have
+    finished their initial backfill window the pool will find no eligible
+    logs and idle efficiently.  Set to ``0`` to disable backfill entirely
+    once historical ingestion is complete.  Override via
+    ``CT_BACKFILL_CONCURRENCY=<n>``.
+    """
+
+    # Backfill dispatch model
+    ct_backfill_dispatch_mode: str = "per-log"
+    """Backfill dispatch model.
+
+    ``per-log`` (default): one worker claims one CT log via
+    ``ct_log_backfill_state`` and processes its window using a per-log
+    durable checkpoint. The legacy ``ct_log_backfill_ranges`` table is
+    not used by the normal runtime.
+
+    ``legacy-ranges``: legacy compatibility mode. Workers claim individual
+    ranges from ``ct_log_backfill_ranges`` and mark them complete or failed.
+    Reserved for backfill-range repair, audit, and migration scenarios.
+    """
+
+    # Per-log retry budget (Sprint 3 — self-healing ingestion)
+    ct_batch_retry_max_attempts: int = 10
+    """Maximum consecutive retryable batch failures before pausing the log."""
+    ct_batch_retry_max_seconds: int = 3600
+    """Maximum age (seconds) of the first failure before pausing the log."""
 
     # Disk safety thresholds (GiB)
     ct_min_free_disk_gb: int = 50
@@ -152,10 +208,19 @@ class Settings(BaseSettings):
     # Stats snapshot cadence
     ct_stats_live_refresh_seconds: int = 15
     """Interval in seconds for refreshing lightweight live stats (tail, rate)."""
-    ct_stats_heavy_refresh_seconds: int = 300
+    ct_stats_heavy_refresh_seconds: int = 30
     """Interval in seconds for refreshing heavy stats (projection, table sizes)."""
     ct_stats_snapshot_retention_hours: int = 24
     """Hours to retain old snapshot rows before pruning."""
+
+    # Sprint 5: how old a stats snapshot may be before consumers should
+    # treat it as stale.  Mirrors the API ``stats_stale_seconds`` setting
+    # so the CLI ``ctpool status`` command and the API agree on what
+    # "stale" means.  Must be greater than ``ct_stats_heavy_refresh_seconds``
+    # (default 30 s); the default of 90 s tolerates two full missed cycles
+    # with a 30 s margin before the warning fires.
+    stats_stale_seconds: int = 90
+    """Seconds beyond which a stats snapshot is considered stale."""
 
     # Maintenance service cadences
     ct_maintenance_interval_seconds: int = 3600
@@ -164,6 +229,14 @@ class Settings(BaseSettings):
     """Seconds between automatic audit-gap checks in the maintenance loop."""
     ct_prune_interval_seconds: int = 3600
     """Seconds between automatic prune runs in the maintenance loop."""
+
+    # Scheduled audit opt-in (Sprint 4B). Deep audit-gap scans are expensive
+    # and legacy-range-oriented; they are disabled by default in the normal
+    # maintenance loop and must be explicitly enabled by the operator.
+    bitsyscerts_enable_scheduled_audit: bool = False
+    """If True, the maintenance loop runs check-audit-gaps on its interval."""
+    bitsyscerts_audit_interval_seconds: int = 21600
+    """Seconds between scheduled audit runs when explicitly enabled."""
 
     # Logging
     log_level: str = "INFO"

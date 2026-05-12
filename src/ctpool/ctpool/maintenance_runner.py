@@ -1,48 +1,71 @@
-"""Maintenance loop: periodic pruning and audit-gap checks.
+"""Maintenance loop: periodic profile-aware pruning.
 
 Responsibilities:
     - ``run_maintenance_once`` — runs one maintenance cycle.
     - ``run_maintenance_loop`` — runs cycles on the configured interval.
 
-A maintenance cycle runs:
-    1. Prune ingestion_metrics (``ct_metrics_prune_interval_seconds`` gate).
-    2. Prune observations (``ct_prune_interval_seconds`` gate).
-    3. Prune entry outcomes (``ct_prune_interval_seconds`` gate).
-    4. Audit-gap check (``ct_audit_interval_seconds`` gate).
+By default the cycle is intentionally lightweight:
+
+    1. ``prune-for-storage-profile`` (always).
+
+Deep ``check-audit-gaps`` scans are **opt-in** via
+``BITSYSCERTS_ENABLE_SCHEDULED_AUDIT=true`` and run on their own interval
+``BITSYSCERTS_AUDIT_INTERVAL_SECONDS``.  A failure in scheduled audit must
+not block pruning.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import time
+from os import getpid
 from typing import Any
 
 from rich.console import Console
 
 from ctpool.config import Settings
+from ctpool.db import create_engine, create_session_factory
+from ctpool.worker_registry import (
+    WorkerCounters,
+    heartbeat_worker,
+    mark_worker_stopped,
+    register_worker,
+)
 
 _logger = logging.getLogger(__name__)
 
 _DEV_NULL_CONSOLE = Console(quiet=True)
 
+# Module-level state for the scheduled-audit interval gate.  The loop holds a
+# single Settings + cycle time so this is correct for the in-process loop
+# without needing a database column.
+_LAST_SCHEDULED_AUDIT_AT: float = 0.0
+
+
+def _worker_id() -> str:
+    """Return a stable identity string for the maintenance singleton worker."""
+    return f"{socket.gethostname()}:{getpid()}"
+
 
 async def run_maintenance_once(settings: Settings) -> None:
     """Execute one full maintenance cycle.
 
-    Runs metrics pruning, observation pruning, entry-outcome pruning, and
-    optionally an audit-gap check.  Each step is run independently — a failure
-    in one step is logged but does not block subsequent steps.
+    Always runs the profile-aware prune.  Runs scheduled audit only when
+    the operator has explicitly enabled it AND the configured interval has
+    elapsed since the last scheduled audit.  Audit failures are logged but
+    do not block pruning.
 
     Args:
         settings: Active application settings.
     """
     console = _DEV_NULL_CONSOLE
 
-    await _step("prune-metrics", _prune_metrics, settings, console)
-    await _step("prune-observations", _prune_observations, settings, console)
-    await _step("prune-entry-outcomes", _prune_entry_outcomes, settings, console)
-    await _step("audit-gaps", _check_audit_gaps, settings, console)
+    await _step("prune-for-storage-profile", _prune_for_profile, settings, console)
+    if _scheduled_audit_due(settings):
+        await _step("scheduled-audit-gaps", _check_audit_gaps, settings, console)
+        _record_scheduled_audit_ran()
 
 
 async def run_maintenance_loop(settings: Settings) -> None:
@@ -54,13 +77,82 @@ async def run_maintenance_loop(settings: Settings) -> None:
         settings: Active application settings.
     """
     interval = settings.ct_maintenance_interval_seconds
+    engine = create_engine(settings)
+    factory = create_session_factory(engine)
+    async with factory() as session:
+        async with session.begin():
+            registry_row = await register_worker(
+                session,
+                worker_id=_worker_id(),
+                worker_kind="maintenance",
+            )
+    registry_id = registry_row.id
+
     _logger.info("Maintenance loop starting (interval=%d s)", interval)
-    while True:
-        try:
-            await run_maintenance_once(settings)
-        except Exception:
-            _logger.exception("Maintenance cycle failed; will retry after interval")
-        await asyncio.sleep(interval)
+    try:
+        while True:
+            try:
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="processing",
+                            direction="maintenance",
+                            counters=WorkerCounters(),
+                        )
+                await run_maintenance_once(settings)
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="idle",
+                            direction="maintenance",
+                            counters=WorkerCounters(),
+                        )
+            except Exception as exc:
+                async with factory() as session:
+                    async with session.begin():
+                        await heartbeat_worker(
+                            session,
+                            row_id=registry_id,
+                            status="error",
+                            direction="maintenance",
+                            counters=WorkerCounters(
+                                last_error_type=exc.__class__.__name__,
+                                last_error_message=str(exc),
+                            ),
+                        )
+                _logger.exception("Maintenance cycle failed; will retry after interval")
+            await asyncio.sleep(interval)
+    finally:
+        async with factory() as session:
+            async with session.begin():
+                await mark_worker_stopped(session, row_id=registry_id)
+        await engine.dispose()
+        _logger.info("Maintenance loop stopped")
+
+
+def _scheduled_audit_due(settings: Settings) -> bool:
+    """Return True when scheduled audit is opt-in enabled AND its interval is up.
+
+    Always False when ``BITSYSCERTS_ENABLE_SCHEDULED_AUDIT`` is False.
+    """
+    if not getattr(settings, "bitsyscerts_enable_scheduled_audit", False):
+        return False
+    interval = getattr(settings, "bitsyscerts_audit_interval_seconds", 21600)
+    if interval <= 0:
+        return False
+    if _LAST_SCHEDULED_AUDIT_AT <= 0.0:
+        return True
+    return (time.monotonic() - _LAST_SCHEDULED_AUDIT_AT) >= interval
+
+
+def _record_scheduled_audit_ran() -> None:
+    """Stamp the last-audit timestamp so the interval gate works next cycle."""
+    global _LAST_SCHEDULED_AUDIT_AT
+    _LAST_SCHEDULED_AUDIT_AT = time.monotonic()
 
 
 async def _step(name: str, coro_fn: Any, settings: Settings, console: Console) -> None:
@@ -72,6 +164,15 @@ async def _step(name: str, coro_fn: Any, settings: Settings, console: Console) -
         _logger.debug("Maintenance step %s completed in %.2f s", name, elapsed)
     except Exception:
         _logger.exception("Maintenance step %s failed", name)
+
+
+async def _prune_for_profile(_settings: Settings, console: Console) -> None:
+    """Run the unified storage-profile retention enforcer."""
+    from ctpool._cli_prune_storage_profile_impl import (
+        run_prune_for_storage_profile,
+    )
+
+    await run_prune_for_storage_profile(execute=True, console=console)
 
 
 async def _prune_metrics(settings: Settings, console: Console) -> None:

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ctpool.backfill_worker import compute_pivot_index, estimate_log_age_days
+from ctpool.backfill_pivot import compute_pivot_index, estimate_log_age_days
 
 # ---------------------------------------------------------------------------
 # Helpers

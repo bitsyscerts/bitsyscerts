@@ -5,10 +5,6 @@ interface BackfillFailedAlertProps {
   failedCount: number;
 }
 
-/**
- * Displays a prominent error alert when one or more backfill ranges have
- * entered the failed state and require manual intervention.
- */
 export function BackfillFailedAlert({ failedCount }: BackfillFailedAlertProps) {
   return (
     <Alert

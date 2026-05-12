@@ -7,11 +7,6 @@ interface AuditHealthCardProps {
   auditHealth: AuditHealth;
 }
 
-/**
- * Displays a summary card of open audit findings grouped by severity.
- * Renders a green shield when no findings are open, or a warning with
- * per-severity badges when findings are present.
- */
 export function AuditHealthCard({ auditHealth }: AuditHealthCardProps) {
   const isClean = auditHealth.total_open === 0;
 

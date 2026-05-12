@@ -11,6 +11,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from ctpool.entry_write_result import (
+    CertificateUpsertResult,
+    EntryWriteMetrics,
+    HostnameUpsertResult,
+)
 from ctpool.pipeline_schemas import NormalizedEntry, ParsedCertificate
 from ctpool.writer import write_normalized_entry
 
@@ -57,11 +62,21 @@ async def test_write_normalized_entry_calls_all_writers():
     with (
         patch(
             "ctpool.writer.upsert_certificate",
-            new=AsyncMock(return_value=cert_id),
+            new=AsyncMock(
+                return_value=CertificateUpsertResult(
+                    certificate_id=cert_id,
+                    inserted=True,
+                )
+            ),
         ) as mock_cert,
         patch(
             "ctpool.writer.upsert_hostname",
-            new=AsyncMock(return_value=host_id),
+            new=AsyncMock(
+                return_value=HostnameUpsertResult(
+                    hostname_id=host_id,
+                    inserted=True,
+                )
+            ),
         ) as mock_host,
         patch(
             "ctpool.writer.upsert_certificate_hostname",
@@ -72,11 +87,17 @@ async def test_write_normalized_entry_calls_all_writers():
             new=AsyncMock(),
         ) as mock_obs,
     ):
-        await write_normalized_entry(session, _entry())
+        result = await write_normalized_entry(session, _entry())
         mock_cert.assert_awaited_once()
         mock_host.assert_awaited_once()
         mock_join.assert_awaited_once()
         mock_obs.assert_awaited_once()
+    assert result == EntryWriteMetrics(
+        new_unique_certificates=1,
+        hostnames_observed=1,
+        new_unique_hostnames=1,
+        known_hostnames=0,
+    )
 
 
 @pytest.mark.asyncio
@@ -87,16 +108,37 @@ async def test_write_normalized_entry_one_call_per_hostname():
     entry = _entry(hostnames=["a.example.com", "b.example.com", "c.example.com"])
 
     with (
-        patch("ctpool.writer.upsert_certificate", new=AsyncMock(return_value=cert_id)),
+        patch(
+            "ctpool.writer.upsert_certificate",
+            new=AsyncMock(
+                return_value=CertificateUpsertResult(
+                    certificate_id=cert_id,
+                    inserted=False,
+                )
+            ),
+        ),
         patch(
             "ctpool.writer.upsert_hostname",
-            new=AsyncMock(return_value=host_id),
+            new=AsyncMock(
+                side_effect=[
+                    HostnameUpsertResult(hostname_id=host_id, inserted=True),
+                    HostnameUpsertResult(hostname_id=host_id, inserted=False),
+                    HostnameUpsertResult(hostname_id=host_id, inserted=False),
+                ]
+            ),
         ) as mock_host,
         patch("ctpool.writer.upsert_certificate_hostname", new=AsyncMock()),
         patch("ctpool.writer.upsert_observation", new=AsyncMock()),
     ):
-        await write_normalized_entry(session, entry)
+        result = await write_normalized_entry(session, entry)
         assert mock_host.await_count == 3
+    assert result == EntryWriteMetrics(
+        new_unique_certificates=0,
+        duplicate_certificates=1,
+        hostnames_observed=3,
+        new_unique_hostnames=1,
+        known_hostnames=2,
+    )
 
 
 @pytest.mark.asyncio
@@ -108,11 +150,20 @@ async def test_write_normalized_entry_no_hostnames_skips_hostname_calls():
     mock_host = AsyncMock()
     mock_obs = AsyncMock()
     with (
-        patch("ctpool.writer.upsert_certificate", new=AsyncMock(return_value=cert_id)),
+        patch(
+            "ctpool.writer.upsert_certificate",
+            new=AsyncMock(
+                return_value=CertificateUpsertResult(
+                    certificate_id=cert_id,
+                    inserted=True,
+                )
+            ),
+        ),
         patch("ctpool.writer.upsert_hostname", mock_host),
         patch("ctpool.writer.upsert_certificate_hostname", new=AsyncMock()),
         patch("ctpool.writer.upsert_observation", mock_obs),
     ):
-        await write_normalized_entry(session, entry)
+        result = await write_normalized_entry(session, entry)
         mock_host.assert_not_awaited()
         mock_obs.assert_awaited_once()
+    assert result == EntryWriteMetrics(new_unique_certificates=1)

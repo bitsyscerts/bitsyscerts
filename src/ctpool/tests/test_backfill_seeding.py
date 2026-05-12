@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ctpool.backfill_worker import run_backfill
+from ctpool.backfill_worker import run_backfill_legacy as run_backfill
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import SignedTreeHead
 from ctpool.models.log_source import CtLogSource
@@ -71,6 +71,7 @@ def _make_session_factory() -> MagicMock:
     session.begin = MagicMock()
     session.begin.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.add = MagicMock()
     factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -120,14 +121,14 @@ async def test_backfill_worker_filter_restricts_to_single_log_id() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log_a, log_b]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", mock_sth),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_seed_ranges),
+        patch("ctpool.backfill_seeder.fetch_sth", mock_sth),
+        patch("ctpool.backfill_seeder.create_backfill_ranges", mock_seed_ranges),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(
@@ -160,15 +161,15 @@ async def test_backfill_worker_seeds_ranges_from_sth() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(100))
+            "ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(100))
         ),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_create),
+        patch("ctpool.backfill_seeder.create_backfill_ranges", mock_create),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
@@ -201,16 +202,16 @@ async def test_backfill_seeding_uses_pivot_when_days_positive() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth",
+            "ctpool.backfill_seeder.fetch_sth",
             AsyncMock(return_value=_make_sth(1_000, timestamp=_STH_TIMESTAMP_1Y)),
         ),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_create),
+        patch("ctpool.backfill_seeder.create_backfill_ranges", mock_create),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
@@ -240,16 +241,16 @@ async def test_backfill_seeding_days_zero_seeds_from_zero() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth",
+            "ctpool.backfill_seeder.fetch_sth",
             AsyncMock(return_value=_make_sth(1_000, timestamp=_STH_TIMESTAMP_1Y)),
         ),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_create),
+        patch("ctpool.backfill_seeder.create_backfill_ranges", mock_create),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
@@ -276,16 +277,16 @@ async def test_backfill_seeding_none_days_uses_settings_default() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth",
+            "ctpool.backfill_seeder.fetch_sth",
             AsyncMock(return_value=_make_sth(1_000, timestamp=_STH_TIMESTAMP_1Y)),
         ),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_create),
+        patch("ctpool.backfill_seeder.create_backfill_ranges", mock_create),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         # days=None → should resolve to settings.ct_backfill_days = 180
@@ -320,14 +321,14 @@ async def test_backfill_seeding_explicit_days_overrides_settings() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=sth)),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_create_30),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=sth)),
+        patch("ctpool.backfill_seeder.create_backfill_ranges", mock_create_30),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True, days=30)
@@ -339,14 +340,14 @@ async def test_backfill_seeding_explicit_days_overrides_settings() -> None:
             "ctpool.backfill_worker.get_eligible_backfill_logs",
             AsyncMock(return_value=[log]),
         ),
-        patch("ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=sth)),
-        patch("ctpool.backfill_worker.create_backfill_ranges", mock_create_180),
+        patch("ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=sth)),
+        patch("ctpool.backfill_seeder.create_backfill_ranges", mock_create_180),
         patch(
             "ctpool.backfill_worker.claim_backfill_range", AsyncMock(return_value=None)
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True, days=180)
@@ -375,13 +376,13 @@ async def test_backfill_worker_on_status_fires_during_seeding() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth", AsyncMock(return_value=_make_sth(100))
+            "ctpool.backfill_seeder.fetch_sth", AsyncMock(return_value=_make_sth(100))
         ),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges",
+            "ctpool.backfill_seeder.create_backfill_ranges",
             AsyncMock(return_value=10),
         ),
         patch(

@@ -39,7 +39,7 @@ graph TB
         subgraph Ingestion [ctpool workers]
             tail[tail worker]
             backfill[backfill worker]
-            stats_svc[stats snapshot service]
+            stats_svc[stats-snapshotter service]
             maint[maintenance / prune service]
         end
 
@@ -87,7 +87,7 @@ graph TB
 
 | Component | Language | Package | Docker Service | Role |
 |---|---|---|---|---|
-| `ctpool` | Python 3.12 | `src/ctpool` | `tail`, `backfill`, `stats`, `maintenance` | CT ingestion, data pruning, audit |
+| `ctpool` | Python 3.12 | `src/ctpool` | `tail`, `backfill`, `stats-snapshotter`, `maintenance` | CT ingestion, data pruning, audit |
 | `certsapi` | Python 3.12 | `src/api` | `api` | Read-only REST API |
 | `app` | TypeScript / React 18 | `src/app` | `frontend` | Reference web UI |
 | PostgreSQL 17 | — | — | `postgres` | Primary data store |
@@ -113,10 +113,10 @@ flowchart LR
     end
 
     subgraph backfill[backfill worker — ctpool backfill]
-        B1[Claim backfill range\nfrom ct_log_backfill_ranges]
-        B2[Fetch entries\nfor range]
+        B1[Claim one CT log\nfrom ct_log_backfill_state]
+        B2[Fetch entries\nfrom durable checkpoint]
         B3[Parse + write]
-        B4[Mark range complete]
+        B4[Advance checkpoint\nor mark retrying / complete]
         B1 --> B2 --> B3 --> B4 --> B1
     end
 
@@ -181,13 +181,35 @@ directory mount. If free space drops below `CT_MIN_FREE_DISK_GB`, a warning is l
 If free space drops below `CT_CRITICAL_FREE_DISK_GB`, ingestion is halted and an error
 is written to the health/log channel.
 
+### Backfill Dispatch Model
+
+BitsysCerts uses **per-log backfill ownership** by default. Each backfill worker claims
+one eligible CT log, processes it from its durable checkpoint stored in
+`ct_log_backfill_state`, heartbeats its claim, and either advances the checkpoint,
+marks the log `retrying` on retryable errors, or marks it `complete` when the window is
+finished. There is at most one worker per log at any time.
+
+The legacy range-based dispatcher (`ct_log_backfill_ranges`) remains available for
+compatibility and debug use under `CT_BACKFILL_DISPATCH_MODE=legacy-ranges` or
+`ctpool backfill --dispatch-mode legacy-ranges`. It is **not** the default runtime
+model.
+
+Legacy range failures from older runs may remain visible in advanced diagnostics. They
+do not necessarily indicate that the current per-log dispatcher is unhealthy.
+
 ### Audit Checker
+
+> **Advanced / debug only.** The audit checker is not part of normal per-log operation.
+> Per-log workers handle retryable failures inline by transitioning the log to
+> `retrying` and re-fetching from the unchanged checkpoint. The audit/repair commands
+> below remain available for legacy range investigation and one-off historical
+> reconciliation.
 
 `ctpool check-audit-gaps` / `ctpool fix-audit-findings` detect and repair:
 
 - Gaps in CT log entry ranges (entries that should have been fetched but were not)
 - Hostnames with a missing or stale `latest_cert_fingerprint_sha256` reference
-- Backfill ranges stuck in `in_progress` past their claim timeout
+- Legacy backfill ranges stuck in `in_progress` past their claim timeout
 
 ---
 
@@ -258,9 +280,10 @@ concurrent writes occur.
 ### Stats Caching
 
 The `GET /v1/stats` endpoint never executes a live aggregate query. It reads the most
-recent row from `ct_stats_snapshots` written by the `stats` worker service. The snapshot
-worker refreshes this row on a configurable interval (default: 60 seconds). This keeps
-dashboard load under control for large deployments.
+recent row from `ct_stats_snapshots` written by the `stats-snapshotter` worker service.
+The snapshot worker refreshes this row on the configured heavy-refresh interval
+(`CT_STATS_HEAVY_REFRESH_SECONDS`, default `300`). This keeps dashboard load under
+control for large deployments.
 
 ---
 
@@ -503,7 +526,7 @@ sequenceDiagram
     participant API as certsapi
     participant UI as React App
 
-    loop every 60 seconds
+    loop every CT_STATS_HEAVY_REFRESH_SECONDS (default 300 seconds)
         Stats->>DB: Run aggregate queries
         DB-->>Stats: counts, log positions, storage bytes
         Stats->>DB: UPSERT ct_stats_snapshots (latest)
@@ -526,13 +549,13 @@ graph TB
     subgraph host[Docker Host]
         subgraph network[internal Docker network]
             postgres[(postgres:17-alpine\nport 5432)]
-            migrate[migrate\none-shot Alembic]
-            api[api\ncertsapi serve --workers 2\nport 8000]
+            migrate[migrate\nctpool apply-migrations]
+            api[api\ncertsapi serve\nport 8000]
             frontend[frontend\nnginx:1.27-alpine\nport 80/443]
             backfill[backfill\nctpool backfill]
             tail[tail\nctpool tail]
-            stats_svc[stats\nctpool stats-snapshot]
-            maintenance[maintenance\nctpool prune-for-storage-profile]
+            stats_svc[stats-snapshotter\nctpool stats-snapshot --loop]
+            maintenance[maintenance\nctpool maintenance --loop]
         end
         vol_pg[(postgres_data\nvolume)]
         vol_disk[/data/pgcheck\nread-only bind mount]
@@ -574,43 +597,73 @@ graph LR
 
 ## Configuration Reference
 
-All configuration is via environment variables, typically set in a `.env` file alongside
-`docker-compose.yml`.
+All configuration is via environment variables. The canonical env template depends on the
+runtime mode:
+
+| Mode | Canonical env template |
+|---|---|
+| Developer mode | `src/.env.development.example` |
+| Local Python mode | `src/.env.local.example` |
+| Docker Compose mode | `src/.env.compose.example` |
+
+The source checkout keeps `.env` in `src/`. Release bundles keep `.env` beside the shipped
+runtime files.
 
 ### Common (all services)
 
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | — | **Required.** PostgreSQL async DSN |
-| `POSTGRES_PASSWORD` | — | **Required.** Set for the `postgres` service |
+| `DATABASE_ADMIN_URL` | — | Optional admin DSN for database creation workflows |
+| `LOG_LEVEL` | `INFO` | Shared Python log level |
 
 ### API (certsapi)
 
 | Variable | Default | Description |
 |---|---|---|
-| `CERTSAPI_WORKERS` | `2` | Uvicorn worker count |
-| `CERTSAPI_HOST` | `0.0.0.0` | Bind address |
-| `CERTSAPI_PORT` | `8000` | Bind port |
-| `CERTSAPI_LOG_LEVEL` | `info` | Log level |
+| `APP_NAME` | `BitsyCerts API` | API metadata shown in root/OpenAPI responses |
+| `APP_VERSION` | `0.1.0` | API version string |
+| `DEFAULT_PAGE_LIMIT` | `50` | Default page size for list endpoints |
+| `MAX_PAGE_LIMIT` | `200` | Hard page-size ceiling |
+| `BITSYSCERTS_EXPOSE_STATS_API` | `true` | Enables `/v1/stats`; default-on because the bundled dashboard depends on it |
+| `STATS_STALE_SECONDS` | `120` | Snapshot age threshold before the API marks stats as stale |
+
+### Bootstrap defaults
+
+These values seed `ct_instance_settings` only when the database does not yet contain a row.
+They do not override the database-backed settings after first boot.
+
+| Variable | Default | Description |
+|---|---|---|
+| `BITSYSCERTS_BOOTSTRAP_PROFILE` | `lite` | Initial storage profile |
+| `BITSYSCERTS_BOOTSTRAP_BACKFILL_DAYS` | profile default | Optional first-run backfill override |
+| `BITSYSCERTS_BOOTSTRAP_CERT_STORAGE_MODE` | profile default | Optional first-run certificate storage override |
 
 ### Ingestion (ctpool)
 
 | Variable | Default | Description |
 |---|---|---|
 | `CT_BACKFILL_DAYS` | `30` | Historical lookback for new logs |
+| `CT_BACKFILL_DISPATCH_MODE` | `per-log` | Default backfill ownership model |
 | `CT_TAIL_INTERVAL_SECONDS` | `300` | Poll interval for tail worker |
 | `CT_DEFAULT_BATCH_SIZE` | `256` | Starting batch size for writes |
 | `CT_MAX_BATCH_SIZE` | `1024` | Upper bound for adaptive batch sizing |
 | `CT_MIN_BATCH_SIZE` | `16` | Lower bound for adaptive batch sizing |
 | `CT_HTTP_TIMEOUT_SECONDS` | `30` | HTTP timeout for CT log requests |
+| `CT_STORAGE_PROFILE` | `lite` | Active storage profile when no database override exists yet |
+| `CT_DISK_CHECK_PATH` | mode-specific | Filesystem path used for free-disk checks |
 | `CT_MIN_FREE_DISK_GB` | `50` | Warn threshold (GB free on PG data mount) |
 | `CT_CRITICAL_FREE_DISK_GB` | `20` | Halt threshold (GB free on PG data mount) |
+| `CT_STATS_HEAVY_REFRESH_SECONDS` | `300` | Snapshot cadence for heavier aggregated metrics |
+| `CT_MAINTENANCE_INTERVAL_SECONDS` | `3600` | Maintenance loop cadence |
+| `BITSYSCERTS_ENABLE_SCHEDULED_AUDIT` | `false` | Opt-in deep audit loop |
 
 ### Frontend
 
 | Variable | Default | Description |
 |---|---|---|
 | `FRONTEND_PORT` | `80` | Host port mapped to Nginx container |
+| `POSTGRES_PASSWORD` | — | Required only when using the bundled Compose PostgreSQL service |
 
 ---
 

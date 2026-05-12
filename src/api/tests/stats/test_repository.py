@@ -7,6 +7,7 @@ import pytest_asyncio
 from ctpool.config import Settings as CtPoolSettings
 from ctpool.models import CtLogBackfillRange, CtLogObservation, CtLogTailCursor
 from ctpool.models.db_contention_state import CtDbContentionState
+from ctpool.models.ingestion_metric import IngestionMetric
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -266,3 +267,47 @@ class TestStatsRepository:
         repo = StatsRepository(empty_session)
         row = await repo.tail_freshness_summary(stale_threshold_seconds=300)
         assert int(row["stale_log_count"]) == 0
+
+    async def test_ingestion_rate_stats_sums_uniqueness_and_error_counters(
+        self, empty_session: AsyncSession
+    ) -> None:
+        """Ingestion-rate rows include the widened uniqueness and error sums."""
+        from datetime import UTC, datetime
+
+        log = make_log_source()
+        empty_session.add(log)
+        await empty_session.flush()
+        empty_session.add(
+            IngestionMetric(
+                log_source_id=log.id,
+                snapshot_at=datetime.now(UTC),
+                window_seconds=60,
+                entries_fetched=600,
+                entries_parsed=570,
+                certs_upserted=540,
+                hostnames_upserted=2200,
+                new_unique_certificates=120,
+                duplicate_certificates=420,
+                new_unique_hostnames=18,
+                known_hostnames=2182,
+                retryable_errors=4,
+                terminal_entry_errors=1,
+                parse_errors=0,
+                http_429_count=0,
+                http_5xx_count=0,
+            )
+        )
+        await empty_session.flush()
+
+        repo = StatsRepository(empty_session)
+        rows = await repo.ingestion_rate_stats([300])
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert int(row["entries_parsed"]) == 570
+        assert int(row["new_unique_certificates"]) == 120
+        assert int(row["duplicate_certificates"]) == 420
+        assert int(row["new_unique_hostnames"]) == 18
+        assert int(row["known_hostnames"]) == 2182
+        assert int(row["retryable_errors"]) == 4
+        assert int(row["terminal_entry_errors"]) == 1

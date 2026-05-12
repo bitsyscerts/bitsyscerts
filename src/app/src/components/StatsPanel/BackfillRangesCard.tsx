@@ -7,10 +7,6 @@ interface BackfillRangesCardProps {
   backfillRanges: BackfillRangeStats;
 }
 
-/**
- * Displays backfill range status counts and a warning when stale in-progress
- * claims are detected (indicating crashed workers).
- */
 export function BackfillRangesCard({
   backfillRanges,
 }: BackfillRangesCardProps) {

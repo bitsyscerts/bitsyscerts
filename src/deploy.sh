@@ -10,7 +10,7 @@
 #
 # Requirements:
 #   - Docker Engine 25+ with the Compose plugin (docker compose v2)
-#   - src/.env exists and is filled in (copy from src/.env.example)
+#   - src/.env exists and is filled in (copy from src/.env.compose.example)
 
 set -euo pipefail
 
@@ -38,7 +38,7 @@ for arg in "$@"; do
 done
 
 # ── Pre-flight ───────────────────────────────────────────────────────────────
-[[ -f "$ENV_FILE" ]] || fail ".env not found at ${ENV_FILE}. Copy src/.env.example and fill it in."
+[[ -f "$ENV_FILE" ]] || fail ".env not found at ${ENV_FILE}. Copy src/.env.compose.example and fill it in."
 command -v docker >/dev/null 2>&1 || fail "docker is not installed or not in PATH."
 docker compose version >/dev/null 2>&1 || fail "Docker Compose plugin (v2) is required."
 
@@ -97,15 +97,23 @@ fi
 
 if [[ "$SKIP_SYNC_LOGS" == false ]]; then
   log "Syncing CT log list..."
-  compose run --rm --no-deps api ctpool sync-logs
+  compose run --rm migrate ctpool sync-logs
   log "CT log sync complete."
 fi
+
+log "Seeding initial stats snapshot..."
+compose run --rm migrate ctpool stats-snapshot
+log "Initial stats snapshot complete."
+
+log "Running one maintenance pass..."
+compose run --rm migrate ctpool maintenance
+log "Initial maintenance pass complete."
 
 # ── Bring up the stack ───────────────────────────────────────────────────────
 log "Starting services..."
 if [[ "$SKIP_MIGRATE" == true ]]; then
   compose up --force-recreate --detach --remove-orphans --no-deps \
-    api frontend backfill tail
+    api frontend backfill tail stats-snapshotter maintenance
 else
   compose up --force-recreate --detach --remove-orphans
 fi

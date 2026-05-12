@@ -69,7 +69,7 @@ export function StorageSettingsDrawer({
       <DrawerHeader
         icon={<IconSettings size={20} />}
         title="Storage Settings"
-        description="Changes are prospective only — existing data is not auto-pruned."
+        description="Changes affect future ingestion immediately. Existing retained data is pruned by maintenance according to retention settings."
       />
       <ScrollArea style={{ flex: 1 }}>
         <Box p="md">

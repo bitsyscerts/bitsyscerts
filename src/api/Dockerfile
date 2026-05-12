@@ -14,12 +14,8 @@ RUN pip install --no-cache-dir hatchling
 COPY src/ctpool /build/ctpool
 RUN pip wheel --no-cache-dir --wheel-dir /wheels /build/ctpool
 
-# Copy and build certsapi, replacing the file:// dep with the wheel we just built
+# Copy and build certsapi against the locally built ctpool wheel
 COPY src/api /build/api
-# Rewrite the local file reference so pip can resolve it from the wheel dir
-RUN sed 's|ctpool @ file://[^"]*|ctpool|g' /build/api/pyproject.toml \
-    > /build/api/pyproject_ci.toml \
-    && mv /build/api/pyproject_ci.toml /build/api/pyproject.toml
 RUN pip wheel --no-cache-dir --wheel-dir /wheels --find-links /wheels /build/api
 
 # ── Stage 2: lean runtime image ───────────────────────────────────────────────

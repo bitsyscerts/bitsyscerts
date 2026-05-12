@@ -82,6 +82,7 @@ def _session_factory(log: CtLogSource) -> MagicMock:
     session.begin = MagicMock()
     session.begin.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.add = MagicMock()
     execute_result = MagicMock()
     execute_result.scalar.return_value = True
     session.execute.return_value = execute_result
@@ -94,7 +95,11 @@ def _session_factory(log: CtLogSource) -> MagicMock:
 
 @pytest.fixture(autouse=True)
 def _claim_ok() -> object:
-    with patch("ctpool.tail_worker.try_claim_tail_log", AsyncMock(return_value=True)):
+    with (
+        patch("ctpool.tail_worker.claim_tail_log", AsyncMock(return_value=True)),
+        patch("ctpool.tail_worker.release_tail_log", AsyncMock()),
+        patch("ctpool.tail_worker.heartbeat_tail_lease", AsyncMock()),
+    ):
         yield
 
 

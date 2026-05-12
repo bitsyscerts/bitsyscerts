@@ -18,9 +18,11 @@ from ctpool.audit_constants import (
     SEVERITY_WARNING,
     STATUS_OPEN,
 )
+from ctpool.backfill_state_queries import query_backfill_state_summary
 from ctpool.config import Settings as CtPoolSettings
 from ctpool.db_contention_observability import read_db_contention_operator_snapshot
 from ctpool.db_contention_types import DbContentionOperatorSnapshot
+from ctpool.maintenance_queries import query_latest_maintenance_run
 from ctpool.models.audit_finding import CtAuditFinding
 from ctpool.models.certificate import Certificate
 from ctpool.models.certificate_hostname import CertificateHostname
@@ -33,6 +35,8 @@ from ctpool.models.log_source import CtLogSource
 from ctpool.models.log_tail_cursor import CtLogTailCursor
 from ctpool.models.observation import CtLogObservation
 from ctpool.outcome_constants import ALL_OUTCOMES
+from ctpool.worker_queries import query_worker_summary
+from ctpool.worker_reaper import reap_stale_worker_rows
 from sqlalchemy import case, func, select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -266,11 +270,32 @@ class StatsRepository:
                 func.coalesce(func.sum(IngestionMetric.entries_fetched), 0).label(
                     "entries_fetched"
                 ),
+                func.coalesce(func.sum(IngestionMetric.entries_parsed), 0).label(
+                    "entries_parsed"
+                ),
                 func.coalesce(func.sum(IngestionMetric.certs_upserted), 0).label(
                     "certs_upserted"
                 ),
                 func.coalesce(func.sum(IngestionMetric.hostnames_upserted), 0).label(
                     "hostnames_upserted"
+                ),
+                func.coalesce(
+                    func.sum(IngestionMetric.new_unique_certificates), 0
+                ).label("new_unique_certificates"),
+                func.coalesce(
+                    func.sum(IngestionMetric.duplicate_certificates), 0
+                ).label("duplicate_certificates"),
+                func.coalesce(func.sum(IngestionMetric.new_unique_hostnames), 0).label(
+                    "new_unique_hostnames"
+                ),
+                func.coalesce(func.sum(IngestionMetric.known_hostnames), 0).label(
+                    "known_hostnames"
+                ),
+                func.coalesce(func.sum(IngestionMetric.retryable_errors), 0).label(
+                    "retryable_errors"
+                ),
+                func.coalesce(func.sum(IngestionMetric.terminal_entry_errors), 0).label(
+                    "terminal_entry_errors"
                 ),
             ).where(IngestionMetric.snapshot_at >= cutoff)
             result = (await self._session.execute(stmt)).mappings().one()
@@ -401,4 +426,59 @@ class StatsRepository:
             "error": int(row.error or 0),
             "warning": int(row.warning or 0),
             "info": int(row.info or 0),
+        }
+
+    async def worker_summary(self, stale_seconds: int) -> dict[str, object]:
+        """Return the worker summary block for live stats responses."""
+        await reap_stale_worker_rows(self._session, stale_seconds=stale_seconds)
+        return await query_worker_summary(self._session, stale_seconds=stale_seconds)
+
+    async def backfill_state_summary(self, stale_seconds: int) -> dict[str, object]:
+        """Return the per-log backfill state block for live stats responses."""
+        return await query_backfill_state_summary(
+            self._session,
+            stale_seconds=stale_seconds,
+        )
+
+    async def latest_maintenance_run(self) -> dict[str, object] | None:
+        """Return the most recent maintenance run for live stats responses."""
+        return await query_latest_maintenance_run(self._session)
+
+    async def ct_log_progress_totals(self) -> dict[str, int]:
+        """Return SUM(tree_size) and SUM(next_index) for eligible logs.
+
+        Used as a projection fallback when ``ct_log_backfill_ranges`` is empty
+        (fresh installs or lite-mode deployments without backfill).
+
+        Returns:
+            Dict with ``planned_total`` (SUM of tree_size for eligible logs)
+            and ``planned_completed`` (SUM of next_index for eligible tail
+            cursors joined to eligible log sources).  Zeros when no eligible
+            logs exist.
+        """
+        from ctpool.models.log_runtime_state import CtLogRuntimeState
+
+        runtime_stmt = (
+            select(func.coalesce(func.sum(CtLogRuntimeState.tree_size), 0))
+            .join(
+                CtLogSource,
+                CtLogSource.id == CtLogRuntimeState.log_source_id,
+            )
+            .where(CtLogSource.is_eligible_for_tail.is_(True))
+        )
+        planned_total = int((await self._session.execute(runtime_stmt)).scalar_one())
+
+        cursor_stmt = (
+            select(func.coalesce(func.sum(CtLogTailCursor.next_index), 0))
+            .join(
+                CtLogSource,
+                CtLogSource.id == CtLogTailCursor.log_source_id,
+            )
+            .where(CtLogSource.is_eligible_for_tail.is_(True))
+        )
+        planned_completed = int((await self._session.execute(cursor_stmt)).scalar_one())
+
+        return {
+            "planned_total": planned_total,
+            "planned_completed": planned_completed,
         }

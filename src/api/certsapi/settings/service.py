@@ -9,6 +9,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from ctpool.bootstrap_config import get_bootstrap_config
+from ctpool.instance_settings import bootstrap_settings_from_env
 from ctpool.models.instance_settings import CtInstanceSettings
 from ctpool.models.storage_profile_history import CtStorageProfileHistory
 from ctpool.storage_modes import StorageProfile
@@ -32,15 +34,18 @@ class SettingsService:
     def __init__(self, repository: SettingsRepository) -> None:
         self._repo = repository
 
-    async def get_settings(self) -> StorageSettingsResponse | None:
-        """Return active settings as a response model, or None if not seeded.
+    async def get_settings(self) -> StorageSettingsResponse:
+        """Return active settings as a response model.
 
         Returns:
-            StorageSettingsResponse when a row exists, None otherwise.
+            StorageSettingsResponse for the active or bootstrapped row.
         """
         row = await self._repo.get_active_settings()
         if row is None:
-            return None
+            row = await bootstrap_settings_from_env(
+                self._repo._session,
+                get_bootstrap_config(),
+            )
         return _row_to_response(row)
 
     async def update_settings(

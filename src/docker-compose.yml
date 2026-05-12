@@ -1,19 +1,25 @@
 # BitsyCerts — production compose stack
 #
-# Run from the repository root:
-#   docker compose -f src/docker-compose.yml <command>
+# Run from the directory containing this file:
+#   cp .env.compose.example .env
+#   docker compose up -d
 #
-# Before first use, copy src/.env.example to src/.env and fill in the values.
-# Then deploy with:  ./src/deploy.sh
+# The migrate service automatically applies migrations, syncs CT log sources,
+# and writes an initial stats snapshot on first start.  All other services
+# wait for it to complete before starting.
+#
+# For manual operator tasks use the migrate service image directly, e.g.:
+#   docker compose run --rm migrate ctpool maintenance
+#   docker compose run --rm migrate ctpool init-db --force
 #
 # Services:
 #   postgres    — PostgreSQL 17 (omit if using an external managed DB)
-#   migrate     — one-shot schema migration/bootstrap service
+#   migrate     — one-shot schema migration/tools service
 #   api         — certsapi HTTP server (internal, port 8000)
 #   frontend    — Nginx serving the React SPA; proxies /v1/* → api (port 80)
 #   backfill    — ctpool backfill worker (long-running)
 #   tail        — ctpool tail worker    (long-running)
-#   stats       — ctpool stats snapshot service (long-running)
+#   stats-snapshotter — ctpool stats snapshot service (long-running)
 #   maintenance — ctpool maintenance loop: prune + audit (long-running)
 
 services:
@@ -35,15 +41,31 @@ services:
     networks:
       - internal
 
-  # ── One-shot DB bootstrap and repair ───────────────────────────────────────
-  # Use `docker compose run --rm migrate ctpool init-db --force` for a
-  # destructive reset against the configured application database.
+  # ── DB bootstrap (migrations + log sync + initial snapshot) ────────────────
+  # For one-shot operator actions: docker compose run --rm migrate ctpool <cmd>
   migrate:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: "no"
     env_file:
-      - .env
-    command: ["ctpool", "apply-migrations"]
+      - path: .env
+        required: false
+    # Run three bootstrap steps in order:
+    #   1. apply-migrations  — bring the schema to head (REQUIRED; failure
+    #                          blocks all dependent services — correct behaviour)
+    #   2. sync-logs         — upsert CT log sources so workers have targets
+    #                          (best-effort; workers will retry on next cycle)
+    #   3. stats-snapshot    — write an initial snapshot so the UI isn't stale
+    #                          (best-effort; snapshotter service retakes it)
+    #
+    # sync-logs and stats-snapshot are non-fatal: a network hiccup or slow
+    # CT-ecosystem API must not prevent the entire stack from starting.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        ctpool apply-migrations &&
+        (ctpool sync-logs || echo "WARNING: sync-logs failed — workers will retry") &&
+        (ctpool stats-snapshot || echo "WARNING: stats-snapshot failed — snapshotter will retry")
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
@@ -59,13 +81,24 @@ services:
     restart: unless-stopped
     command: ["certsapi", "serve", "--workers", "2"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      BITSYSCERTS_EXPOSE_STATS_API: "${BITSYSCERTS_EXPOSE_STATS_API:-true}"
       CT_DB_CONTENTION_ENABLED: "${CT_DB_CONTENTION_ENABLED:-true}"
       CT_DB_CONTENTION_STALE_AFTER_SECONDS: "${CT_DB_CONTENTION_STALE_AFTER_SECONDS:-120}"
       CT_DEFAULT_BATCH_SIZE: "${CT_DEFAULT_BATCH_SIZE:-256}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import json,sys,urllib.request; body=json.load(urllib.request.urlopen(''http://127.0.0.1:8000/health'')); sys.exit(0 if body.get(''db'') == ''ok'' else 1)"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,22 +113,29 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     networks:
       - internal
 
   # ── CT log backfill worker ──────────────────────────────────────────────────
   backfill:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
-    restart: on-failure
+    restart: unless-stopped
     command: ["ctpool", "backfill"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
-      CT_BACKFILL_DAYS: "${CT_BACKFILL_DAYS:-180}"
+      CT_BACKFILL_DAYS: "${CT_BACKFILL_DAYS:-30}"
+      CT_BACKFILL_DISPATCH_MODE: "${CT_BACKFILL_DISPATCH_MODE:-per-log}"
       CT_DEFAULT_BATCH_SIZE: "${CT_DEFAULT_BATCH_SIZE:-256}"
       CT_MAX_BATCH_SIZE: "${CT_MAX_BATCH_SIZE:-1024}"
       CT_HTTP_TIMEOUT_SECONDS: "${CT_HTTP_TIMEOUT_SECONDS:-30}"
@@ -118,12 +158,14 @@ services:
   # ── CT log tail worker ──────────────────────────────────────────────────────
   tail:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
-    restart: on-failure
+    restart: unless-stopped
     command: ["ctpool", "tail"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      CT_BACKFILL_DISPATCH_MODE: "${CT_BACKFILL_DISPATCH_MODE:-per-log}"
       CT_TAIL_INTERVAL_SECONDS: "${CT_TAIL_INTERVAL_SECONDS:-300}"
       CT_DEFAULT_BATCH_SIZE: "${CT_DEFAULT_BATCH_SIZE:-256}"
       CT_MAX_BATCH_SIZE: "${CT_MAX_BATCH_SIZE:-1024}"
@@ -148,15 +190,16 @@ services:
   # Writes a full stats payload to ct_stats_snapshots on a regular interval
   # (default 300 s).  The API reads from the snapshot for cheap /v1/stats
   # responses, falling back to live queries when no fresh snapshot is available.
-  stats:
+  stats-snapshotter:
     image: "ghcr.io/bitsyscerts/bitsyscerts-api:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     command: ["ctpool", "stats-snapshot", "--loop"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
-      CT_STATS_HEAVY_REFRESH_SECONDS: "${CT_STATS_HEAVY_REFRESH_SECONDS:-300}"
+      CT_STATS_HEAVY_REFRESH_SECONDS: "${CT_STATS_HEAVY_REFRESH_SECONDS:-30}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:
       postgres:
@@ -174,9 +217,11 @@ services:
     restart: unless-stopped
     command: ["ctpool", "maintenance", "--loop"]
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
+      BITSYSCERTS_ENABLE_SCHEDULED_AUDIT: "${BITSYSCERTS_ENABLE_SCHEDULED_AUDIT:-false}"
       CT_MAINTENANCE_INTERVAL_SECONDS: "${CT_MAINTENANCE_INTERVAL_SECONDS:-3600}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:

@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.models.ingestion_metric import IngestionMetric
 
 
@@ -40,6 +41,12 @@ class LogMetricsAccumulator:
         self._entries_parsed: int = 0
         self._certs_upserted: int = 0
         self._hostnames_upserted: int = 0
+        self._new_unique_certificates: int = 0
+        self._duplicate_certificates: int = 0
+        self._new_unique_hostnames: int = 0
+        self._known_hostnames: int = 0
+        self._retryable_errors: int = 0
+        self._terminal_entry_errors: int = 0
         self._parse_errors: int = 0
         self._http_429_count: int = 0
         self._http_5xx_count: int = 0
@@ -61,6 +68,25 @@ class LogMetricsAccumulator:
         """Add *count* to the hostnames-upserted counter."""
         self._hostnames_upserted += count
 
+    def record_entry_write_metrics(self, metrics: EntryWriteMetrics) -> None:
+        """Add one stored entry's uniqueness and hostname counts."""
+        self._certs_upserted += (
+            metrics.new_unique_certificates + metrics.duplicate_certificates
+        )
+        self._hostnames_upserted += metrics.hostnames_observed
+        self._new_unique_certificates += metrics.new_unique_certificates
+        self._duplicate_certificates += metrics.duplicate_certificates
+        self._new_unique_hostnames += metrics.new_unique_hostnames
+        self._known_hostnames += metrics.known_hostnames
+
+    def record_retryable_errors(self, count: int) -> None:
+        """Add *count* to the retryable-error counter."""
+        self._retryable_errors += count
+
+    def record_terminal_entry_errors(self, count: int) -> None:
+        """Add *count* to the terminal-entry-error counter."""
+        self._terminal_entry_errors += count
+
     def record_parse_error(self) -> None:
         """Increment the parse-error counter by one."""
         self._parse_errors += 1
@@ -72,6 +98,26 @@ class LogMetricsAccumulator:
     def record_http_5xx(self) -> None:
         """Increment the HTTP-5xx counter by one."""
         self._http_5xx_count += 1
+
+    def has_activity(self) -> bool:
+        """Return True when the current window contains any metrics activity."""
+        return any(
+            (
+                self._entries_fetched,
+                self._entries_parsed,
+                self._certs_upserted,
+                self._hostnames_upserted,
+                self._new_unique_certificates,
+                self._duplicate_certificates,
+                self._new_unique_hostnames,
+                self._known_hostnames,
+                self._retryable_errors,
+                self._terminal_entry_errors,
+                self._parse_errors,
+                self._http_429_count,
+                self._http_5xx_count,
+            )
+        )
 
     def get_snapshot(self, window_seconds: int = 60) -> dict[str, int | float]:
         """Return the current counters as a plain dict.
@@ -90,6 +136,12 @@ class LogMetricsAccumulator:
             "entries_parsed": self._entries_parsed,
             "certs_upserted": self._certs_upserted,
             "hostnames_upserted": self._hostnames_upserted,
+            "new_unique_certificates": self._new_unique_certificates,
+            "duplicate_certificates": self._duplicate_certificates,
+            "new_unique_hostnames": self._new_unique_hostnames,
+            "known_hostnames": self._known_hostnames,
+            "retryable_errors": self._retryable_errors,
+            "terminal_entry_errors": self._terminal_entry_errors,
             "parse_errors": self._parse_errors,
             "http_429_count": self._http_429_count,
             "http_5xx_count": self._http_5xx_count,
@@ -118,6 +170,12 @@ class LogMetricsAccumulator:
             entries_parsed=snap["entries_parsed"],
             certs_upserted=snap["certs_upserted"],
             hostnames_upserted=snap["hostnames_upserted"],
+            new_unique_certificates=snap["new_unique_certificates"],
+            duplicate_certificates=snap["duplicate_certificates"],
+            new_unique_hostnames=snap["new_unique_hostnames"],
+            known_hostnames=snap["known_hostnames"],
+            retryable_errors=snap["retryable_errors"],
+            terminal_entry_errors=snap["terminal_entry_errors"],
             parse_errors=snap["parse_errors"],
             http_429_count=snap["http_429_count"],
             http_5xx_count=snap["http_5xx_count"],
@@ -132,6 +190,12 @@ class LogMetricsAccumulator:
         self._entries_parsed = 0
         self._certs_upserted = 0
         self._hostnames_upserted = 0
+        self._new_unique_certificates = 0
+        self._duplicate_certificates = 0
+        self._new_unique_hostnames = 0
+        self._known_hostnames = 0
+        self._retryable_errors = 0
+        self._terminal_entry_errors = 0
         self._parse_errors = 0
         self._http_429_count = 0
         self._http_5xx_count = 0

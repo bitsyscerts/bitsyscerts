@@ -12,9 +12,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ctpool.backfill_worker import run_backfill
+from ctpool.backfill_worker import run_backfill_legacy as run_backfill
 from ctpool.config import Settings
 from ctpool.ct_api_schemas import CtEntriesResponse, CtLeafEntry, SignedTreeHead
+from ctpool.entry_write_result import EntryWriteMetrics
 from ctpool.exceptions import FetchError
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -85,6 +86,10 @@ def _make_entries_response(n: int = 1) -> CtEntriesResponse:
     )
 
 
+def _stored_metrics() -> EntryWriteMetrics:
+    return EntryWriteMetrics(duplicate_certificates=1)
+
+
 def _make_session_factory() -> MagicMock:
     session = AsyncMock()
     session.begin = MagicMock()
@@ -93,6 +98,7 @@ def _make_session_factory() -> MagicMock:
     session.begin_nested = MagicMock()
     session.begin_nested.return_value.__aenter__ = AsyncMock(return_value=None)
     session.begin_nested.return_value.__aexit__ = AsyncMock(return_value=False)
+    session.add = MagicMock()
     factory = MagicMock()
     factory.return_value.__aenter__ = AsyncMock(return_value=session)
     factory.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -110,6 +116,24 @@ def _patch_reap_stale():
     with patch(
         "ctpool.backfill_worker.reap_stale_backfill_claims",
         AsyncMock(return_value=[]),
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _patch_worker_registry():
+    """Prevent worker_registry calls from hitting the mock session."""
+    import uuid as _uuid
+    from unittest.mock import MagicMock
+
+    mock_row = MagicMock()
+    mock_row.id = _uuid.uuid4()
+    with (
+        patch(
+            "ctpool.backfill_worker.register_worker", AsyncMock(return_value=mock_row)
+        ),
+        patch("ctpool.backfill_worker.heartbeat_worker", AsyncMock()),
+        patch("ctpool.backfill_worker.mark_worker_stopped", AsyncMock()),
     ):
         yield
 
@@ -139,11 +163,11 @@ async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth",
+            "ctpool.backfill_seeder.fetch_sth",
             AsyncMock(return_value=_make_sth(0)),
         ),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges",
+            "ctpool.backfill_seeder.create_backfill_ranges",
             AsyncMock(return_value=0),
         ),
         patch(
@@ -166,7 +190,10 @@ async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
             "ctpool.backfill_worker.build_normalized_entry",
             MagicMock(return_value=MagicMock()),
         ),
-        patch("ctpool.backfill_worker.persist_entry_with_retry", AsyncMock()),
+        patch(
+            "ctpool.backfill_worker.persist_entry_with_retry",
+            AsyncMock(return_value=_stored_metrics()),
+        ),
         patch("ctpool.backfill_worker.mark_range_complete", AsyncMock()),
         patch("ctpool.backfill_worker.mark_range_failed", AsyncMock()),
         patch(
@@ -175,7 +202,7 @@ async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
         ),
         patch("ctpool.backfill_worker.httpx.AsyncClient"),
         patch(
-            "ctpool.backfill_worker.has_backfill_ranges", AsyncMock(return_value=False)
+            "ctpool.backfill_seeder.has_backfill_ranges", AsyncMock(return_value=False)
         ),
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
@@ -184,8 +211,8 @@ async def test_backfill_worker_calls_persist_snapshot_on_success() -> None:
     assert snapshot_calls[0] == log.id
 
 
-async def test_backfill_worker_does_not_call_persist_snapshot_on_fetch_error() -> None:
-    """persist_snapshot is NOT called when a FetchError aborts the batch."""
+async def test_backfill_worker_persists_snapshot_on_fetch_error() -> None:
+    """Retryable fetch failures still emit a snapshot row for rate aggregation."""
     log = _make_log()
     claimed = _make_range(log.id)
     settings = _make_settings()
@@ -204,11 +231,11 @@ async def test_backfill_worker_does_not_call_persist_snapshot_on_fetch_error() -
             AsyncMock(return_value=[log]),
         ),
         patch(
-            "ctpool.backfill_worker.fetch_sth",
+            "ctpool.backfill_seeder.fetch_sth",
             AsyncMock(return_value=_make_sth(0)),
         ),
         patch(
-            "ctpool.backfill_worker.create_backfill_ranges",
+            "ctpool.backfill_seeder.create_backfill_ranges",
             AsyncMock(return_value=0),
         ),
         patch(
@@ -233,4 +260,4 @@ async def test_backfill_worker_does_not_call_persist_snapshot_on_fetch_error() -
     ):
         await run_backfill(_make_session_factory(), settings, once=True)
 
-    assert snapshot_calls == []
+    assert snapshot_calls == [log.id]

@@ -186,8 +186,7 @@ async def query_ingestion_rate_windows(
         windows_seconds: List of window durations in seconds.
 
     Returns:
-        List of dicts with keys: window_seconds, entries_fetched, certs_upserted,
-        hostnames_upserted.
+        List of dicts with one summed row per requested window.
     """
     rows = []
     for window_seconds in windows_seconds:
@@ -196,11 +195,32 @@ async def query_ingestion_rate_windows(
             func.coalesce(func.sum(IngestionMetric.entries_fetched), 0).label(
                 "entries_fetched"
             ),
+            func.coalesce(func.sum(IngestionMetric.entries_parsed), 0).label(
+                "entries_parsed"
+            ),
             func.coalesce(func.sum(IngestionMetric.certs_upserted), 0).label(
                 "certs_upserted"
             ),
             func.coalesce(func.sum(IngestionMetric.hostnames_upserted), 0).label(
                 "hostnames_upserted"
+            ),
+            func.coalesce(func.sum(IngestionMetric.new_unique_certificates), 0).label(
+                "new_unique_certificates"
+            ),
+            func.coalesce(func.sum(IngestionMetric.duplicate_certificates), 0).label(
+                "duplicate_certificates"
+            ),
+            func.coalesce(func.sum(IngestionMetric.new_unique_hostnames), 0).label(
+                "new_unique_hostnames"
+            ),
+            func.coalesce(func.sum(IngestionMetric.known_hostnames), 0).label(
+                "known_hostnames"
+            ),
+            func.coalesce(func.sum(IngestionMetric.retryable_errors), 0).label(
+                "retryable_errors"
+            ),
+            func.coalesce(func.sum(IngestionMetric.terminal_entry_errors), 0).label(
+                "terminal_entry_errors"
             ),
         ).where(IngestionMetric.snapshot_at >= cutoff)
         result = (await session.execute(stmt)).mappings().one()
@@ -342,3 +362,45 @@ async def query_active_instance_settings(
     stmt = select(CtInstanceSettings).limit(1)
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def query_ct_log_progress_totals(
+    session: AsyncSession,
+) -> dict[str, int]:
+    """Return SUM(tree_size) and SUM(next_index) for eligible CT logs.
+
+    Used as a storage-projection fallback when
+    ``ct_log_backfill_ranges`` is empty — e.g. on fresh installs or in
+    lite-mode deployments without backfill ranges.
+
+    Only logs with ``is_eligible_for_tail=True`` are included.
+
+    Args:
+        session: Active async SQLAlchemy session.
+
+    Returns:
+        Dict with ``planned_total`` (tree_size sum) and
+        ``planned_completed`` (next_index sum).  Both default to 0.
+    """
+    from ctpool.models.log_runtime_state import CtLogRuntimeState
+    from ctpool.models.log_source import CtLogSource
+    from ctpool.models.log_tail_cursor import CtLogTailCursor
+
+    runtime_stmt = (
+        select(func.coalesce(func.sum(CtLogRuntimeState.tree_size), 0))
+        .join(CtLogSource, CtLogSource.id == CtLogRuntimeState.log_source_id)
+        .where(CtLogSource.is_eligible_for_tail.is_(True))
+    )
+    planned_total = int((await session.execute(runtime_stmt)).scalar_one())
+
+    cursor_stmt = (
+        select(func.coalesce(func.sum(CtLogTailCursor.next_index), 0))
+        .join(CtLogSource, CtLogSource.id == CtLogTailCursor.log_source_id)
+        .where(CtLogSource.is_eligible_for_tail.is_(True))
+    )
+    planned_completed = int((await session.execute(cursor_stmt)).scalar_one())
+
+    return {
+        "planned_total": planned_total,
+        "planned_completed": planned_completed,
+    }
