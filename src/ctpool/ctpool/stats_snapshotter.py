@@ -256,6 +256,8 @@ async def run_snapshot_loop(
             async with session.begin():
                 await mark_worker_stopped(session, row_id=registry_id)
         await engine.dispose()
+        if console:
+            console.print("[yellow]Stats snapshot loop stopped.[/yellow]")
 
 
 def _serialise_payload(payload: dict[str, Any]) -> dict[str, Any]:

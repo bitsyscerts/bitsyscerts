@@ -94,20 +94,32 @@ def register(app: typer.Typer) -> None:
             on_status = None
             batch_size = settings.ct_default_batch_size
         concurrency = 1 if (once or log_id is not None) else None
-        asyncio.run(
-            run_tail_pool(
-                factory,
-                settings,
-                concurrency=concurrency,
-                once=once,
-                limit=limit,
-                log_id=log_id,
-                on_batch=on_batch,
-                on_status=on_status,
-                init_from_end=init_from_end,
-                batch_size=batch_size,
-            )
+        effective_workers = 1 if concurrency == 1 else settings.ct_tail_concurrency
+        _console.print(
+            f"[cyan]Tail worker starting.[/cyan]  "
+            f"workers=[bold]{effective_workers}[/bold]  "
+            f"batch=[bold]{batch_size}[/bold]  "
+            f"interval=[bold]{settings.ct_tail_interval_seconds}[/bold] s"
         )
+        try:
+            asyncio.run(
+                run_tail_pool(
+                    factory,
+                    settings,
+                    concurrency=concurrency,
+                    once=once,
+                    limit=limit,
+                    log_id=log_id,
+                    on_batch=on_batch,
+                    on_status=on_status,
+                    init_from_end=init_from_end,
+                    batch_size=batch_size,
+                )
+            )
+        except KeyboardInterrupt:
+            pass
+        finally:
+            _console.print("[yellow]Tail worker stopped.[/yellow]")
 
     @app.command("reset-tail-cursors")
     def reset_tail_cursors_cmd(
@@ -193,21 +205,36 @@ def register(app: typer.Typer) -> None:
             on_status = None
             batch_size = settings.ct_default_batch_size
         concurrency = 1 if (once or log_id is not None) else None
-        asyncio.run(
-            run_backfill_pool(
-                factory,
-                settings,
-                concurrency=concurrency,
-                once=once,
-                limit=limit,
-                days=days,
-                log_id=log_id,
-                on_batch=on_batch,
-                on_status=on_status,
-                batch_size=batch_size,
-                dispatch_mode=dispatch_mode,
-            )
+        effective_workers = 1 if concurrency == 1 else settings.ct_backfill_concurrency
+        effective_days = days if days is not None else settings.ct_backfill_days
+        effective_mode = dispatch_mode or settings.ct_backfill_dispatch_mode
+        _console.print(
+            f"[cyan]Backfill worker starting.[/cyan]  "
+            f"workers=[bold]{effective_workers}[/bold]  "
+            f"days=[bold]{effective_days}[/bold]  "
+            f"batch=[bold]{batch_size}[/bold]  "
+            f"mode=[bold]{effective_mode}[/bold]"
         )
+        try:
+            asyncio.run(
+                run_backfill_pool(
+                    factory,
+                    settings,
+                    concurrency=concurrency,
+                    once=once,
+                    limit=limit,
+                    days=days,
+                    log_id=log_id,
+                    on_batch=on_batch,
+                    on_status=on_status,
+                    batch_size=batch_size,
+                    dispatch_mode=dispatch_mode,
+                )
+            )
+        except KeyboardInterrupt:
+            pass
+        finally:
+            _console.print("[yellow]Backfill worker stopped.[/yellow]")
 
     @app.command("reap-stale-backfill-claims")
     def reap_stale_backfill_claims(

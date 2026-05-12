@@ -50,16 +50,22 @@ services:
       - path: .env
         required: false
     # Run three bootstrap steps in order:
-    #   1. apply-migrations  — bring the schema to head
+    #   1. apply-migrations  — bring the schema to head (REQUIRED; failure
+    #                          blocks all dependent services — correct behaviour)
     #   2. sync-logs         — upsert CT log sources so workers have targets
+    #                          (best-effort; workers will retry on next cycle)
     #   3. stats-snapshot    — write an initial snapshot so the UI isn't stale
+    #                          (best-effort; snapshotter service retakes it)
+    #
+    # sync-logs and stats-snapshot are non-fatal: a network hiccup or slow
+    # CT-ecosystem API must not prevent the entire stack from starting.
     command:
       - /bin/sh
       - -c
       - |
         ctpool apply-migrations &&
-        ctpool sync-logs &&
-        ctpool stats-snapshot
+        (ctpool sync-logs || echo "WARNING: sync-logs failed — workers will retry") &&
+        (ctpool stats-snapshot || echo "WARNING: stats-snapshot failed — snapshotter will retry")
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
@@ -193,7 +199,7 @@ services:
         required: false
     environment:
       DATABASE_URL: "${DATABASE_URL:?DATABASE_URL is required}"
-      CT_STATS_HEAVY_REFRESH_SECONDS: "${CT_STATS_HEAVY_REFRESH_SECONDS:-300}"
+      CT_STATS_HEAVY_REFRESH_SECONDS: "${CT_STATS_HEAVY_REFRESH_SECONDS:-30}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:
       postgres:

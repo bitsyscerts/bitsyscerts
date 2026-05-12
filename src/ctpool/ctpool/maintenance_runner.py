@@ -131,6 +131,7 @@ async def run_maintenance_loop(settings: Settings) -> None:
             async with session.begin():
                 await mark_worker_stopped(session, row_id=registry_id)
         await engine.dispose()
+        _logger.info("Maintenance loop stopped")
 
 
 def _scheduled_audit_due(settings: Settings) -> bool:

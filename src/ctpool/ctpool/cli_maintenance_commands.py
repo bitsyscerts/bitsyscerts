@@ -43,7 +43,20 @@ def register(app: typer.Typer) -> None:
 
         settings = get_settings()
         if loop:
-            asyncio.run(run_maintenance_loop(settings))
+            audit_enabled = getattr(
+                settings, "bitsyscerts_enable_scheduled_audit", False
+            )
+            _console.print(
+                f"[cyan]Maintenance loop starting.[/cyan]  "
+                f"interval=[bold]{settings.ct_maintenance_interval_seconds}[/bold] s  "
+                f"audit=[bold]{audit_enabled}[/bold]"
+            )
+            try:
+                asyncio.run(run_maintenance_loop(settings))
+            except KeyboardInterrupt:
+                pass
+            finally:
+                _console.print("[yellow]Maintenance loop stopped.[/yellow]")
         else:
             asyncio.run(run_maintenance_once(settings))
             _console.print("[green]Maintenance run complete.[/green]")
