@@ -57,6 +57,7 @@ from ctpool.outcome_constants import (
     OUTCOME_WRITE_ERROR,
 )
 from ctpool.parser import parse_leaf_entry
+from ctpool.storage_modes import CertStorageMode, flags_for_mode
 from ctpool.worker_activity_details import build_worker_counters
 from ctpool.worker_registry import (
     WorkerCounters,
@@ -127,6 +128,7 @@ async def _process_log_batch(
     if not entries:
         return 0, True, DbContentionObservation(0, 0)
 
+    cert_flags = flags_for_mode(CertStorageMode(settings.ct_cert_storage_mode))
     count = 0
     parsed_count = 0
     retry_accumulator = DbRetryPressureAccumulator()
@@ -161,6 +163,7 @@ async def _process_log_batch(
                 base_backoff_seconds=settings.ct_deadlock_base_backoff_seconds,
                 max_backoff_seconds=settings.ct_deadlock_max_backoff_seconds,
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
+                flags=cert_flags,
             )
             count += 1
             metrics.record_entry_write_metrics(write_metrics)
