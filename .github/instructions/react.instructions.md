@@ -172,3 +172,22 @@ src/app/
 ```
 
 MUST NOT create files outside this structure without updating this document.
+
+---
+
+## Definition of Done — MANDATORY GATE
+
+No TypeScript/TSX task is complete until the following command has been run **in
+the terminal** and produced **zero errors**. Do not summarise, do not declare the
+task done, do not hand back to the user until this passes.
+
+```
+cd /workspaces/bitsyscerts/src/app && npm run lint
+```
+
+If the command reports violations:
+
+1. Fix each reported error — do not suppress rules with `eslint-disable` comments
+   unless there is a documented reason in a co-located comment.
+2. Re-run `npm run lint` until it exits with code 0.
+3. Only then declare the task complete.

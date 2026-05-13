@@ -56,6 +56,11 @@ _LEGACY_BYTES_PER_OBS: dict[CertStorageMode, tuple[int, int]] = {
 _CONFIDENCE_MEDIUM_THRESHOLD = 1_000_000
 _CONFIDENCE_HIGH_THRESHOLD = 100_000_000
 
+# Sync-completion threshold above which the projection is anchored to the
+# measured DB size rather than the formula.  Used by both the ctpool
+# snapshot builder and the API projection path.
+_SYNC_RECALIBRATE_THRESHOLD = 0.95
+
 
 @dataclass(frozen=True)
 class ProfileAwareProjectionResult:
@@ -87,16 +92,23 @@ class ProfileAwareProjectionResult:
 
 def compute_projection_confidence(
     obs_count: int,
+    sync_percent: float = 0.0,
 ) -> Literal["low", "medium", "high"]:
-    """Classify projection confidence based on observed entry count.
+    """Classify projection confidence based on observed entry count and sync completion.
 
     Args:
         obs_count: Number of CT log observations ingested.
+        sync_percent: Fraction of planned observations completed (0.0–1.0).
+            When at or above ``_SYNC_RECALIBRATE_THRESHOLD`` the projection
+            is anchored to the measured DB size, so confidence is ``'high'``
+            regardless of the retained row count.
 
     Returns:
         ``'low'`` below 1 M observations, ``'medium'`` up to 100 M,
-        ``'high'`` above 100 M.
+        ``'high'`` above 100 M or when sync is near-complete.
     """
+    if sync_percent >= _SYNC_RECALIBRATE_THRESHOLD:
+        return "high"
     if obs_count < _CONFIDENCE_MEDIUM_THRESHOLD:
         return "low"
     if obs_count < _CONFIDENCE_HIGH_THRESHOLD:

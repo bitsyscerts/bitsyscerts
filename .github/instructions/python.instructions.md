@@ -132,3 +132,27 @@ src/api/
 - Database models (ORM) and API models (Pydantic) MUST be separate classes. MUST NOT use ORM
   models directly as Pydantic response models.
 - Migrations MUST be managed with Alembic. MUST NOT modify the database schema manually.
+
+---
+
+## Definition of Done — MANDATORY GATE
+
+No Python task is complete until every command below has been run **in the terminal**
+and produced **zero errors**. Do not summarise, do not declare the task done, do not
+hand back to the user until all three commands pass with no output.
+
+```
+# For files changed under src/api/
+cd /workspaces/bitsyscerts/src/api && source /workspaces/bitsyscerts/.venv/bin/activate && ruff check certsapi/ tests/ && ruff format --check certsapi/ tests/
+
+# For files changed under src/ctpool/
+cd /workspaces/bitsyscerts/src/ctpool && source /workspaces/bitsyscerts/.venv/bin/activate && ruff check ctpool/ tests/ && ruff format --check ctpool/ tests/
+```
+
+If either command reports violations:
+
+1. Run `ruff format <file>` to auto-fix formatting.
+2. Run `ruff check --fix <file>` to auto-fix safe lint violations.
+3. Fix any remaining violations manually.
+4. Re-run the check command until it passes.
+5. Only then declare the task complete.

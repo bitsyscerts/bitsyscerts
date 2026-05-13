@@ -84,8 +84,17 @@ export function StorageProjectionCard({
           <Group gap="xs">
             <ProfileBadge profile={projection.profile} />
             <ProjectionConfidenceBadge confidence={projection.confidence} />
-            <Badge variant="light" color="gray">
-              Estimate
+            <Badge
+              variant="light"
+              color={
+                (projection.sync_percent_by_observation ?? 0) >= 1
+                  ? "teal"
+                  : "gray"
+              }
+            >
+              {(projection.sync_percent_by_observation ?? 0) >= 1
+                ? "Actual"
+                : "Estimate"}
             </Badge>
           </Group>
         </Group>
@@ -135,7 +144,9 @@ export function StorageProjectionCard({
                         projection.planned_observations_completed,
                       )}{" "}
                       /{" "}
-                      {formatCompactNumber(projection.planned_observations_total)}{" "}
+                      {formatCompactNumber(
+                        projection.planned_observations_total,
+                      )}{" "}
                       observations
                     </Text>
                   </>
