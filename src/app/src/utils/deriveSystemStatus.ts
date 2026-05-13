@@ -74,7 +74,7 @@ function collectIngestionIssues(
   if (health.paused_logs > 0) {
     issues.push({
       severity: "action_needed",
-      message: `${String(health.paused_logs)} CT log(s) paused.`,
+      message: `${String(health.paused_logs)} CT log(s) paused — open "Inspect CT logs" for error details.`,
     });
   }
   if (health.rate_limited_logs > 0) {

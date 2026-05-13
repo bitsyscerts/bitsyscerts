@@ -209,4 +209,25 @@ describe("deriveSystemStatus", () => {
     expect(result.level).toBe("action_needed");
     expect(result.issues.length).toBeGreaterThan(1);
   });
+
+  it("returns action_needed with inspect-ct-logs hint when logs are paused", () => {
+    const result = deriveSystemStatus({
+      ...BASE_STATS,
+      ingestion_health: {
+        retrying_logs: 0,
+        rate_limited_logs: 0,
+        paused_logs: 2,
+        error_logs: 0,
+        stale_workers: 0,
+        retryable_error_total: 0,
+        terminal_error_total: 0,
+        recent_terminal_outcomes: 0,
+        status: "attention_needed",
+      },
+    });
+    expect(result.level).toBe("action_needed");
+    const pausedIssue = result.issues.find((i) => i.message.includes("paused"));
+    expect(pausedIssue).toBeDefined();
+    expect(pausedIssue?.message).toMatch(/Inspect CT logs/i);
+  });
 });

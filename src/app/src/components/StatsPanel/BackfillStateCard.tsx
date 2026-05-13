@@ -8,6 +8,7 @@ import {
   Table,
   Text,
 } from "@mantine/core";
+import { IconAlertTriangle } from "@tabler/icons-react";
 import type { BackfillStateItem, BackfillStateSummary } from "@/types";
 
 interface BackfillStateCardProps {
@@ -37,6 +38,11 @@ function formatProgress(value: number | null): string {
   return `${value.toFixed(1)}%`;
 }
 
+function formatErrorAt(at: string | null | undefined): string {
+  if (!at) return "";
+  return ` — ${new Date(at).toLocaleString()}`;
+}
+
 function BackfillStateRow({ item }: BackfillStateRowProps) {
   const color = statusColor(item);
   const label = item.log_name ?? item.log_source_id;
@@ -46,42 +52,82 @@ function BackfillStateRow({ item }: BackfillStateRowProps) {
       ? "-"
       : `${formatIndex(item.backfill_start_index)} → ${formatIndex(item.backfill_end_index)}`;
 
+  const DETAIL_STATUSES = new Set(["paused", "retrying", "error"]);
+  const hasPauseDetail =
+    DETAIL_STATUSES.has(item.status) &&
+    (item.last_error_message != null || item.last_error_type != null);
+  const errorLabel = [
+    item.last_error_type ? `[${item.last_error_type}]` : null,
+    item.last_error_message ?? "No error message recorded.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <Table.Tr>
-      <Table.Td>
-        <Text size="xs" truncate="end" maw={200}>
-          {label}
-        </Text>
-      </Table.Td>
-      <Table.Td>
-        <Badge size="xs" variant="light" color={color}>
-          {item.is_stale ? "stale" : item.status}
-        </Badge>
-      </Table.Td>
-      <Table.Td>
-        <Text size="xs" ff="monospace" truncate="end" maw={140}>
-          {item.claimed_by ?? "-"}
-        </Text>
-      </Table.Td>
-      <Table.Td>
-        <Text size="xs" ff="monospace">
-          {checkpoint}
-        </Text>
-      </Table.Td>
-      <Table.Td>
-        <Text size="xs" ff="monospace">
-          {window}
-        </Text>
-      </Table.Td>
-      <Table.Td>
-        <Stack gap={2}>
-          <Text size="xs">{formatProgress(item.progress_percent)}</Text>
-          {item.progress_percent !== null ? (
-            <Progress value={item.progress_percent} size="xs" color={color} />
-          ) : null}
-        </Stack>
-      </Table.Td>
-    </Table.Tr>
+    <>
+      <Table.Tr>
+        <Table.Td>
+          <Text size="xs" truncate="end" maw={200}>
+            {label}
+          </Text>
+        </Table.Td>
+        <Table.Td>
+          <Badge size="xs" variant="light" color={color}>
+            {item.is_stale ? "stale" : item.status}
+          </Badge>
+        </Table.Td>
+        <Table.Td>
+          <Text size="xs" ff="monospace" truncate="end" maw={140}>
+            {item.claimed_by ?? "-"}
+          </Text>
+        </Table.Td>
+        <Table.Td>
+          <Text size="xs" ff="monospace">
+            {checkpoint}
+          </Text>
+        </Table.Td>
+        <Table.Td>
+          <Text size="xs" ff="monospace">
+            {window}
+          </Text>
+        </Table.Td>
+        <Table.Td>
+          <Stack gap={2}>
+            <Text size="xs">{formatProgress(item.progress_percent)}</Text>
+            {item.progress_percent !== null ? (
+              <Progress value={item.progress_percent} size="xs" color={color} />
+            ) : null}
+          </Stack>
+        </Table.Td>
+      </Table.Tr>
+      {hasPauseDetail && (
+        <Table.Tr>
+          <Table.Td
+            colSpan={6}
+            py={4}
+            px="md"
+            bg="var(--mantine-color-red-light)"
+          >
+            <Group gap="xs" wrap="nowrap" align="flex-start">
+              <IconAlertTriangle
+                size={12}
+                color="var(--mantine-color-red-filled)"
+                style={{ flexShrink: 0, marginTop: 2 }}
+              />
+              <Text
+                size="xs"
+                c="red.4"
+                ff="monospace"
+                style={{ wordBreak: "break-all" }}
+              >
+                {errorLabel}
+                {formatErrorAt(item.last_error_at)}
+              </Text>
+            </Group>
+          </Table.Td>
+        </Table.Tr>
+      )}
+    </>
   );
 }
 
