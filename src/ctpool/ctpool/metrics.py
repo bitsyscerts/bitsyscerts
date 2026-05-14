@@ -237,7 +237,7 @@ async def prune_ingestion_metrics(
         .where(IngestionMetric.snapshot_at < cutoff)
         .returning(IngestionMetric.id)
     )
-    return len(result.all())
+    return result.rowcount
 
 
 @dataclass

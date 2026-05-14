@@ -7,6 +7,26 @@ applyTo: "**/*.py"
 
 ---
 
+> **STOP — MANDATORY LAST STEP BEFORE EVERY TASK COMPLETE**
+>
+> After **every** edit to any `.py` file you MUST run the two commands below (for the
+> relevant sub-project) and confirm zero violations before calling `task_complete` or
+> saying you are finished. This is not optional. Skipping it causes pre-commit failures
+> for the user on 100% of commits that touch Python files.
+>
+> ```bash
+> # src/ctpool changes:
+> cd /workspaces/bitsyscerts/src/ctpool && source /workspaces/bitsyscerts/.venv/bin/activate && ruff check --fix ctpool/ tests/ && ruff format ctpool/ tests/ && ruff check ctpool/ tests/
+>
+> # src/api changes:
+> cd /workspaces/bitsyscerts/src/api && source /workspaces/bitsyscerts/.venv/bin/activate && ruff check --fix certsapi/ tests/ && ruff format certsapi/ tests/ && ruff check certsapi/ tests/
+> ```
+>
+> The most common failure is **I001 — unsorted imports**, which `ruff check --fix`
+> resolves automatically. There is no excuse for skipping this step.
+
+---
+
 ## Style and Formatting
 
 - ALL Python code MUST comply with PEP-8 in full.

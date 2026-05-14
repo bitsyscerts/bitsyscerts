@@ -81,7 +81,7 @@ async def _rebuild_batch(
         """
     )
     result = await session.execute(stmt, {"ids": [str(i) for i in id_rows]})  # noqa: E501
-    updated = len(result.all())
+    updated = result.rowcount
     return updated, last_id
 
 

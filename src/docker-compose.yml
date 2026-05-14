@@ -112,7 +112,7 @@ services:
     image: "ghcr.io/bitsyscerts/bitsyscerts-app:${IMAGE_TAG:-latest}"
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-80}:80"
+      - "${FRONTEND_PORT:-80}:8080"
     environment:
       # Announcement banner — set in .env, applied at container startup.
       # No image rebuild required.
@@ -121,7 +121,7 @@ services:
       - BANNER_SEVERITY=${BANNER_SEVERITY:-info}
       - BANNER_ICON=${BANNER_ICON:-InfoCircle}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6

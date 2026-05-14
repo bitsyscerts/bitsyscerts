@@ -19,6 +19,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from sqlalchemy import func, select, text
+from sqlalchemy import table as sa_table
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -56,7 +57,7 @@ async def _query_db_size(
     rows: list[tuple[str, int]] = []
     for table in _SIZE_TABLES:
         count_result = await session.execute(
-            text(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+            select(func.count()).select_from(sa_table(table))
         )
         rows.append((table, int(count_result.scalar_one())))
     return total_size, rows

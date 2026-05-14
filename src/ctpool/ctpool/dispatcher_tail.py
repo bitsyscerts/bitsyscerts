@@ -284,4 +284,4 @@ async def reap_stale_tail_leases(
         .values(claimed_by=None, claimed_at=None, heartbeat_at=None)
         .returning(CtLogTailLease.id)
     )
-    return len(result.all())
+    return result.rowcount

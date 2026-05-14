@@ -32,6 +32,16 @@ ARG BUILD_VERSION
 LABEL org.opencontainers.image.title="bitsyscerts-app" \
       org.opencontainers.image.version="${BUILD_VERSION}"
 
-EXPOSE 80
+# Grant the nginx user write access to the directories it needs at runtime,
+# then drop privileges.  Port 80 requires root; use 8080 instead so the
+# container process never runs as root (CWE-250 / OWASP A04:2021).
+RUN chown -R nginx:nginx /usr/share/nginx/html \
+    && chown -R nginx:nginx /var/cache/nginx \
+    && touch /var/run/nginx.pid \
+    && chown nginx:nginx /var/run/nginx.pid
+
+USER nginx
+
+EXPOSE 8080
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
