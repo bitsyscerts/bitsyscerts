@@ -113,6 +113,13 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-80}:80"
+    environment:
+      # Announcement banner — set in .env, applied at container startup.
+      # No image rebuild required.
+      - BANNER_VISIBLE=${BANNER_VISIBLE:-false}
+      - BANNER_TEXT=${BANNER_TEXT:-}
+      - BANNER_SEVERITY=${BANNER_SEVERITY:-info}
+      - BANNER_ICON=${BANNER_ICON:-InfoCircle}
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 10s

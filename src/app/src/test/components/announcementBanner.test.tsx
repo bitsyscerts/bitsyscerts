@@ -87,3 +87,43 @@ describe("AnnouncementBanner", () => {
     expect(screen.getByRole("alert")).toBeInTheDocument();
   });
 });
+
+describe("AnnouncementBanner — window.__ENV__ runtime injection", () => {
+  afterEach(() => {
+    delete (window as Window & { __ENV__?: unknown }).__ENV__;
+    vi.unstubAllEnvs();
+  });
+
+  function setWindowEnv(env: Partial<NonNullable<Window["__ENV__"]>>) {
+    (window as Window & { __ENV__: typeof env }).__ENV__ = env;
+  }
+
+  it("shows the banner from window.__ENV__ without any VITE_ vars", () => {
+    setWindowEnv({ BANNER_VISIBLE: "true", BANNER_TEXT: "Runtime banner!" });
+    renderBanner();
+    expect(screen.getByText("Runtime banner!")).toBeInTheDocument();
+  });
+
+  it("window.__ENV__ takes precedence over VITE_ fallback", () => {
+    setWindowEnv({ BANNER_VISIBLE: "true", BANNER_TEXT: "From runtime" });
+    vi.stubEnv("VITE_BANNER_VISIBLE", "true");
+    vi.stubEnv("VITE_BANNER_TEXT", "From build");
+    renderBanner();
+    expect(screen.getByText("From runtime")).toBeInTheDocument();
+    expect(screen.queryByText("From build")).toBeNull();
+  });
+
+  it("hides the banner when window.__ENV__.BANNER_VISIBLE is false", () => {
+    setWindowEnv({ BANNER_VISIBLE: "false", BANNER_TEXT: "Hidden" });
+    renderBanner();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("falls back to VITE_ when window.__ENV__ is empty", () => {
+    setWindowEnv({});
+    vi.stubEnv("VITE_BANNER_VISIBLE", "true");
+    vi.stubEnv("VITE_BANNER_TEXT", "From VITE fallback");
+    renderBanner();
+    expect(screen.getByText("From VITE fallback")).toBeInTheDocument();
+  });
+});

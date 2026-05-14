@@ -82,10 +82,14 @@ export function DashboardOverview() {
   }
 
   const status = deriveSystemStatus(data);
-  const degradedLogs = data.ingestion_health?.degraded_logs ?? 0;
-  const degradedNote =
-    degradedLogs > 0
-      ? `${String(degradedLogs)} degraded data provider${degradedLogs === 1 ? "" : "s"}`
+  const health = data.ingestion_health;
+  const quietCount =
+    (health?.degraded_logs ?? 0) +
+    (health?.retrying_logs ?? 0) +
+    (health?.rate_limited_logs ?? 0);
+  const quietNote =
+    quietCount > 0
+      ? `${String(quietCount)} data provider${quietCount === 1 ? "" : "s"} temporarily unavailable — auto-recovering`
       : undefined;
 
   return (
@@ -95,7 +99,7 @@ export function DashboardOverview() {
           <SystemStatusCard
             level={status.level}
             issueCount={status.issues.length}
-            note={degradedNote}
+            note={quietNote}
           />
           <RefreshBar
             updatedAt={dataUpdatedAt}

@@ -77,18 +77,6 @@ function collectIngestionIssues(
       message: `${String(health.paused_logs)} CT log(s) paused — open "Inspect CT logs" for error details.`,
     });
   }
-  if (health.rate_limited_logs > 0) {
-    issues.push({
-      severity: "warning",
-      message: `${String(health.rate_limited_logs)} CT log(s) rate-limited.`,
-    });
-  }
-  if (health.retrying_logs > 0) {
-    issues.push({
-      severity: "warning",
-      message: `${String(health.retrying_logs)} CT log(s) retrying.`,
-    });
-  }
   return issues;
 }
 
