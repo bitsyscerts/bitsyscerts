@@ -48,6 +48,7 @@ from ctpool.exceptions import (
     UnsupportedEntryTypeError,
 )
 from ctpool.fetcher import fetch_entries, fetch_sth
+from ctpool.http_client import build_httpx_client
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_source import CtLogSource
 from ctpool.normalizer import build_normalized_entry
@@ -342,9 +343,11 @@ async def run_tail(
     _logger.info("tail worker starting worker_id=%s", _wid)
     total_processed = 0
     _batch = batch_size or settings.ct_default_batch_size
-    client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    client = build_httpx_client(settings)
     rate_limited_until: dict[_uuid.UUID, float] = {}
     rate_limit_hits: dict[_uuid.UUID, int] = {}
+    fetch_error_until: dict[_uuid.UUID, float] = {}
+    fetch_error_hits: dict[_uuid.UUID, int] = {}
 
     async with client:
         async with session_factory() as session:
@@ -404,6 +407,8 @@ async def run_tail(
 
                     now = time.monotonic()
                     if now < rate_limited_until.get(log.id, 0.0):
+                        continue
+                    if now < fetch_error_until.get(log.id, 0.0):
                         continue
 
                     limit_remaining = (
@@ -483,6 +488,20 @@ async def run_tail(
                             )
                     elif worker_counters.last_error_type is not None:
                         status = "error"
+                        hit_count = fetch_error_hits.get(log.id, 0) + 1
+                        fetch_error_hits[log.id] = hit_count
+                        backoff_seconds = min(
+                            settings.ct_rate_limit_backoff_max_seconds,
+                            settings.ct_rate_limit_backoff_seconds
+                            * (2 ** (hit_count - 1)),
+                        )
+                        fetch_error_until[log.id] = now + float(backoff_seconds)
+                        _logger.warning(
+                            "fetch error for log=%s (hit %d) — backing off %.0fs",
+                            log.id,
+                            hit_count,
+                            backoff_seconds,
+                        )
 
                     async with session_factory() as session:
                         async with session.begin():
@@ -510,6 +529,8 @@ async def run_tail(
                     if processed > 0:
                         rate_limit_hits.pop(log.id, None)
                         rate_limited_until.pop(log.id, None)
+                        fetch_error_hits.pop(log.id, None)
+                        fetch_error_until.pop(log.id, None)
 
                     total_processed += processed
                     if processed > 0 and on_batch is not None:
@@ -561,7 +582,7 @@ async def reset_tail_cursors(
         settings:        Validated application settings.
         log_id:          If set, restrict to a single log UUID.
     """
-    client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    client = build_httpx_client(settings)
     async with client:
         async with session_factory() as session:
             logs = await get_eligible_tail_logs(session)

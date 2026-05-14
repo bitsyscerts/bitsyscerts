@@ -146,6 +146,23 @@ class Settings(BaseSettings):
     ct_http_timeout_seconds: int = 30
     ct_max_retries: int = 5
     ct_backoff_max_seconds: int = 300
+    ct_operator_contact: str = ""
+    """Optional contact string included in the HTTP User-Agent header.
+
+    Set this to an email address, URL, or other identifier so that CT log
+    operators can reach the specific deployment if they observe unusual
+    traffic.  Example: ``admin@example.com`` or ``https://status.example.com``.
+    When empty (the default), the machine hostname alone is used.
+    """
+    ct_fetch_degraded_resume_seconds: int = 3600
+    """Seconds before a fetch-error-exhausted log is automatically retried.
+
+    When the per-log retry budget is exhausted by transient fetch errors
+    (HTTP 5xx, timeouts, connection errors) the log enters ``degraded``
+    status and is held off for this many seconds before any worker picks
+    it up again.  Defaults to 3600 (1 hour).  Only ``FATAL`` configuration
+    or protocol errors keep the log permanently ``paused``.
+    """
 
     # CT log list source — compile-time constant; not user-configurable at runtime
     # (SSRF prevention: CT log URLs originate from this trusted source only)

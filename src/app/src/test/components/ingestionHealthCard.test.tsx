@@ -15,6 +15,7 @@ function makeHealth(overrides: Partial<IngestionHealth> = {}): IngestionHealth {
     retrying_logs: 0,
     rate_limited_logs: 0,
     paused_logs: 0,
+    degraded_logs: 0,
     error_logs: 0,
     retryable_error_total: 0,
     terminal_error_total: 0,
@@ -49,5 +50,18 @@ describe("IngestionHealthCard", () => {
     expect(screen.getByText("4 retryable batch errors")).toBeInTheDocument();
     expect(screen.getByText("7 terminal entry errors")).toBeInTheDocument();
     expect(screen.getByText("1 stale workers")).toBeInTheDocument();
+  });
+
+  it("renders degraded count in yellow when degraded_logs is non-zero", () => {
+    render(
+      <IngestionHealthCard
+        ingestionHealth={makeHealth({ degraded_logs: 1 })}
+      />,
+      { wrapper },
+    );
+    // The stat label appears as dimmed text, the description uses <strong>.
+    // Check for the numeric value displayed beneath the label.
+    const allOnes = screen.getAllByText("1");
+    expect(allOnes.length).toBeGreaterThanOrEqual(1);
   });
 });

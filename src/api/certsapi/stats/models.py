@@ -322,6 +322,7 @@ class IngestionHealth(BaseModel):
     retrying_logs: int = 0
     rate_limited_logs: int = 0
     paused_logs: int = 0
+    degraded_logs: int = 0
     error_logs: int = 0
     stale_workers: int = 0
     retryable_error_total: int = 0

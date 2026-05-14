@@ -58,6 +58,7 @@ from ctpool.exceptions import (
     UnsupportedEntryTypeError,
 )
 from ctpool.fetcher import fetch_entries
+from ctpool.http_client import build_httpx_client
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -428,7 +429,7 @@ async def run_backfill_legacy(
     total_processed = 0
     _batch = batch_size or settings.ct_default_batch_size
     _days: int = days if days is not None else settings.ct_backfill_days
-    client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    client = build_httpx_client(settings)
     rate_limited_until: dict[_uuid.UUID, float] = {}
     rate_limit_hits: dict[_uuid.UUID, int] = {}
 

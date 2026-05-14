@@ -82,6 +82,11 @@ export function DashboardOverview() {
   }
 
   const status = deriveSystemStatus(data);
+  const degradedLogs = data.ingestion_health?.degraded_logs ?? 0;
+  const degradedNote =
+    degradedLogs > 0
+      ? `${String(degradedLogs)} degraded data provider${degradedLogs === 1 ? "" : "s"}`
+      : undefined;
 
   return (
     <>
@@ -90,6 +95,7 @@ export function DashboardOverview() {
           <SystemStatusCard
             level={status.level}
             issueCount={status.issues.length}
+            note={degradedNote}
           />
           <RefreshBar
             updatedAt={dataUpdatedAt}

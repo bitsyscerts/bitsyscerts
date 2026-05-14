@@ -217,6 +217,7 @@ describe("deriveSystemStatus", () => {
         retrying_logs: 0,
         rate_limited_logs: 0,
         paused_logs: 2,
+        degraded_logs: 0,
         error_logs: 0,
         stale_workers: 0,
         retryable_error_total: 0,
@@ -229,5 +230,25 @@ describe("deriveSystemStatus", () => {
     const pausedIssue = result.issues.find((i) => i.message.includes("paused"));
     expect(pausedIssue).toBeDefined();
     expect(pausedIssue?.message).toMatch(/Inspect CT logs/i);
+  });
+
+  it("returns healthy (not warning) when only degraded logs present", () => {
+    const result = deriveSystemStatus({
+      ...BASE_STATS,
+      ingestion_health: {
+        retrying_logs: 0,
+        rate_limited_logs: 0,
+        paused_logs: 0,
+        degraded_logs: 1,
+        error_logs: 0,
+        stale_workers: 0,
+        retryable_error_total: 0,
+        terminal_error_total: 0,
+        recent_terminal_outcomes: 0,
+        status: "ok",
+      },
+    });
+    expect(result.level).toBe("healthy");
+    expect(result.issues).toHaveLength(0);
   });
 });

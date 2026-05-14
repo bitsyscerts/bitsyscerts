@@ -69,6 +69,7 @@ async def query_backfill_state_summary(
         "processing": 0,
         "retrying": 0,
         "rate_limited": 0,
+        "degraded": 0,
         "paused": 0,
         "complete": 0,
         "error": 0,

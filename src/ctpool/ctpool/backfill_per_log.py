@@ -50,6 +50,7 @@ from ctpool.exceptions import (
     UnsupportedEntryTypeError,
 )
 from ctpool.fetcher import fetch_entries
+from ctpool.http_client import build_httpx_client
 from ctpool.ingestion_errors import (
     IngestionFailureClass,
     classify_ingestion_error,
@@ -71,6 +72,7 @@ from ctpool.worker_claim import (
     extend_window_backward,
     increment_terminal_error_count,
     mark_log_complete,
+    mark_log_degraded,
     mark_log_paused,
     mark_log_retrying,
     reap_stale_log_claims,
@@ -390,13 +392,24 @@ async def _handle_batch_failure(
 
     async with session_factory() as session:
         async with session.begin():
-            if is_fatal or budget_exceeded:
+            if is_fatal:
+                # Configuration or protocol error — needs operator.
                 await mark_log_paused(
                     session,
                     log_source_id=log_source_id,
                     worker_id=worker_id,
                     error_type=error_type,
                     error_message=error_message,
+                )
+            elif budget_exceeded:
+                # Transient error (fetch, DB, unknown) — auto-resume after cooldown.
+                await mark_log_degraded(
+                    session,
+                    log_source_id=log_source_id,
+                    worker_id=worker_id,
+                    error_type=error_type,
+                    error_message=error_message,
+                    resume_seconds=settings.ct_fetch_degraded_resume_seconds,
                 )
             else:
                 await mark_log_retrying(
@@ -488,7 +501,7 @@ async def run_backfill_per_log(
     _days: int = days if days is not None else settings.ct_backfill_days
     rate_limited_until: dict[_uuid.UUID, float] = {}
     rate_limit_hits: dict[_uuid.UUID, int] = {}
-    client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    client = build_httpx_client(settings)
 
     async with client:
         await _initialize_states(

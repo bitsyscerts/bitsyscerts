@@ -378,12 +378,13 @@ def _build_ingestion_health_dict(
     NOTE (21-50 warning): many independent counters are gathered from three
     different input dicts; extraction would only produce trivial helpers.
     """
-    retrying = rate_limited = paused = error_logs = 0
+    retrying = rate_limited = paused = error_logs = degraded = 0
     total_retryable = total_terminal = 0
     if backfill_state is not None:
         retrying = int(backfill_state.get("retrying") or 0)
         rate_limited = int(backfill_state.get("rate_limited") or 0)
         paused = int(backfill_state.get("paused") or 0)
+        degraded = int(backfill_state.get("degraded") or 0)
         error_logs = int(backfill_state.get("error") or 0)
         for item in backfill_state.get("items") or []:
             total_retryable += int(item.get("retryable_error_count") or 0)
@@ -402,6 +403,7 @@ def _build_ingestion_health_dict(
         "retrying_logs": retrying,
         "rate_limited_logs": rate_limited,
         "paused_logs": paused,
+        "degraded_logs": degraded,
         "error_logs": error_logs,
         "stale_workers": stale_workers,
         "retryable_error_total": total_retryable,

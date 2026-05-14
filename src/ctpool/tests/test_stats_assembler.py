@@ -349,6 +349,7 @@ class TestIngestionHealth:
             "processing": 3,
             "retrying": 1,
             "rate_limited": 1,
+            "degraded": 0,
             "paused": 0,
             "complete": 0,
             "error": 0,
@@ -395,6 +396,7 @@ class TestIngestionHealth:
         assert health["retrying_logs"] == 1
         assert health["rate_limited_logs"] == 1
         assert health["paused_logs"] == 0
+        assert health["degraded_logs"] == 0
         assert health["error_logs"] == 0
         assert health["stale_workers"] == 1
         assert health["retryable_error_total"] == 5
@@ -425,6 +427,32 @@ class TestIngestionHealth:
         health = result["ingestion_health"]
         assert health["paused_logs"] == 2
         assert health["status"] == "attention_needed"
+
+    def test_ingestion_health_degraded_does_not_trigger_attention(self) -> None:
+        """Degraded logs auto-resume and should not raise status to attention_needed."""
+        result = assemble_stats_payload(
+            global_counts=_GLOBAL_COUNTS,
+            database_size_bytes=1_000_000,
+            backfill_progress=_BACKFILL_PROGRESS,
+            backfill_status_counts=_BACKFILL_STATUS,
+            storage_data=_STORAGE_DATA,
+            contention_snapshot=_minimal_contention(),
+            rate_rows=[],
+            freshness_row=_FRESHNESS,
+            outcome_counts={},
+            metrics_summary=_METRICS_SUMMARY,
+            audit_counts={},
+            per_log_rows=[],
+            active_settings=None,
+            now=datetime(2025, 1, 1, tzinfo=UTC),
+            backfill_state=self._state(degraded=3),
+            worker_summary=self._workers(),
+            dispatch_mode="per-log",
+        )
+        health = result["ingestion_health"]
+        assert health["degraded_logs"] == 3
+        assert health["paused_logs"] == 0
+        assert health["status"] == "ok"
 
 
 class TestMaintenanceCard:

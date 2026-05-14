@@ -9,6 +9,8 @@ Exports:
     update_log_progress        — Persist durable checkpoint + heartbeat + status.
     mark_log_retrying          — Record retryable failure without advancing checkpoint.
     mark_log_complete          — Mark a log's backfill as fully complete.
+    mark_log_degraded          — Hold a log in auto-resuming cooldown after
+                                 retries exhausted.
     extend_window_backward     — Move backfill_start_index earlier and update coverage.
     update_observed_oldest     — Persist the oldest observed not_before date.
     reap_stale_log_claims      — Reset expired claims so other workers can proceed.
@@ -34,12 +36,14 @@ _STATUS_CLAIMED = "claimed"
 _STATUS_PROCESSING = "processing"
 _STATUS_RETRYING = "retrying"
 _STATUS_RATE_LIMITED = "rate_limited"
+_STATUS_DEGRADED = "degraded"
 _STATUS_PAUSED = "paused"
 _STATUS_COMPLETE = "complete"
 _STATUS_ERROR = "error"
 
 # Statuses excluded from auto-claim. Paused/error logs require explicit
-# operator action; complete logs are done.
+# operator action; complete logs are done.  Degraded logs are claimable
+# but only once their next_retry_at deadline has passed.
 _NON_CLAIMABLE_STATUSES: tuple[str, ...] = (
     _STATUS_PAUSED,
     _STATUS_ERROR,
@@ -170,6 +174,13 @@ async def claim_any_eligible_log(
         CtLogBackfillState.heartbeat_at.is_not(None),
         CtLogBackfillState.heartbeat_at >= cutoff,
     )
+    # Degraded logs are claimable, but only once their cooldown has expired.
+    now = datetime.now(UTC)
+    degraded_ready = or_(
+        CtLogBackfillState.status != _STATUS_DEGRADED,
+        CtLogBackfillState.next_retry_at.is_(None),
+        CtLogBackfillState.next_retry_at <= now,
+    )
     stmt = (
         select(CtLogBackfillState)
         .join(
@@ -180,6 +191,7 @@ async def claim_any_eligible_log(
         .where(CtLogBackfillState.status.notin_(_NON_CLAIMABLE_STATUSES))
         .where(CtLogBackfillState.completed_at.is_(None))
         .where(or_(CtLogBackfillState.claimed_by.is_(None), ~fresh_claim))
+        .where(degraded_ready)
         .order_by(CtLogBackfillState.heartbeat_at.asc().nulls_first())
         .limit(1)
         .with_for_update(skip_locked=True, of=CtLogBackfillState)
@@ -422,11 +434,15 @@ async def mark_log_paused(
     error_type: str,
     error_message: str,
 ) -> None:
-    """Mark the log as paused after exhausting the retry budget.
+    """Mark the log as paused after a fatal or unrecoverable failure.
 
     Releases the worker's claim so another worker does not immediately
     re-pick the log; the status remains ``paused`` until an operator
     explicitly resumes the log or a fresh ingestion run resets it.
+
+    Use this only for ``FATAL_*`` failure classes (configuration errors,
+    protocol violations).  For exhausted retries on transient fetch errors
+    use :func:`mark_log_degraded` instead.
     """
     now = datetime.now(UTC)
     await session.execute(
@@ -444,6 +460,47 @@ async def mark_log_paused(
             last_error_type=error_type,
             last_error_message=error_message,
             last_error_at=now,
+        )
+    )
+
+
+async def mark_log_degraded(
+    session: AsyncSession,
+    *,
+    log_source_id: uuid.UUID,
+    worker_id: str,
+    error_type: str,
+    error_message: str,
+    resume_seconds: int,
+) -> None:
+    """Mark the log as degraded after exhausting retries on a transient error.
+
+    Unlike ``paused``, a degraded log is automatically re-queued once
+    *resume_seconds* have elapsed — no operator action is required.  The
+    retry budget (``retry_count``) is reset so the next claim starts fresh.
+
+    Use this for ``RETRYABLE_*`` failure classes when the budget is
+    exhausted.  Only ``FATAL_*`` classes should call :func:`mark_log_paused`.
+    """
+    now = datetime.now(UTC)
+    resume_at = now + timedelta(seconds=resume_seconds)
+    await session.execute(
+        update(CtLogBackfillState)
+        .where(
+            CtLogBackfillState.log_source_id == log_source_id,
+            CtLogBackfillState.claimed_by == worker_id,
+        )
+        .values(
+            status=_STATUS_DEGRADED,
+            claimed_by=None,
+            claimed_at=None,
+            heartbeat_at=now,
+            updated_at=now,
+            last_error_type=error_type,
+            last_error_message=error_message,
+            last_error_at=now,
+            next_retry_at=resume_at,
+            retry_count=0,
         )
     )
 

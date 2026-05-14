@@ -57,14 +57,15 @@ export function IngestionHealthCard({
             value={ingestionHealth.rate_limited_logs}
           />
           <Stat
+            label="Degraded"
+            value={ingestionHealth.degraded_logs}
+            highlight={ingestionHealth.degraded_logs > 0}
+            highlightColor="yellow"
+          />
+          <Stat
             label="Paused"
             value={ingestionHealth.paused_logs}
             highlight={ingestionHealth.paused_logs > 0}
-          />
-          <Stat
-            label="Errored"
-            value={ingestionHealth.error_logs}
-            highlight={ingestionHealth.error_logs > 0}
           />
         </SimpleGrid>
 
@@ -81,9 +82,10 @@ export function IngestionHealthCard({
         </Group>
 
         <Text size="xs" c="dimmed">
-          Per-log workers retry transient HTTP, parse, duplicate, timeout and
-          database conditions automatically. Operators only need to intervene
-          when paused/errored counts are non-zero.
+          Per-log workers retry transient HTTP, parse, and database errors
+          automatically. <strong>Degraded</strong> logs have hit their retry
+          limit due to an external outage and will resume on their own. Only{" "}
+          <strong>paused</strong> logs need operator attention.
         </Text>
       </Stack>
     </Card>
@@ -114,15 +116,21 @@ interface StatProps {
   label: string;
   value: number;
   highlight?: boolean;
+  highlightColor?: string;
 }
 
-function Stat({ label, value, highlight = false }: StatProps) {
+function Stat({
+  label,
+  value,
+  highlight = false,
+  highlightColor = "orange",
+}: StatProps) {
   return (
     <Stack gap={2}>
       <Text size="xs" c="dimmed">
         {label}
       </Text>
-      <Text fw={600} c={highlight ? "orange" : undefined}>
+      <Text fw={600} c={highlight ? highlightColor : undefined}>
         {value}
       </Text>
     </Stack>
