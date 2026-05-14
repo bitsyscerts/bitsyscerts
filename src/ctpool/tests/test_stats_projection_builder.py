@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from ctpool.stats_projection_builder import (
     _build_projection_base,
@@ -250,3 +250,98 @@ class TestBuildProjectionDictNormalPath:
             ct_log_progress=None,
         )
         assert "confidence" in result
+
+
+class TestBuildProjectionDictRecalibration:
+    """Recalibration anchors projected_final to actual DB size when warranted."""
+
+    def test_fully_synced_anchors_to_actual_db_size(self) -> None:
+        """When completed == total, projected_final must equal database_size_bytes."""
+        result = build_projection_dict(
+            global_counts=_make_global_counts(obs=5_000),
+            database_size_bytes=20_000_000,
+            backfill_progress={
+                "planned_total": 5_000,
+                "planned_completed": 5_000,
+            },
+            active_settings=None,
+            ct_log_progress=None,
+        )
+        assert result["projected_final_database_size_bytes"] == 20_000_000
+        assert result["confidence"] == "high"
+
+    def test_fully_synced_storage_pct_is_one(self) -> None:
+        """storage_percent_of_projected == 1.0 when anchored to actual."""
+        result = build_projection_dict(
+            global_counts=_make_global_counts(obs=5_000),
+            database_size_bytes=20_000_000,
+            backfill_progress={
+                "planned_total": 5_000,
+                "planned_completed": 5_000,
+            },
+            active_settings=None,
+            ct_log_progress=None,
+        )
+        assert result["storage_percent_of_projected"] == 1.0
+
+    def test_near_complete_and_over_projected_recalibrates(self) -> None:
+        """When actual > profile formula estimate and sync >= 95%, anchor to actual."""
+        db_size = 30_000_000
+        total = 100_000
+        completed = 96_000  # 96% — above threshold
+
+        # The profile formula has a large floor driven by daily CT entry rates,
+        # so we mock _try_profile_projection to return a result smaller than the
+        # actual DB size to isolate the recalibration logic under test.
+        mock_profile = MagicMock()
+        mock_profile.projected_total_bytes = 10_000_000  # 10 MB < 30 MB actual
+        mock_profile.notes = []
+        mock_profile.profile = "lite"
+        for field in (
+            "hostname_index_bytes",
+            "certificate_metadata_bytes",
+            "certificate_public_key_bytes",
+            "raw_cert_der_bytes",
+            "ct_observations_bytes",
+            "entry_outcomes_bytes",
+            "cert_hostname_relationships_bytes",
+            "metrics_and_ops_bytes",
+            "index_overhead_bytes",
+        ):
+            setattr(mock_profile, field, 0)
+
+        with patch(
+            "ctpool.stats_projection_builder._try_profile_projection",
+            return_value=mock_profile,
+        ):
+            result = build_projection_dict(
+                global_counts=_make_global_counts(obs=5_000),
+                database_size_bytes=db_size,
+                backfill_progress={
+                    "planned_total": total,
+                    "planned_completed": completed,
+                },
+                active_settings=_make_settings(),
+                ct_log_progress=None,
+            )
+        assert result["projected_final_database_size_bytes"] == db_size
+        assert result["confidence"] == "high"
+
+    def test_low_sync_over_projected_does_not_recalibrate(self) -> None:
+        """When actual > formula but sync < 95%, do NOT anchor to actual."""
+        db_size = 50_000_000
+        total = 100_000
+        completed = 10_000  # 10% — below threshold
+        result = build_projection_dict(
+            global_counts=_make_global_counts(obs=5_000),
+            database_size_bytes=db_size,
+            backfill_progress={
+                "planned_total": total,
+                "planned_completed": completed,
+            },
+            active_settings=None,
+            ct_log_progress=None,
+        )
+        # Should NOT be anchored — linear formula drives projected_final higher
+        # than db_size because there is lots of remaining work.
+        assert result["projected_final_database_size_bytes"] > db_size

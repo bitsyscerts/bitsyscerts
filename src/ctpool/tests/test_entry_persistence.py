@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import DBAPIError
 
@@ -54,7 +54,7 @@ async def test_persist_entry_with_retry_uses_short_transaction() -> None:
         )
 
     session.begin.assert_called_once()
-    write_mock.assert_awaited_once_with(session, entry)
+    write_mock.assert_awaited_once_with(session, entry, flags=ANY)
     assert result == EntryWriteMetrics()
 
 
@@ -83,4 +83,7 @@ async def test_persist_entry_with_retry_retries_with_new_transaction() -> None:
 
     assert session.begin.call_count == 2
     assert write_mock.await_count == 2
+    assert all(
+        c == ((session, entry), {"flags": ANY}) for c in write_mock.await_args_list
+    )
     assert result == EntryWriteMetrics()

@@ -58,6 +58,7 @@ from ctpool.exceptions import (
     UnsupportedEntryTypeError,
 )
 from ctpool.fetcher import fetch_entries
+from ctpool.http_client import build_httpx_client
 from ctpool.metrics import LogMetricsAccumulator
 from ctpool.models.log_backfill_range import CtLogBackfillRange
 from ctpool.models.log_source import CtLogSource
@@ -68,6 +69,7 @@ from ctpool.outcome_constants import (
     OUTCOME_WRITE_ERROR,
 )
 from ctpool.parser import parse_leaf_entry
+from ctpool.storage_modes import CertStorageMode, flags_for_mode
 from ctpool.worker_activity_details import build_worker_counters
 from ctpool.worker_registry import (
     WorkerCounters,
@@ -122,6 +124,7 @@ async def _process_range_batch(
     end = min(start + batch - 1, claimed.end_index)
 
     response = await fetch_entries(log_url, start, end, client)
+    cert_flags = flags_for_mode(CertStorageMode(settings.ct_cert_storage_mode))
     count = 0
     parsed_count = 0
     retry_accumulator = DbRetryPressureAccumulator()
@@ -159,6 +162,7 @@ async def _process_range_batch(
                 base_backoff_seconds=settings.ct_deadlock_base_backoff_seconds,
                 max_backoff_seconds=settings.ct_deadlock_max_backoff_seconds,
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
+                flags=cert_flags,
             )
             count += 1
             metrics.record_entry_write_metrics(write_metrics)
@@ -425,7 +429,7 @@ async def run_backfill_legacy(
     total_processed = 0
     _batch = batch_size or settings.ct_default_batch_size
     _days: int = days if days is not None else settings.ct_backfill_days
-    client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    client = build_httpx_client(settings)
     rate_limited_until: dict[_uuid.UUID, float] = {}
     rate_limit_hits: dict[_uuid.UUID, int] = {}
 

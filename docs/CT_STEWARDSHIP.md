@@ -48,6 +48,33 @@ delay when a CT log returns HTTP 429 (Too Many Requests). It also backs off on s
 errors (HTTP 5xx) and connection timeouts. CT log endpoints experiencing issues are
 marked as degraded in the operator dashboard.
 
+### Client identification
+
+Every request to a CT log includes a descriptive `User-Agent` header so that log
+operators can identify the software and the specific deployment making requests:
+
+```
+bitsyscerts-ctpool/1.2.3 (worker.example.com; +https://github.com/bitsyscerts/bitsyscerts; admin@example.com)
+```
+
+The three components are:
+
+| Component | Source | Purpose |
+|---|---|---|
+| `bitsyscerts-ctpool/<version>` | Build version | Identifies the software and release |
+| Machine FQDN | `socket.getfqdn()` at startup | Identifies the specific host making requests |
+| `CT_OPERATOR_CONTACT` | Env var (optional) | Email or URL the **deploying operator** can be reached at |
+
+The machine FQDN is always included automatically. The `CT_OPERATOR_CONTACT` field is
+optional but strongly encouraged — see [Operator Responsibilities](#operator-responsibilities)
+below.
+
+This matters because CT logs are operated by humans who bear real infrastructure costs.
+If a deployment misbehaves — sends excessive traffic, ignores back-off signals, or
+creates unusual load — the log operator needs a way to identify and reach the
+responsible party. Without a contact, they can only block the IP. With one, they can
+reach out directly and the issue can be resolved without disrupting the deployment.
+
 ### Disk and storage awareness
 
 The disk guard monitors available space on the PostgreSQL data mount before each write
@@ -82,6 +109,16 @@ Operators running BitsysCerts accept responsibility for their deployment's behav
 toward public CT log infrastructure. Specifically:
 
 - **Do not remove rate-limit back-off logic** from the ingestion pipeline.
+- **Set `CT_OPERATOR_CONTACT` to a working email address or status URL** for your
+  deployment. This is the single most considerate thing you can do. CT log operators
+  run critical public infrastructure, often as a community service. If your instance
+  sends unexpected traffic, they need a way to reach you rather than having to
+  silently block your IP. Example:
+  ```
+  CT_OPERATOR_CONTACT=ct-admin@myorg.example.com
+  ```
+  A project URL, monitoring endpoint, or abuse contact are all acceptable alternatives.
+  The value is included verbatim in the `User-Agent` header on every outbound request.
 - **Do not set `CT_MAX_BATCH_SIZE` or worker concurrency to extreme values** without
   understanding the impact on log operators.
 - **Tune `CT_BACKFILL_DAYS` to your actual needs.** A 30-day window is the default.

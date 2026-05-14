@@ -40,7 +40,6 @@ def _make_status_callback(console: Console) -> Callable[[str], None]:
 
 async def run_sync_logs(console: Console) -> None:
     """Async implementation of the sync-logs command."""
-    import httpx
 
     from ctpool.log_discovery import fetch_log_list, sync_log_sources
     from ctpool.log_prober import probe_log
@@ -49,7 +48,9 @@ async def run_sync_logs(console: Console) -> None:
     engine = create_engine(settings)
     factory = create_session_factory(engine)
 
-    async with httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds) as client:
+    from ctpool.http_client import build_httpx_client
+
+    async with build_httpx_client(settings) as client:
         log_list = await fetch_log_list(client)
         async with factory() as session:
             upserted, operator_count = await sync_log_sources(session, log_list)

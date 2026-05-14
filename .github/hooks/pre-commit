@@ -14,6 +14,17 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 STAGED="$(git diff --cached --name-only)"
 
+# Resolve ruff: prefer the repo venv, then PATH, then fail loudly.
+VENV_RUFF="$REPO_ROOT/.venv/bin/ruff"
+if [[ -x "$VENV_RUFF" ]]; then
+  RUFF="$VENV_RUFF"
+elif command -v ruff &>/dev/null; then
+  RUFF="ruff"
+else
+  printf '\033[1;31m[pre-commit] ERROR:\033[0m ruff not found. Run: cd %s && python -m pip install ruff\n' "$REPO_ROOT" >&2
+  exit 1
+fi
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 log()  { printf '\033[1;36m[pre-commit]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[pre-commit] FAILED:\033[0m %s\n' "$*" >&2; }
@@ -37,8 +48,8 @@ fi
 if has_changes '^src/api/'; then
   log "Linting certsapi (ruff)…"
   if (cd "$REPO_ROOT/src/api" && \
-      ruff check certsapi/ tests/ && \
-      ruff format --check certsapi/ tests/); then
+      "$RUFF" check certsapi/ tests/ && \
+      "$RUFF" format --check certsapi/ tests/); then
     log "certsapi lint passed."
   else
     fail "certsapi lint failed. Run 'ruff check certsapi/ tests/' in src/api."
@@ -50,8 +61,8 @@ fi
 if has_changes '^src/ctpool/'; then
   log "Linting ctpool (ruff)…"
   if (cd "$REPO_ROOT/src/ctpool" && \
-      ruff check ctpool/ tests/ && \
-      ruff format --check ctpool/ tests/); then
+      "$RUFF" check ctpool/ tests/ && \
+      "$RUFF" format --check ctpool/ tests/); then
     log "ctpool lint passed."
   else
     fail "ctpool lint failed. Run 'ruff check ctpool/ tests/' in src/ctpool."

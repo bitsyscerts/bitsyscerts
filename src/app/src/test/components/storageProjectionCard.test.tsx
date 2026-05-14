@@ -108,4 +108,39 @@ describe("StorageProjectionCard", () => {
       screen.getByText(/configured minimum free disk/i),
     ).toBeInTheDocument();
   });
+
+  it("shows 'Estimate' badge when sync is not complete", () => {
+    render(
+      <AllProviders>
+        <StorageProjectionCard
+          projection={makeProjection({ sync_percent_by_observation: 0.5 })}
+        />
+      </AllProviders>,
+    );
+    expect(screen.getByText("Estimate")).toBeInTheDocument();
+    expect(screen.queryByText("Actual")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Actual' badge when sync is fully complete", () => {
+    render(
+      <AllProviders>
+        <StorageProjectionCard
+          projection={makeProjection({ sync_percent_by_observation: 1.0 })}
+        />
+      </AllProviders>,
+    );
+    expect(screen.getByText("Actual")).toBeInTheDocument();
+    expect(screen.queryByText("Estimate")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Estimate' badge when sync_percent is null", () => {
+    render(
+      <AllProviders>
+        <StorageProjectionCard
+          projection={makeProjection({ sync_percent_by_observation: null })}
+        />
+      </AllProviders>,
+    );
+    expect(screen.getByText("Estimate")).toBeInTheDocument();
+  });
 });

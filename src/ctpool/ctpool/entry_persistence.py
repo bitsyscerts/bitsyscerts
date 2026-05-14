@@ -20,7 +20,17 @@ from ctpool.outcome_constants import OUTCOME_STORED
 from ctpool.outcome_writer import upsert_entry_outcome
 from ctpool.pipeline_schemas import NormalizedEntry
 from ctpool.retry import run_with_db_retry
+from ctpool.storage_modes import (
+    CertificatePersistenceFlags,
+    CertStorageMode,
+    flags_for_mode,
+)
 from ctpool.writer import write_normalized_entry
+
+# Matches the default in writer.py — used when the caller does not supply flags.
+_DEFAULT_FLAGS: CertificatePersistenceFlags = flags_for_mode(
+    CertStorageMode.METADATA_SPKI
+)
 
 
 async def persist_entry_with_retry(
@@ -31,6 +41,7 @@ async def persist_entry_with_retry(
     base_backoff_seconds: float,
     max_backoff_seconds: float,
     on_retry: Callable[[int, BaseException, float], None] | None = None,
+    flags: CertificatePersistenceFlags = _DEFAULT_FLAGS,
 ) -> EntryWriteMetrics:
     """Write one normalized entry and record outcome=stored atomically.
 
@@ -45,11 +56,12 @@ async def persist_entry_with_retry(
         base_backoff_seconds: Initial retry delay.
         max_backoff_seconds: Maximum retry delay.
         on_retry: Optional retry callback for logging.
+        flags: Write-path flags derived from the active cert storage mode.
     """
 
     async def _write_once() -> EntryWriteMetrics:
         async with session.begin():
-            result = await write_normalized_entry(session, entry)
+            result = await write_normalized_entry(session, entry, flags=flags)
             await upsert_entry_outcome(
                 session,
                 entry.log_source_id,

@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
+# Mirrors ctpool.profile_projection._SYNC_RECALIBRATE_THRESHOLD.
+# Defined here to avoid a runtime import in the hot projection path.
+_SYNC_RECALIBRATE_THRESHOLD = 0.95
+
 
 def _resolve_effective_progress(
     backfill_progress: dict[str, int],
@@ -101,6 +105,22 @@ def _build_available_projection(
         notes = ["Projection is based on current bytes per CT observation."]
         pb = "linear_per_observation"
         profile_name = None
+
+    # Recalibrate: when ingestion is complete (or near-complete and the
+    # formula has already been proven wrong), anchor the projection to the
+    # measured DB size.  Estimation no longer helps when we have ground truth.
+    _sync_pct_raw = (
+        min(planned_completed, planned_total) / planned_total
+        if planned_total > 0
+        else 0.0
+    )
+    if _sync_pct_raw >= 1.0 or (
+        database_size_bytes > projected_final
+        and _sync_pct_raw >= _SYNC_RECALIBRATE_THRESHOLD
+    ):
+        projected_final = database_size_bytes
+        confidence = "high"
+        notes = ["Projection anchored to measured database size (ingestion complete)."]
 
     projected_remaining = max(projected_final - database_size_bytes, 0)
     sync_pct = (
@@ -213,7 +233,14 @@ def build_projection_dict(
             ],
         }
 
-    confidence = compute_projection_confidence(max(obs_count, 1))
+    confidence = compute_projection_confidence(
+        max(obs_count, 1),
+        sync_percent=(
+            min(planned_completed, planned_total) / planned_total
+            if planned_total > 0
+            else 0.0
+        ),
+    )
     profile_result = _try_profile_projection(global_counts, active_settings)
 
     return _build_available_projection(

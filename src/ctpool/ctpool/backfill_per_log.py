@@ -50,6 +50,7 @@ from ctpool.exceptions import (
     UnsupportedEntryTypeError,
 )
 from ctpool.fetcher import fetch_entries
+from ctpool.http_client import build_httpx_client
 from ctpool.ingestion_errors import (
     IngestionFailureClass,
     classify_ingestion_error,
@@ -64,12 +65,14 @@ from ctpool.outcome_constants import (
     OUTCOME_WRITE_ERROR,
 )
 from ctpool.parser import parse_leaf_entry
+from ctpool.storage_modes import CertStorageMode, flags_for_mode
 from ctpool.worker_activity_details import build_worker_counters
 from ctpool.worker_claim import (
     claim_any_eligible_log,
     extend_window_backward,
     increment_terminal_error_count,
     mark_log_complete,
+    mark_log_degraded,
     mark_log_paused,
     mark_log_retrying,
     reap_stale_log_claims,
@@ -119,6 +122,7 @@ async def _process_index_batch(
         written entries, or ``None`` when no entries were written.
     """
     response = await fetch_entries(log_url, start_index, end_index, client)
+    cert_flags = flags_for_mode(CertStorageMode(settings.ct_cert_storage_mode))
     count = 0
     parsed_count = 0
     terminal_count = 0
@@ -156,6 +160,7 @@ async def _process_index_batch(
                 base_backoff_seconds=settings.ct_deadlock_base_backoff_seconds,
                 max_backoff_seconds=settings.ct_deadlock_max_backoff_seconds,
                 on_retry=build_db_retry_callback(retry_accumulator, _on_retry),
+                flags=cert_flags,
             )
             count += 1
             metrics.record_entry_write_metrics(write_metrics)
@@ -387,13 +392,24 @@ async def _handle_batch_failure(
 
     async with session_factory() as session:
         async with session.begin():
-            if is_fatal or budget_exceeded:
+            if is_fatal:
+                # Configuration or protocol error — needs operator.
                 await mark_log_paused(
                     session,
                     log_source_id=log_source_id,
                     worker_id=worker_id,
                     error_type=error_type,
                     error_message=error_message,
+                )
+            elif budget_exceeded:
+                # Transient error (fetch, DB, unknown) — auto-resume after cooldown.
+                await mark_log_degraded(
+                    session,
+                    log_source_id=log_source_id,
+                    worker_id=worker_id,
+                    error_type=error_type,
+                    error_message=error_message,
+                    resume_seconds=settings.ct_fetch_degraded_resume_seconds,
                 )
             else:
                 await mark_log_retrying(
@@ -485,7 +501,7 @@ async def run_backfill_per_log(
     _days: int = days if days is not None else settings.ct_backfill_days
     rate_limited_until: dict[_uuid.UUID, float] = {}
     rate_limit_hits: dict[_uuid.UUID, int] = {}
-    client = httpx.AsyncClient(timeout=settings.ct_http_timeout_seconds)
+    client = build_httpx_client(settings)
 
     async with client:
         await _initialize_states(

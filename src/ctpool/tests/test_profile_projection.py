@@ -6,6 +6,7 @@ from ctpool.profile_projection import (
     ProfileAwareProjectionResult,
     bytes_per_observation_range,
     compute_profile_aware_projection,
+    compute_projection_confidence,
     project_storage,
 )
 from ctpool.storage_modes import CertStorageMode, StorageProfile
@@ -178,3 +179,32 @@ def test_project_storage_positive_gb_values() -> None:
     result = project_storage(1_000_000, CertStorageMode.METADATA_SPKI)
     assert result.gb_low > 0
     assert result.gb_high > result.gb_low
+
+
+# --- compute_projection_confidence -------------------------------------------
+
+
+def test_confidence_low_below_1m() -> None:
+    """obs_count < 1M returns 'low' when sync is not near complete."""
+    assert compute_projection_confidence(500_000) == "low"
+
+
+def test_confidence_medium_between_1m_and_100m() -> None:
+    """1M <= obs_count < 100M returns 'medium' when sync is not near complete."""
+    assert compute_projection_confidence(14_000_000) == "medium"
+
+
+def test_confidence_high_above_100m() -> None:
+    """obs_count >= 100M returns 'high' regardless of sync_percent."""
+    assert compute_projection_confidence(200_000_000) == "high"
+
+
+def test_confidence_high_when_sync_near_complete() -> None:
+    """sync_percent >= 0.95 returns 'high' even with a low obs_count."""
+    assert compute_projection_confidence(500_000, sync_percent=0.95) == "high"
+    assert compute_projection_confidence(500_000, sync_percent=1.0) == "high"
+
+
+def test_confidence_not_upgraded_below_sync_threshold() -> None:
+    """sync_percent < 0.95 does not force 'high' on a low obs_count."""
+    assert compute_projection_confidence(500_000, sync_percent=0.94) == "low"

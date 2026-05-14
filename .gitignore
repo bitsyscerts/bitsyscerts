@@ -476,3 +476,5 @@ htmlcov/
 # Editor / OS
 .DS_Store
 ,node,react,python,venv,dotenv,visualstudiocode
+
+.pnpm-store

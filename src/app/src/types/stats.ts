@@ -274,6 +274,7 @@ export interface IngestionHealth {
   retrying_logs: number;
   rate_limited_logs: number;
   paused_logs: number;
+  degraded_logs: number;
   error_logs: number;
   stale_workers: number;
   retryable_error_total: number;

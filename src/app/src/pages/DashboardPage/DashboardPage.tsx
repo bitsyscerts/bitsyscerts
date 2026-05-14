@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { Container } from "@mantine/core";
+import { AnnouncementBanner } from "@/components/AppShell/AnnouncementBanner";
 import { ErrorBoundary } from "@/components/ErrorBoundary/ErrorBoundary";
 import { StatsPanelSkeleton } from "@/components/StatsPanel/StatsPanelSkeleton";
 import { DashboardOverview } from "./DashboardOverview";
@@ -8,6 +9,7 @@ import { DashboardOverview } from "./DashboardOverview";
 export function DashboardPage() {
   return (
     <ErrorBoundary>
+      <AnnouncementBanner />
       <Suspense fallback={<StatsPanelSkeleton />}>
         <Container size="xl" py="md">
           <DashboardOverview />

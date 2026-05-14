@@ -167,3 +167,76 @@ async def test_write_normalized_entry_no_hostnames_skips_hostname_calls():
         mock_host.assert_not_awaited()
         mock_obs.assert_awaited_once()
     assert result == EntryWriteMetrics(new_unique_certificates=1)
+
+
+@pytest.mark.asyncio
+async def test_write_normalized_entry_skip_cert_skips_cert_and_join_writes():
+    """cert_storage_mode=none: Certificate and CertificateHostname are never written."""
+    from ctpool.storage_modes import CertStorageMode, flags_for_mode
+
+    session = AsyncMock()
+    host_id = uuid.uuid4()
+    mock_cert = AsyncMock()
+    mock_join = AsyncMock()
+    mock_obs = AsyncMock()
+
+    with (
+        patch("ctpool.writer.upsert_certificate", mock_cert),
+        patch(
+            "ctpool.writer.upsert_hostname",
+            new=AsyncMock(
+                return_value=HostnameUpsertResult(hostname_id=host_id, inserted=True)
+            ),
+        ),
+        patch("ctpool.writer.upsert_certificate_hostname", mock_join),
+        patch("ctpool.writer.upsert_observation", mock_obs),
+    ):
+        result = await write_normalized_entry(
+            session,
+            _entry(),
+            flags=flags_for_mode(CertStorageMode.NONE),
+        )
+
+    mock_cert.assert_not_awaited()
+    mock_join.assert_not_awaited()
+    mock_obs.assert_awaited_once()
+    # observation must be written with certificate_id=None
+    assert mock_obs.call_args.args[3] is None
+    assert result == EntryWriteMetrics(
+        new_unique_certificates=0,
+        hostnames_observed=1,
+        new_unique_hostnames=1,
+        known_hostnames=0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_write_normalized_entry_skip_cert_still_upserts_hostnames():
+    """cert_storage_mode=none: hostname rows are still created for discovery."""
+    from ctpool.storage_modes import CertStorageMode, flags_for_mode
+
+    session = AsyncMock()
+    host_id = uuid.uuid4()
+    mock_host = AsyncMock(
+        side_effect=[
+            HostnameUpsertResult(hostname_id=host_id, inserted=True),
+            HostnameUpsertResult(hostname_id=host_id, inserted=False),
+        ]
+    )
+
+    with (
+        patch("ctpool.writer.upsert_certificate", AsyncMock()),
+        patch("ctpool.writer.upsert_hostname", mock_host),
+        patch("ctpool.writer.upsert_certificate_hostname", AsyncMock()),
+        patch("ctpool.writer.upsert_observation", AsyncMock()),
+    ):
+        result = await write_normalized_entry(
+            session,
+            _entry(hostnames=["a.example.com", "b.example.com"]),
+            flags=flags_for_mode(CertStorageMode.NONE),
+        )
+
+    assert mock_host.await_count == 2
+    assert result.hostnames_observed == 2
+    assert result.new_unique_hostnames == 1
+    assert result.known_hostnames == 1

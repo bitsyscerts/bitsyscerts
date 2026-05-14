@@ -25,6 +25,11 @@ if TYPE_CHECKING:
 
 _BYTES_PER_GIB = 1024**3
 _PROGRESS_STATUSES = frozenset({"claimed", "in_progress", "partial", "running"})
+
+# Mirrors ctpool.profile_projection._SYNC_RECALIBRATE_THRESHOLD.
+# When sync completion reaches this fraction, the projection is anchored to the
+# measured database size rather than a formula estimate.
+_SYNC_RECALIBRATE_THRESHOLD = 0.95
 ProjectionStatus = Literal[
     "available",
     "insufficient_backfill_plan",
@@ -239,7 +244,8 @@ def _available_projection(
             from ctpool.profile_projection import compute_projection_confidence
 
             confidence: object = compute_projection_confidence(
-                inputs.ct_observations_count
+                inputs.ct_observations_count,
+                sync_percent=completed / inputs.planned_observations_total,
             )
         except ImportError:  # pragma: no cover
             confidence = None
@@ -248,20 +254,36 @@ def _available_projection(
         projected_final = inputs.database_size_bytes + projected_remaining
         confidence = None
 
-    ingestion_workload = _build_ingestion_workload(inputs, completed, remaining)
-    notes = [
-        (
-            "Projection is based on current bytes per CT observation and "
-            "will improve as more data is ingested."
-        ),
-        "Storage percentage is an estimate, not authoritative sync progress.",
-    ]
+    # Recalibrate: when ingestion is complete (or near-complete and the
+    # formula has already been proven wrong), anchor the projection to the
+    # measured DB size.  Estimation no longer helps when we have ground truth.
+    _sync_pct = completed / inputs.planned_observations_total
+    if _sync_pct >= 1.0 or (
+        inputs.database_size_bytes > projected_final
+        and _sync_pct >= _SYNC_RECALIBRATE_THRESHOLD
+    ):
+        projected_final = inputs.database_size_bytes
+        projected_remaining = 0
+        confidence = "high"
+        notes = [
+            "Projection anchored to measured database size (ingestion complete).",
+            "Storage percentage is an estimate, not authoritative sync progress.",
+        ]
+    else:
+        notes = [
+            (
+                "Projection is based on current bytes per CT observation and "
+                "will improve as more data is ingested."
+            ),
+            "Storage percentage is an estimate, not authoritative sync progress.",
+        ]
     disk_fields = _disk_projection_fields(
         disk_snapshot,
         projected_remaining,
         projected_final,
         notes,
     )
+    ingestion_workload = _build_ingestion_workload(inputs, completed, remaining)
     payload: dict[str, object] = {
         **base,
         **disk_fields,

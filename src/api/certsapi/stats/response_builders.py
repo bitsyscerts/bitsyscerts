@@ -152,12 +152,13 @@ def build_ingestion_health(
     outcome_counts: dict[str, int],
 ) -> IngestionHealth:
     """Build the dashboard ingestion-health summary for live responses."""
-    retrying = rate_limited = paused = error_logs = 0
+    retrying = rate_limited = paused = error_logs = degraded = 0
     total_retryable = total_terminal = 0
     if backfill_state is not None:
         retrying = _as_int(backfill_state.get("retrying"))
         rate_limited = _as_int(backfill_state.get("rate_limited"))
         paused = _as_int(backfill_state.get("paused"))
+        degraded = _as_int(backfill_state.get("degraded"))
         error_logs = _as_int(backfill_state.get("error"))
         for item in cast(list[dict[str, object]], backfill_state.get("items") or []):
             total_retryable += _as_int(item.get("retryable_error_count"))
@@ -175,6 +176,7 @@ def build_ingestion_health(
         retrying_logs=retrying,
         rate_limited_logs=rate_limited,
         paused_logs=paused,
+        degraded_logs=degraded,
         error_logs=error_logs,
         stale_workers=stale_workers,
         retryable_error_total=total_retryable,

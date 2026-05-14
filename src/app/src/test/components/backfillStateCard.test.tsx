@@ -102,4 +102,79 @@ describe("BackfillStateCard", () => {
     render(<BackfillStateCard state={makeSummary()} />, { wrapper });
     expect(screen.getByText("50.0%")).toBeInTheDocument();
   });
+
+  it("renders error detail sub-row for a retrying log with error info", () => {
+    const summary = makeSummary({
+      retrying: 1,
+      processing: 0,
+      items: [
+        makeItem({
+          status: "retrying",
+          last_error_type: "RateLimitError",
+          last_error_message: "429 Too Many Requests",
+        }),
+      ],
+    });
+    render(<BackfillStateCard state={summary} />, { wrapper });
+    expect(screen.getByText(/\[RateLimitError\]/)).toBeInTheDocument();
+    expect(screen.getByText(/429 Too Many Requests/)).toBeInTheDocument();
+  });
+
+  it("renders error detail sub-row for a paused log with error info", () => {
+    const summary = makeSummary({
+      paused: 1,
+      processing: 0,
+      items: [
+        makeItem({
+          status: "paused",
+          last_error_type: "FetchError",
+          last_error_message: "Connection refused",
+        }),
+      ],
+    });
+    render(<BackfillStateCard state={summary} />, { wrapper });
+    expect(screen.getByText(/\[FetchError\]/)).toBeInTheDocument();
+    expect(screen.getByText(/Connection refused/)).toBeInTheDocument();
+  });
+
+  it("renders error detail sub-row when only error message is set", () => {
+    const summary = makeSummary({
+      paused: 1,
+      processing: 0,
+      items: [
+        makeItem({
+          status: "paused",
+          last_error_type: null,
+          last_error_message: "Retry budget exhausted",
+        }),
+      ],
+    });
+    render(<BackfillStateCard state={summary} />, { wrapper });
+    expect(screen.getByText(/Retry budget exhausted/)).toBeInTheDocument();
+  });
+
+  it("does not render error detail sub-row for non-paused logs", () => {
+    render(<BackfillStateCard state={makeSummary()} />, { wrapper });
+    expect(screen.queryByText(/\[FetchError\]/)).not.toBeInTheDocument();
+  });
+
+  it("does not render error detail sub-row for paused log with no error info", () => {
+    const summary = makeSummary({
+      paused: 1,
+      processing: 0,
+      items: [
+        makeItem({
+          status: "paused",
+          last_error_type: null,
+          last_error_message: null,
+        }),
+      ],
+    });
+    render(<BackfillStateCard state={summary} />, { wrapper });
+    // No error detail text — only the status badge
+    expect(screen.getByText("paused")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No error message recorded/),
+    ).not.toBeInTheDocument();
+  });
 });

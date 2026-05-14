@@ -132,3 +132,39 @@ src/api/
 - Database models (ORM) and API models (Pydantic) MUST be separate classes. MUST NOT use ORM
   models directly as Pydantic response models.
 - Migrations MUST be managed with Alembic. MUST NOT modify the database schema manually.
+
+---
+
+## Definition of Done — MANDATORY GATE
+
+After **every** edit to a Python file — no matter how small — MUST run the auto-fix
+and check commands below **before** declaring the task complete or handing back to the
+user. Do not ask whether to run them. Do not skip them. A response that does not
+include a passing terminal run is incomplete.
+
+**Step 1 — Always auto-fix first (run unconditionally after every Python edit):**
+
+```
+# For files changed under src/api/
+cd /workspaces/bitsyscerts/src/api && source /workspaces/bitsyscerts/.venv/bin/activate && ruff check --fix certsapi/ tests/ && ruff format certsapi/ tests/
+
+# For files changed under src/ctpool/
+cd /workspaces/bitsyscerts/src/ctpool && source /workspaces/bitsyscerts/.venv/bin/activate && ruff check --fix ctpool/ tests/ && ruff format ctpool/ tests/
+```
+
+**Step 2 — Then verify zero violations remain:**
+
+```
+# For files changed under src/api/
+cd /workspaces/bitsyscerts/src/api && ruff check certsapi/ tests/ && ruff format --check certsapi/ tests/
+
+# For files changed under src/ctpool/
+cd /workspaces/bitsyscerts/src/ctpool && ruff check ctpool/ tests/ && ruff format --check ctpool/ tests/
+```
+
+If Step 2 still reports violations after Step 1, fix them manually, then re-run Step 2
+until it is clean. Only then declare the task complete.
+
+The most common violation is **I001 (unsorted imports)**. It is always auto-fixable.
+Running `ruff check --fix` before handing back prevents 100% of pre-commit import
+failures.
