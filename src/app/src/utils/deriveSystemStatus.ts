@@ -71,12 +71,9 @@ function collectIngestionIssues(
       message: `${String(health.error_logs)} CT log(s) in error state.`,
     });
   }
-  if (health.paused_logs > 0) {
-    issues.push({
-      severity: "action_needed",
-      message: `${String(health.paused_logs)} CT log(s) paused — open "Inspect CT logs" for error details.`,
-    });
-  }
+  // paused_logs are auto-recovering (remote provider errors) and are NOT
+  // raised as actionable issues. They are shown as a quiet note on the
+  // dashboard alongside degraded/retrying/rate-limited logs.
   return issues;
 }
 

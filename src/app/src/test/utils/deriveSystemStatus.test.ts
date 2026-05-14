@@ -210,7 +210,7 @@ describe("deriveSystemStatus", () => {
     expect(result.issues.length).toBeGreaterThan(1);
   });
 
-  it("returns action_needed with inspect-ct-logs hint when logs are paused", () => {
+  it("returns healthy when only paused logs present — remote provider errors are auto-recovering", () => {
     const result = deriveSystemStatus({
       ...BASE_STATS,
       ingestion_health: {
@@ -226,10 +226,8 @@ describe("deriveSystemStatus", () => {
         status: "attention_needed",
       },
     });
-    expect(result.level).toBe("action_needed");
-    const pausedIssue = result.issues.find((i) => i.message.includes("paused"));
-    expect(pausedIssue).toBeDefined();
-    expect(pausedIssue?.message).toMatch(/Inspect CT logs/i);
+    expect(result.level).toBe("healthy");
+    expect(result.issues).toHaveLength(0);
   });
 
   it("returns healthy (not warning) when only degraded logs present", () => {

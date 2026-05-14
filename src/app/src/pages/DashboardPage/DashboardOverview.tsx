@@ -86,7 +86,8 @@ export function DashboardOverview() {
   const quietCount =
     (health?.degraded_logs ?? 0) +
     (health?.retrying_logs ?? 0) +
-    (health?.rate_limited_logs ?? 0);
+    (health?.rate_limited_logs ?? 0) +
+    (health?.paused_logs ?? 0);
   const quietNote =
     quietCount > 0
       ? `${String(quietCount)} data provider${quietCount === 1 ? "" : "s"} temporarily unavailable — auto-recovering`
