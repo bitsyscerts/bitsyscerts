@@ -233,9 +233,7 @@ async def prune_ingestion_metrics(
         )
         return int(result.scalar_one())
     result = await session.execute(
-        delete(IngestionMetric)
-        .where(IngestionMetric.snapshot_at < cutoff)
-        .returning(IngestionMetric.id)
+        delete(IngestionMetric).where(IngestionMetric.snapshot_at < cutoff)
     )
     return result.rowcount
 

@@ -77,7 +77,6 @@ async def _rebuild_batch(
             latest_cert_seen_at            = ranked.seen_at
         FROM ranked
         WHERE h.id = ranked.hostname_id
-        RETURNING h.id
         """
     )
     result = await session.execute(stmt, {"ids": [str(i) for i in id_rows]})  # noqa: E501
