@@ -218,6 +218,7 @@ Use the following workflows for common tasks. Do not bypass them.
 | `/new-react-component` | Scaffold a React component with Error Boundary and tests |
 | `/new-api-endpoint` | Scaffold a FastAPI endpoint with validation, auth, and tests |
 | `/security-review` | OWASP audit of any file or module |
+| `/remediate-ghas-findings` | Fetch and remediate open GitHub Advanced Security alerts (code scanning, Dependabot, secret scanning) |
 
 The **Planner** agent produces decomposition plans. The **Security Auditor** agent performs OWASP
 reviews. Both are read-only — they do not write code.
