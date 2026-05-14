@@ -88,9 +88,14 @@
   },
 
   // Inject DATABASE_URL so the app and tests pick it up automatically.
+  // GH_TOKEN is forwarded from the host shell so the GitHub CLI works without
+  // needing a writable config dir (the host may store the token in a keyring).
+  // On your host, add to ~/.bashrc / ~/.zshrc:
+  //   export GH_TOKEN=$(gh auth token 2>/dev/null)
   "remoteEnv": {
     "DATABASE_URL": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool",
-    "TEST_DATABASE_URL": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test"
+    "TEST_DATABASE_URL": "postgresql+psycopg://ctpool:ctpool@localhost:5432/ctpool_test",
+    "GH_TOKEN": "${localEnv:GH_TOKEN}"
   },
 
   "containerEnv": {

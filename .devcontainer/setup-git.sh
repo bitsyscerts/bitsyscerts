@@ -100,16 +100,34 @@ fi
 echo -e "${GREEN}[+] Git configuration complete${RESET}"
 
 # --- Optional: GitHub CLI (gh) config ---
-# Mount source is ~/.config (read-only) at /tmp/host-config.
-# Link gh config into the container only if the user has it on their host.
+# Preferred method: GH_TOKEN injected from the host shell via devcontainer.json
+# remoteEnv. gh natively honours this variable -- no config file needed.
+#
+# On your host, add to ~/.bashrc / ~/.zshrc:
+#   export GH_TOKEN=$(gh auth token 2>/dev/null)
+#
+# Fallback: copy ~/.config/gh from the read-only host mount. This works when
+# gh stores the token in plain text in hosts.yml. It does NOT work when the
+# host uses a system keyring (gnome-libsecret, pass, macOS Keychain, etc.),
+# because the token is absent from the file in that case.
 HOST_GH_CONFIG="/tmp/host-config/gh"
 CONTAINER_GH_CONFIG="$HOME/.config/gh"
 
-if [[ -d "$HOST_GH_CONFIG" ]]; then
+if [[ -n "${GH_TOKEN:-}" ]]; then
+    echo -e "${GREEN}[+] GitHub CLI (gh) will authenticate via GH_TOKEN environment variable${RESET}"
+elif [[ -d "$HOST_GH_CONFIG" ]]; then
     mkdir -p "$HOME/.config"
-    ln -sfn "$HOST_GH_CONFIG" "$CONTAINER_GH_CONFIG"
-    echo -e "${GREEN}[+] GitHub CLI (gh) config linked from host${RESET}"
+    cp -r "$HOST_GH_CONFIG" "$CONTAINER_GH_CONFIG"
+    # Sanity-check: does the copied config actually contain a token?
+    if grep -qE 'oauth_token:[[:space:]].{10,}' "$CONTAINER_GH_CONFIG/hosts.yml" 2>/dev/null; then
+        echo -e "${GREEN}[+] GitHub CLI (gh) config copied from host${RESET}"
+    else
+        echo -e "${YELLOW}[!] gh config copied but no valid token found -- host may use a keyring${RESET}"
+        echo -e "${GRAY}    Fix: add this line to your host ~/.bashrc or ~/.zshrc, then rebuild:${RESET}"
+        echo -e "${GRAY}      export GH_TOKEN=\$(gh auth token 2>/dev/null)${RESET}"
+    fi
 else
     echo -e "${YELLOW}[!] No gh config found on host - GitHub CLI will not be authenticated${RESET}"
-    echo -e "${GRAY}    Run 'gh auth login' on your host then rebuild the container${RESET}"
+    echo -e "${GRAY}    Fix: add this line to your host ~/.bashrc or ~/.zshrc, then rebuild:${RESET}"
+    echo -e "${GRAY}      export GH_TOKEN=\$(gh auth token 2>/dev/null)${RESET}"
 fi
