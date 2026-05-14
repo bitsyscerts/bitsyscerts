@@ -125,7 +125,7 @@ describe("deriveSystemStatus", () => {
     expect(result.issues[0].message).toMatch(/stale/i);
   });
 
-  it("returns action_needed for stale workers", () => {
+  it("returns healthy when stale workers are present — they are auto-reaped", () => {
     const result = deriveSystemStatus({
       ...BASE_STATS,
       workers: {
@@ -139,10 +139,8 @@ describe("deriveSystemStatus", () => {
         items: [],
       },
     });
-    expect(result.level).toBe("action_needed");
-    expect(result.issues.some((i) => i.message.match(/stale worker/i))).toBe(
-      true,
-    );
+    expect(result.level).toBe("healthy");
+    expect(result.issues).toHaveLength(0);
   });
 
   it("returns action_needed when projected_fits_on_disk is false", () => {
@@ -191,19 +189,21 @@ describe("deriveSystemStatus", () => {
     expect(result.level).toBe("healthy");
   });
 
-  it("action_needed takes precedence over warning", () => {
+  it("action_needed takes precedence over warning when both are present", () => {
     const result = deriveSystemStatus({
       ...BASE_STATS,
       snapshot: { ...BASE_SNAPSHOT, is_stale: true },
-      workers: {
-        active_total: 1,
-        stale_total: 1,
-        tail_active: 0,
-        backfill_active: 0,
-        stats_active: 0,
-        maintenance_active: 0,
-        unknown_active: 0,
-        items: [],
+      ingestion_health: {
+        retrying_logs: 0,
+        rate_limited_logs: 0,
+        paused_logs: 0,
+        degraded_logs: 0,
+        error_logs: 1,
+        stale_workers: 0,
+        retryable_error_total: 0,
+        terminal_error_total: 0,
+        recent_terminal_outcomes: 0,
+        status: "attention_needed",
       },
     });
     expect(result.level).toBe("action_needed");

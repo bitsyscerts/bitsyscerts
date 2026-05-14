@@ -47,17 +47,11 @@ function collectSnapshotIssues(
 }
 
 function collectWorkerIssues(
-  workers: WorkerSummary | null | undefined,
+  _workers: WorkerSummary | null | undefined,
 ): DerivedIssue[] {
-  if (!workers) return [];
-  const issues: DerivedIssue[] = [];
-  if (workers.stale_total > 0) {
-    issues.push({
-      severity: "action_needed",
-      message: `${String(workers.stale_total)} stale worker(s) detected.`,
-    });
-  }
-  return issues;
+  // Stale workers are auto-reaped by the snapshot loop — they require no
+  // user action and are surfaced as a quiet note on the dashboard instead.
+  return [];
 }
 
 function collectIngestionIssues(

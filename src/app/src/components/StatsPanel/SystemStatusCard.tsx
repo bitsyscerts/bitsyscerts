@@ -11,7 +11,7 @@ import type { SystemStatusLevel } from "@/utils/deriveSystemStatus";
 interface SystemStatusCardProps {
   level: SystemStatusLevel;
   issueCount: number;
-  note?: string;
+  notes?: string[];
 }
 
 interface StatusConfig {
@@ -58,7 +58,7 @@ function statusConfig(level: SystemStatusLevel): StatusConfig {
 export function SystemStatusCard({
   level,
   issueCount,
-  note,
+  notes,
 }: SystemStatusCardProps) {
   const cfg = statusConfig(level);
 
@@ -77,11 +77,11 @@ export function SystemStatusCard({
               {issueCount} {issueCount === 1 ? "issue" : "issues"} detected
             </Text>
           )}
-          {note && (
-            <Text size="xs" c="dimmed">
-              {note}
+          {notes?.map((n) => (
+            <Text key={n} size="xs" c="dimmed">
+              {n}
             </Text>
-          )}
+          ))}
         </div>
       </Group>
     </Paper>
