@@ -47,17 +47,11 @@ function collectSnapshotIssues(
 }
 
 function collectWorkerIssues(
-  workers: WorkerSummary | null | undefined,
+  _workers: WorkerSummary | null | undefined,
 ): DerivedIssue[] {
-  if (!workers) return [];
-  const issues: DerivedIssue[] = [];
-  if (workers.stale_total > 0) {
-    issues.push({
-      severity: "action_needed",
-      message: `${String(workers.stale_total)} stale worker(s) detected.`,
-    });
-  }
-  return issues;
+  // Stale workers are auto-reaped by the snapshot loop — they require no
+  // user action and are surfaced as a quiet note on the dashboard instead.
+  return [];
 }
 
 function collectIngestionIssues(
@@ -71,24 +65,9 @@ function collectIngestionIssues(
       message: `${String(health.error_logs)} CT log(s) in error state.`,
     });
   }
-  if (health.paused_logs > 0) {
-    issues.push({
-      severity: "action_needed",
-      message: `${String(health.paused_logs)} CT log(s) paused — open "Inspect CT logs" for error details.`,
-    });
-  }
-  if (health.rate_limited_logs > 0) {
-    issues.push({
-      severity: "warning",
-      message: `${String(health.rate_limited_logs)} CT log(s) rate-limited.`,
-    });
-  }
-  if (health.retrying_logs > 0) {
-    issues.push({
-      severity: "warning",
-      message: `${String(health.retrying_logs)} CT log(s) retrying.`,
-    });
-  }
+  // paused_logs are auto-recovering (remote provider errors) and are NOT
+  // raised as actionable issues. They are shown as a quiet note on the
+  // dashboard alongside degraded/retrying/rate-limited logs.
   return issues;
 }
 

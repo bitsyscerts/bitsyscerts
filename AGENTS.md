@@ -102,6 +102,12 @@ full ruleset, which is always active for all files under `src/`.
   rules for TypeScript/TSX.
 - Linting and formatting MUST pass before any code is considered complete. Code that does not
   pass the linter is not finished code.
+- **After every edit to a Python file**, run `ruff check --fix` then `ruff format` then confirm
+  `ruff check` is clean — in that order — before calling the task complete. This MUST happen
+  even for one-line changes. The single most common pre-commit failure is I001 (unsorted
+  imports); it is always auto-fixable and is never an acceptable reason to hand back broken
+  code. See [python.instructions.md](.github/instructions/python.instructions.md) for the
+  exact commands.
 - Security is a design constraint applied from line one — not a review step added afterward.
   Threat model every feature. Validate all inputs at system boundaries. Encode all outputs.
   MUST comply with OWASP Top 10 (2021) and OWASP API Top 10 (2023) on every endpoint and
@@ -212,6 +218,7 @@ Use the following workflows for common tasks. Do not bypass them.
 | `/new-react-component` | Scaffold a React component with Error Boundary and tests |
 | `/new-api-endpoint` | Scaffold a FastAPI endpoint with validation, auth, and tests |
 | `/security-review` | OWASP audit of any file or module |
+| `/remediate-ghas-findings` | Fetch and remediate open GitHub Advanced Security alerts (code scanning, Dependabot, secret scanning) |
 
 The **Planner** agent produces decomposition plans. The **Security Auditor** agent performs OWASP
 reviews. Both are read-only — they do not write code.

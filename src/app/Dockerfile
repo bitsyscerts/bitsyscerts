@@ -24,12 +24,24 @@ FROM nginx:1.27-alpine AS runtime
 RUN rm /etc/nginx/conf.d/default.conf
 
 COPY src/app/nginx.conf /etc/nginx/conf.d/bitsyscerts.conf
+COPY src/app/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 ARG BUILD_VERSION
 LABEL org.opencontainers.image.title="bitsyscerts-app" \
       org.opencontainers.image.version="${BUILD_VERSION}"
 
-EXPOSE 80
+# Grant the nginx user write access to the directories it needs at runtime,
+# then drop privileges.  Port 80 requires root; use 8080 instead so the
+# container process never runs as root (CWE-250 / OWASP A04:2021).
+RUN chown -R nginx:nginx /usr/share/nginx/html \
+    && chown -R nginx:nginx /var/cache/nginx \
+    && touch /var/run/nginx.pid \
+    && chown nginx:nginx /var/run/nginx.pid
 
-CMD ["nginx", "-g", "daemon off;"]
+USER nginx
+
+EXPOSE 8080
+
+ENTRYPOINT ["/docker-entrypoint.sh"]

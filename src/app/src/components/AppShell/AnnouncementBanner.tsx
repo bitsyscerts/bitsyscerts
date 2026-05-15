@@ -10,28 +10,36 @@ import {
 /**
  * Operator-configurable site-wide announcement banner.
  *
- * Controlled entirely by VITE_BANNER_* environment variables so that demo
- * operators and self-hosters can display a notice without touching source
- * code. Returns null when VITE_BANNER_VISIBLE is not "true" or when the
- * text is empty.
+ * Controlled by runtime environment variables injected by docker-entrypoint.sh
+ * into window.__ENV__ at container startup (Docker Compose deployments), or by
+ * VITE_BANNER_* variables read by the Vite dev server (developer mode).
+ * Returns null when the banner is not visible or the text is empty.
  *
- * Env vars:
- *   VITE_BANNER_VISIBLE   "true" to show the banner; anything else hides it.
- *   VITE_BANNER_TEXT      The message to display.
- *   VITE_BANNER_ICON      Tabler icon name (without "Icon" prefix).
- *                         Supported: InfoCircle (default), AlertTriangle,
- *                         AlertCircle, CircleCheck, Speakerphone.
- *   VITE_BANNER_SEVERITY  Mantine Alert color: info (default), warning,
- *                         error, success.
+ * Docker Compose vars (set in .env, no rebuild required):
+ *   BANNER_VISIBLE   "true" to show the banner; anything else hides it.
+ *   BANNER_TEXT      The message to display.
+ *   BANNER_ICON      Icon name (without "Icon" prefix).
+ *                    Supported: InfoCircle (default), AlertTriangle,
+ *                    AlertCircle, CircleCheck, Speakerphone.
+ *   BANNER_SEVERITY  Alert color: info (default), warning, error, success.
+ *
+ * Developer mode equivalents (prefix with VITE_ in .env):
+ *   VITE_BANNER_VISIBLE, VITE_BANNER_TEXT, VITE_BANNER_ICON, VITE_BANNER_SEVERITY
  */
 export function AnnouncementBanner() {
-  const visible = import.meta.env.VITE_BANNER_VISIBLE === "true";
-  const text = import.meta.env.VITE_BANNER_TEXT ?? "";
+  const env = window.__ENV__ ?? {};
+  const visible =
+    (env.BANNER_VISIBLE ?? import.meta.env.VITE_BANNER_VISIBLE) === "true";
+  const text = env.BANNER_TEXT ?? import.meta.env.VITE_BANNER_TEXT ?? "";
 
   if (!visible || !text) return null;
 
-  const icon = resolveIcon(import.meta.env.VITE_BANNER_ICON ?? "");
-  const color = resolveColor(import.meta.env.VITE_BANNER_SEVERITY ?? "");
+  const icon = resolveIcon(
+    env.BANNER_ICON ?? import.meta.env.VITE_BANNER_ICON ?? "",
+  );
+  const color = resolveColor(
+    env.BANNER_SEVERITY ?? import.meta.env.VITE_BANNER_SEVERITY ?? "",
+  );
 
   return (
     <Alert color={color} variant="light" icon={icon} radius={0} py="xs">

@@ -282,6 +282,5 @@ async def reap_stale_tail_leases(
         .where(CtLogTailLease.claimed_by.isnot(None))
         .where(CtLogTailLease.heartbeat_at < cutoff)
         .values(claimed_by=None, claimed_at=None, heartbeat_at=None)
-        .returning(CtLogTailLease.id)
     )
-    return len(result.all())
+    return result.rowcount

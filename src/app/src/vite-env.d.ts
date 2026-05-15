@@ -3,25 +3,25 @@
 interface ImportMetaEnv {
   /** BitsysCerts build version injected at Docker build time. */
   readonly VITE_APP_VERSION: string;
-  /** Set to "true" to show the announcement banner on the dashboard. */
+  /** Dev-mode equivalents of the runtime BANNER_* vars (VITE_ prefix required by Vite). */
   readonly VITE_BANNER_VISIBLE?: string;
-  /** Text displayed inside the announcement banner. */
   readonly VITE_BANNER_TEXT?: string;
-  /**
-   * Tabler icon name (without the "Icon" prefix) for the banner.
-   * Supported: InfoCircle (default), AlertTriangle, AlertCircle,
-   * CircleCheck, Speakerphone.
-   */
   readonly VITE_BANNER_ICON?: string;
-  /**
-   * Mantine Alert color for the banner.
-   * Supported: info (default) | warning | error | success.
-   */
   readonly VITE_BANNER_SEVERITY?: string;
 }
 
 interface ImportMeta {
   readonly env: ImportMetaEnv;
+}
+
+/** Runtime environment injected by docker-entrypoint.sh into env-config.js. */
+interface Window {
+  __ENV__?: Partial<{
+    BANNER_VISIBLE: string;
+    BANNER_TEXT: string;
+    BANNER_SEVERITY: string;
+    BANNER_ICON: string;
+  }>;
 }
 
 declare module "*.png" {

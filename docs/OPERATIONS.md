@@ -207,54 +207,55 @@ ctpool fix-audit-findings --dry-run
 The dashboard (`/`) can display a site-wide banner below the top navigation.
 This is useful for demo instances, shared lab environments, or any deployment
 where you want to display a persistent notice to users without modifying source
-code.
+code or rebuilding the image.
 
 ### Configuration
 
-The banner is controlled by four `VITE_BANNER_*` variables:
+The banner is controlled by four environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
-| `VITE_BANNER_VISIBLE` | `false` | Set to `true` to show the banner. |
-| `VITE_BANNER_TEXT` | — | The message text displayed in the banner. |
-| `VITE_BANNER_SEVERITY` | `info` | Alert colour: `info`, `warning`, `error`, `success`. |
-| `VITE_BANNER_ICON` | `InfoCircle` | Icon displayed beside the text. See supported names below. |
+| `BANNER_VISIBLE` | `false` | Set to `true` to show the banner. |
+| `BANNER_TEXT` | — | The message text displayed in the banner. |
+| `BANNER_SEVERITY` | `info` | Alert colour: `info`, `warning`, `error`, `success`. |
+| `BANNER_ICON` | `InfoCircle` | Icon displayed beside the text. See supported names below. |
 
 **Supported icon names** (Tabler, no prefix): `InfoCircle`, `AlertTriangle`,
 `AlertCircle`, `CircleCheck`, `Speakerphone`.
 
-### Build-time vs runtime
+### Docker Compose (runtime — no rebuild needed)
 
-> `VITE_*` variables are **baked into the static frontend bundle at image build
-> time**. They are not read from the container environment at runtime.
-
-This means the injection point differs by mode:
-
-**Developer mode** — Vite reads `.env` at dev-server startup. Add the vars
-directly to your `src/.env` file and restart `npm run dev`:
+Add to your `.env` file and restart the frontend container:
 
 ```bash
+BANNER_VISIBLE=true
+BANNER_TEXT="This is a demo instance. Please be a responsible netizen!"
+BANNER_SEVERITY=info
+BANNER_ICON=InfoCircle
+```
+
+```bash
+docker compose up -d frontend
+```
+
+The `docker-entrypoint.sh` script in the image writes these values into
+`/usr/share/nginx/html/env-config.js` at container startup, which the SPA
+loads before the application bundle. No image rebuild is required.
+
+### Developer mode
+
+In developer mode, prefix the variables with `VITE_` (Vite's requirement for
+exposing env vars to the browser at dev-server startup):
+
+```bash
+# src/.env
 VITE_BANNER_VISIBLE=true
-VITE_BANNER_TEXT="This is a demo instance. Please be a responsible netizen!"
-VITE_BANNER_SEVERITY=info
-VITE_BANNER_ICON=InfoCircle
+VITE_BANNER_TEXT="Dev environment"
+VITE_BANNER_SEVERITY=warning
+VITE_BANNER_ICON=AlertTriangle
 ```
 
-**Docker Compose mode** — Pass the vars as Docker `--build-arg` flags when
-building a custom frontend image:
-
-```bash
-docker build \
-  --build-arg VITE_BANNER_VISIBLE=true \
-  --build-arg VITE_BANNER_TEXT="Demo instance — be a responsible netizen!" \
-  --build-arg VITE_BANNER_SEVERITY=info \
-  --build-arg VITE_BANNER_ICON=InfoCircle \
-  -f src/app/Dockerfile .
-```
-
-Then update the `frontend` service `image:` reference in `docker-compose.yml`
-to point to your custom build. The pre-built GitHub release images do not
-include a banner; the vars are `false`/empty in those builds.
+Restart `npm run dev` after editing `.env`.
 
 ## API Exposure
 

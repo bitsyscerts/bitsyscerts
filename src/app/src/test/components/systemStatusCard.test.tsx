@@ -52,17 +52,23 @@ describe("SystemStatusCard", () => {
     expect(screen.getByText("Status unknown")).toBeInTheDocument();
   });
 
-  it("renders note under healthy label when provided", () => {
+  it("renders notes under healthy label when provided", () => {
     render(
       <AllProviders>
         <SystemStatusCard
           level="healthy"
           issueCount={0}
-          note="1 degraded data provider"
+          notes={[
+            "1 degraded data provider",
+            "2 stale workers — cleaning up automatically",
+          ]}
         />
       </AllProviders>,
     );
     expect(screen.getByText("All systems healthy")).toBeInTheDocument();
     expect(screen.getByText("1 degraded data provider")).toBeInTheDocument();
+    expect(
+      screen.getByText("2 stale workers — cleaning up automatically"),
+    ).toBeInTheDocument();
   });
 });

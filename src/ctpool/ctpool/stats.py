@@ -18,7 +18,8 @@ from datetime import UTC, datetime, timedelta
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
+from sqlalchemy import table as sa_table
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -49,14 +50,14 @@ async def _query_db_size(
 ) -> tuple[str, list[tuple[str, int]]]:
     """Return (total_db_size_pretty, [(table_name, row_count), ...])."""
     size_result = await session.execute(
-        text("SELECT pg_size_pretty(pg_database_size(current_database()))")
+        select(func.pg_size_pretty(func.pg_database_size(func.current_database())))
     )
     total_size: str = size_result.scalar_one() or "?"
 
     rows: list[tuple[str, int]] = []
     for table in _SIZE_TABLES:
         count_result = await session.execute(
-            text(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+            select(func.count()).select_from(sa_table(table))
         )
         rows.append((table, int(count_result.scalar_one())))
     return total_size, rows
