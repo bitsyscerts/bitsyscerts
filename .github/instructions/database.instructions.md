@@ -26,19 +26,24 @@ These rules apply to every file that touches the database schema or query layer:
   )
   ```
 - `CREATE INDEX CONCURRENTLY` **cannot run inside a transaction**. Migrations that use it
-  MUST set `transactional_ddl = False` on the migration context, or be isolated in their
-  own migration file with:
+  MUST wrap the `op.execute()` calls in `op.get_context().autocommit_block()`. This is the
+  only pattern that works with async psycopg drivers — `op.execute("COMMIT")` does **not**
+  work because SQLAlchemy maintains its own transaction context at the connection level,
+  regardless of a raw COMMIT statement.
 
   ```python
-  # In the migration file:
-  from alembic import op
-
   def upgrade() -> None:
-      op.execute("COMMIT")  # end the implicit transaction
-      op.execute("CREATE INDEX CONCURRENTLY ...")
+      with op.get_context().autocommit_block():
+          op.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_name ON t (col)")
+
+  def downgrade() -> None:
+      with op.get_context().autocommit_block():
+          op.execute("DROP INDEX CONCURRENTLY IF EXISTS ix_name")
   ```
 
-  Alternatively, use `op.get_context().configure(..., transaction_per_migration=False)`.
+  Do **not** use `op.execute("COMMIT")` — this causes
+  `ActiveSqlTransaction: CREATE INDEX CONCURRENTLY cannot run inside a transaction block`
+  with the async psycopg driver.
 
 - `downgrade()` MUST be implemented for every migration. An empty `downgrade()` is a defect
   unless the migration is explicitly marked as non-reversible with a comment explaining why.
