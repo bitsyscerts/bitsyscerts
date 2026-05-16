@@ -32,15 +32,17 @@ archive. Default retention mode is `current-osint`.
 
 These files refine behavior for specific file types — read them before editing:
 
-| Instruction                                          | Applies To                    |
-| ---------------------------------------------------- | ----------------------------- |
-| `.github/instructions/decomposition.instructions.md` | All `src/**`                  |
-| `.github/instructions/security.instructions.md`      | All `src/**`                  |
-| `.github/instructions/retention.instructions.md`     | All `src/**`                  |
-| `.github/instructions/python.instructions.md`        | All `*.py`                    |
-| `.github/instructions/database.instructions.md`      | Migrations, models, DB access |
-| `.github/instructions/react.instructions.md`         | `src/app/**`                  |
-| `.github/instructions/testing.instructions.md`       | All `src/**`                  |
+| Instruction                                                | Applies To                        |
+| ---------------------------------------------------------- | --------------------------------- |
+| `.github/instructions/decomposition.instructions.md`       | All `src/**`                      |
+| `.github/instructions/security.instructions.md`            | All `src/**`                      |
+| `.github/instructions/retention.instructions.md`           | All `src/**`                      |
+| `.github/instructions/python.instructions.md`              | All `*.py`                        |
+| `.github/instructions/database.instructions.md`            | Migrations, models, DB access     |
+| `.github/instructions/react.instructions.md`               | `src/app/**`                      |
+| `.github/instructions/testing.instructions.md`             | All `src/**`                      |
+| `.github/instructions/git-usage.instructions.md`           | All `src/**` · git/gh ops         |
+| `.github/instructions/update-dependencies.instructions.md` | `src/**` · `.github/workflows/**` |
 
 ## Virtualenv
 
