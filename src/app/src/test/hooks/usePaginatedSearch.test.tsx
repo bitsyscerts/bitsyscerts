@@ -103,6 +103,24 @@ describe("usePaginatedSearch initial state", () => {
     expect(result.current.isError).toBe(true);
   });
 
+  it("passes error object from useHostnameSearch to caller", () => {
+    const testError = new Error("timeout");
+    mockUseHostnameSearch.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: testError,
+      fetchStatus: "idle",
+    } as unknown as ReturnType<typeof useHostnameSearch>);
+
+    const { result } = renderHook(
+      () => usePaginatedSearch(buildParams, "example.com"),
+      { wrapper },
+    );
+
+    expect(result.current.error).toBe(testError);
+  });
+
   it("exposes estimatedPageCount once data has total_estimate", () => {
     mockUseHostnameSearch.mockReturnValue({
       data: { items: [], next_cursor: null, total_estimate: 150 },

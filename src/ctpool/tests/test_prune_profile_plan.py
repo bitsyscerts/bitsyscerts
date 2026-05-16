@@ -40,17 +40,20 @@ class TestPruneCategory:
 
 
 class TestBuildPrunePlan:
-    def test_builds_four_categories(self) -> None:
+    def test_builds_eight_categories(self) -> None:
+        """Plan must contain the 4 original + 4 new unbounded-table categories."""
         plan = _make_aggregate()
-        names = [c.name for c in plan.categories]
-        assert sorted(names) == sorted(
-            [
-                "certificates",
-                "observations",
-                "entry_outcomes",
-                "ingestion_metrics",
-            ]
-        )
+        names = {c.name for c in plan.categories}
+        assert names == {
+            "certificates",
+            "observations",
+            "entry_outcomes",
+            "ingestion_metrics",
+            "ingestion_errors",
+            "maintenance_runs",
+            "prune_runs",
+            "completed_backfill_ranges",
+        }
 
     def test_disabled_category_is_marked(self) -> None:
         plan = _make_aggregate(metrics_days=0)

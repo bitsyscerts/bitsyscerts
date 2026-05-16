@@ -726,3 +726,59 @@ They do not override the database-backed settings after first boot.
 | **JS linter** | ESLint + Airbnb | 9.x |
 | **Python tests** | pytest + pytest-asyncio | 9.x |
 | **Frontend tests** | Vitest + React Testing Library | 3.x / 16.x |
+
+---
+
+## CI / CD Pipeline
+
+The pipeline is implemented in `.github/workflows/ci.yml` and follows a
+**fan-out / fan-in** design with two guiding principles:
+
+1. **Run everything, see everything** — all validation jobs run in parallel;
+   CI always collects every failure before the gate evaluates, so you never
+   fix one problem only to discover the next one on the following push.
+2. **Atomic versioned deployments** — because all publish jobs share a single
+   `gate` dependency, the API image, App image, and runtime bundles are either
+   all published at the same version tag or none of them are.
+
+### Job graph
+
+```
+version ──────────────────────────────────────────────────────────────────┐
+                                                                          │
+semgrep ────┐                                                             │
+test-api ───┼──→  gate  ──→  build-push-api ──┐                          │
+test-ctpool ┤   (all must      build-push-app ──┼──→  release             │
+test-app ───┘    pass)         pkg-bundles ────┘  └──→  pre-release       │
+                                    ↑                                     │
+                                    └──────────── needs version ──────────┘
+```
+
+### Phase descriptions
+
+| Phase | Jobs | Runs on |
+|---|---|---|
+| **Validate** | `semgrep`, `test-api`, `test-ctpool`, `test-app` | Every push and PR |
+| **Gate** | `gate` | Passes only when all four validate jobs pass |
+| **Publish** | `build-push-api`, `build-push-app`, `package-runtime-bundles` | Push events only (`if: github.event_name == 'push'`) |
+| **Release** | `release` (stable), `pre-release` (staging/develop/release/*) | Push to qualifying branches only |
+
+### Version tagging
+
+The `version` job runs in parallel with validation and outputs three version
+strings used by publish jobs:
+
+| Output | Format | Example |
+|---|---|---|
+| `version_core` | `yy.mdd.hhmm` | `26.516.1423` |
+| `version_pep440` | PEP 440 local segment on non-main | `26.516.1423+staging.abc1234` |
+| `version_docker` | Docker-safe tag | `26.516.1423-staging-abc1234` |
+
+Both container images and runtime bundle ZIP files are tagged with
+`version_docker`. GitHub Releases on `main` use `version_core`.
+
+### SAST
+
+Semgrep runs as a hard gate — any finding fails the `semgrep` job, which
+fails the `gate`, which prevents all publish steps from running. Findings
+are also uploaded to the GitHub Security tab as SARIF for triage.

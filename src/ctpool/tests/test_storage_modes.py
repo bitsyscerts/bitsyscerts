@@ -91,7 +91,9 @@ def test_flags_full_der():
 def test_resolve_lite_profile_default():
     profile, mode = resolve_profile_defaults("lite")
     assert profile == StorageProfile.LITE
-    assert mode == CertStorageMode.NONE
+    # Changed from NONE to METADATA: cert metadata is product data;
+    # NONE skipped all Certificate rows which broke the Certificates page.
+    assert mode == CertStorageMode.METADATA
 
 
 def test_resolve_standard_profile_default():

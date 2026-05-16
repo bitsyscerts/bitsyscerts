@@ -181,6 +181,34 @@ describe("deriveSystemStatus", () => {
     expect(result.level).toBe("action_needed");
   });
 
+  it("returns healthy (not warning) when maintenance has never_ran", () => {
+    const result = deriveSystemStatus({
+      ...BASE_STATS,
+      maintenance: {
+        status: "never_ran",
+        active_profile: "current-osint",
+        last_prune_started_at: null,
+        last_prune_completed_at: null,
+        last_prune_status: null,
+        last_prune_mode: null,
+        last_prune_deleted: {
+          certificates: 0,
+          certificate_hostnames: 0,
+          observations: 0,
+          entry_outcomes: 0,
+          ingestion_metrics: 0,
+        },
+        preserved_hostnames: null,
+        duration_ms: null,
+        next_prune_due_at: null,
+        is_enforced: false,
+        error_message: null,
+      },
+    });
+    expect(result.level).toBe("healthy");
+    expect(result.issues).toHaveLength(0);
+  });
+
   it("stale CT logs do not raise a warning (normal operating state)", () => {
     const result = deriveSystemStatus({
       ...BASE_STATS,

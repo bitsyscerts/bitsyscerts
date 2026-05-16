@@ -43,9 +43,9 @@ class Settings(BaseSettings):
     # Sprint 5: how old a stats snapshot may be before the API marks it stale.
     # The dashboard surfaces ``is_stale=true`` so the operator never reads
     # stale numbers as current.  Must be greater than the snapshotter cadence
-    # (``ct_stats_heavy_refresh_seconds``, default 30 s).  The default of
-    # 90 s tolerates two full missed cycles with a 30 s margin.
-    stats_stale_seconds: int = 90
+    # (``ct_stats_heavy_refresh_seconds``, default 300 s).  The default of
+    # 360 s tolerates a full refresh cycle plus a one-cycle margin.
+    stats_stale_seconds: int = 360
 
 
 @functools.lru_cache(maxsize=1)

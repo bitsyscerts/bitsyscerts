@@ -14,10 +14,9 @@ Behaviour:
     * Every invocation (including dry-runs) writes one ``ct_maintenance_runs``
       row so the dashboard can show the latest status.
 
-File size justification (~360 lines, Warning band):
+File size justification (Warning band):
     This module is the single orchestration point for retention.  It must
-    keep the per-category count/delete logic (observations, entry
-    outcomes, ingestion metrics, certificates) co-located with the
+    keep the per-category count/delete logic co-located with the
     plan-builder, recorder, and Rich/JSON renderer because splitting them
     fractures the safety invariant that *every* path writes one — and
     only one — ``ct_maintenance_runs`` row.  This will be reduced when
@@ -38,14 +37,19 @@ from sqlalchemy import func, select, text
 
 from ctpool.config import Settings, get_settings
 from ctpool.db import create_engine, create_session_factory
+from ctpool.instance_settings import get_active_settings
 from ctpool.maintenance_recorder import (
     finalize_maintenance_run,
     insert_maintenance_run,
 )
 from ctpool.models.entry_outcome import CtEntryOutcome
 from ctpool.models.hostname import Hostname
+from ctpool.models.ingestion_error import IngestionError
 from ctpool.models.ingestion_metric import IngestionMetric
+from ctpool.models.log_backfill_range import CtLogBackfillRange
+from ctpool.models.maintenance_run import CtMaintenanceRun
 from ctpool.models.observation import CtLogObservation
+from ctpool.models.prune_run import CtPruneRun
 from ctpool.prune_profile_plan import (
     PruneAggregate,
     PruneCategory,
@@ -63,9 +67,61 @@ _RUN_TYPE = "prune_for_storage_profile"
 # matter as long as it is unique within the database.
 _ADVISORY_LOCK_KEY = 0x42495343  # 'BISC' in ASCII
 
+# Dispatch table for categories that map directly to one model + timestamp
+# column.  Entries here are handled generically by _process_simple_category.
+# Certificates and completed_backfill_ranges require special handling.
+_SIMPLE_CATEGORIES: dict[str, tuple[type, str]] = {
+    "observations": (CtLogObservation, "observed_at"),
+    "entry_outcomes": (CtEntryOutcome, "first_seen_at"),
+    "ingestion_metrics": (IngestionMetric, "snapshot_at"),
+    "ingestion_errors": (IngestionError, "occurred_at"),
+    "maintenance_runs": (CtMaintenanceRun, "started_at"),
+    "prune_runs": (CtPruneRun, "started_at"),
+}
+
+# Aggregate field that records deletion count for a simple category.
+_SIMPLE_AGG_FIELD: dict[str, str] = {
+    "observations": "deleted_observations",
+    "entry_outcomes": "deleted_entry_outcomes",
+    "ingestion_metrics": "deleted_ingestion_metrics",
+}
+
 
 class ConcurrentPruneError(RuntimeError):
     """Raised when another profile prune is already running."""
+
+
+async def _read_prune_params(factory: Any, settings: Settings) -> dict[str, Any]:
+    """Return effective prune parameters: DB row first, env vars as fallback.
+
+    Reads ``CtInstanceSettings`` via an async session.  If no row exists
+    (e.g. before first bootstrap) the Settings (env) values are used.
+    """
+    async with factory() as session:
+        db_row = await get_active_settings(session)
+    if db_row is not None:
+        _logger.debug(
+            "prune: using DB-backed settings (profile=%s)", db_row.storage_profile
+        )
+        return {
+            "storage_profile": db_row.storage_profile,
+            "cert_storage_mode": db_row.cert_storage_mode,
+            "hostname_retention_mode": db_row.hostname_retention_mode,
+            "cert_retention_days": db_row.cert_retention_days,
+            "observation_retention_days": db_row.observation_retention_days,
+            "entry_outcome_retention_days": db_row.entry_outcome_retention_days,
+            "metrics_retention_days": db_row.metrics_retention_days,
+        }
+    _logger.debug("prune: no DB settings row; falling back to env vars")
+    return {
+        "storage_profile": settings.ct_storage_profile,
+        "cert_storage_mode": settings.ct_cert_storage_mode,
+        "hostname_retention_mode": settings.ct_hostname_retention_mode,
+        "cert_retention_days": settings.ct_cert_retention_days,
+        "observation_retention_days": settings.ct_observation_retention_days,
+        "entry_outcome_retention_days": settings.ct_entry_outcome_retention_days,
+        "metrics_retention_days": settings.ct_metrics_retention_days,
+    }
 
 
 async def run_prune_for_storage_profile(
@@ -89,20 +145,21 @@ async def run_prune_for_storage_profile(
         The :class:`PruneAggregate` describing the run.
     """
     settings = get_settings()
+    engine = create_engine(settings)
+    factory = create_session_factory(engine)
+
+    params = await _read_prune_params(factory, settings)
     aggregate = build_prune_plan(
-        storage_profile=settings.ct_storage_profile,
-        cert_storage_mode=settings.ct_cert_storage_mode,
-        hostname_retention_mode=settings.ct_hostname_retention_mode,
-        cert_retention_days=settings.ct_cert_retention_days,
-        observation_retention_days=settings.ct_observation_retention_days,
-        entry_outcome_retention_days=settings.ct_entry_outcome_retention_days,
-        metrics_retention_days=settings.ct_metrics_retention_days,
+        storage_profile=params["storage_profile"],
+        cert_storage_mode=params["cert_storage_mode"],
+        hostname_retention_mode=params["hostname_retention_mode"],
+        cert_retention_days=params["cert_retention_days"],
+        observation_retention_days=params["observation_retention_days"],
+        entry_outcome_retention_days=params["entry_outcome_retention_days"],
+        metrics_retention_days=params["metrics_retention_days"],
         started_at=datetime.now(UTC),
         mode="execute" if execute else "dry_run",
     )
-
-    engine = create_engine(settings)
-    factory = create_session_factory(engine)
     started_monotonic = time.monotonic()
 
     lock_acquired = await _try_acquire_lock(factory)
@@ -152,7 +209,7 @@ async def run_prune_for_storage_profile(
         deleted_observations=aggregate.deleted_observations,
         deleted_entry_outcomes=aggregate.deleted_entry_outcomes,
         deleted_ingestion_metrics=aggregate.deleted_ingestion_metrics,
-        preserved_hostnames=getattr(aggregate, "preserved_hostnames", None),
+        preserved_hostnames=aggregate.preserved_hostnames,
         duration_ms=duration_ms,
         error_message=aggregate.error_message,
         details=summarize_plan_as_json(aggregate),
@@ -209,32 +266,18 @@ async def _process_category(
     limit: int,
     batch_size: int,
 ) -> None:
-    """Compute candidates and (optionally) delete them for one category."""
+    """Dispatch one retention category to the appropriate handler."""
     cutoff = datetime.now(UTC) - timedelta(days=category.retention_days)
-    if category.name == "observations":
-        category.candidate_count = await _count_observations(factory, cutoff)
-        if execute:
-            deleted = await _delete_observations(
-                factory, cutoff, limit=limit, batch_size=batch_size
-            )
-            category.deleted_count = deleted
-            aggregate.deleted_observations = deleted
-    elif category.name == "entry_outcomes":
-        category.candidate_count = await _count_entry_outcomes(factory, cutoff)
-        if execute:
-            deleted = await _delete_entry_outcomes(
-                factory, cutoff, limit=limit, batch_size=batch_size
-            )
-            category.deleted_count = deleted
-            aggregate.deleted_entry_outcomes = deleted
-    elif category.name == "ingestion_metrics":
-        category.candidate_count = await _count_metrics(factory, cutoff)
-        if execute:
-            deleted = await _delete_metrics(
-                factory, cutoff, limit=limit, batch_size=batch_size
-            )
-            category.deleted_count = deleted
-            aggregate.deleted_ingestion_metrics = deleted
+    if category.name in _SIMPLE_CATEGORIES:
+        await _process_simple_category(
+            aggregate=aggregate,
+            category=category,
+            factory=factory,
+            execute=execute,
+            limit=limit,
+            batch_size=batch_size,
+            cutoff=cutoff,
+        )
     elif category.name == "certificates":
         await _process_certificates(
             aggregate=aggregate,
@@ -244,6 +287,56 @@ async def _process_category(
             limit=limit,
             batch_size=batch_size,
             cutoff=cutoff,
+        )
+    elif category.name == "completed_backfill_ranges":
+        await _process_backfill_ranges(
+            category=category,
+            factory=factory,
+            execute=execute,
+            limit=limit,
+            batch_size=batch_size,
+            cutoff=cutoff,
+        )
+
+
+async def _process_simple_category(
+    *,
+    aggregate: PruneAggregate,
+    category: PruneCategory,
+    factory: Any,
+    execute: bool,
+    limit: int,
+    batch_size: int,
+    cutoff: datetime,
+) -> None:
+    """Count and optionally delete rows for a dispatch-table category."""
+    model, col = _SIMPLE_CATEGORIES[category.name]
+    category.candidate_count = await _count_before(factory, model, col, cutoff)
+    if not execute:
+        return
+    deleted = await _delete_before(
+        factory, model, col, cutoff, limit=limit, batch_size=batch_size
+    )
+    category.deleted_count = deleted
+    agg_field = _SIMPLE_AGG_FIELD.get(category.name)
+    if agg_field:
+        setattr(aggregate, agg_field, deleted)
+
+
+async def _process_backfill_ranges(
+    *,
+    category: PruneCategory,
+    factory: Any,
+    execute: bool,
+    limit: int,
+    batch_size: int,
+    cutoff: datetime,
+) -> None:
+    """Count and optionally delete completed backfill range rows."""
+    category.candidate_count = await _count_completed_backfill_ranges(factory, cutoff)
+    if execute:
+        category.deleted_count = await _delete_completed_backfill_ranges(
+            factory, cutoff, limit=limit, batch_size=batch_size
         )
 
 
@@ -318,16 +411,50 @@ async def _latest_link_deletes(settings: Settings) -> int:
     return int(row or 0)
 
 
-async def _count_observations(factory: Any, cutoff: datetime) -> int:
-    return await _count_before(factory, CtLogObservation, "observed_at", cutoff)
+async def _count_completed_backfill_ranges(factory: Any, cutoff: datetime) -> int:
+    """Count completed backfill ranges older than *cutoff*."""
+    async with factory() as session:
+        result = await session.execute(
+            select(func.count())
+            .where(
+                CtLogBackfillRange.status == "complete",
+                CtLogBackfillRange.completed_at < cutoff,
+            )
+            .select_from(CtLogBackfillRange)
+        )
+    return int(result.scalar_one())
 
 
-async def _count_entry_outcomes(factory: Any, cutoff: datetime) -> int:
-    return await _count_before(factory, CtEntryOutcome, "first_seen_at", cutoff)
+async def _delete_completed_backfill_ranges(
+    factory: Any, cutoff: datetime, *, limit: int, batch_size: int
+) -> int:
+    """Batched DELETE of completed backfill ranges older than *cutoff*."""
+    from sqlalchemy import delete as sa_delete
 
-
-async def _count_metrics(factory: Any, cutoff: datetime) -> int:
-    return await _count_before(factory, IngestionMetric, "snapshot_at", cutoff)
+    total = 0
+    while True:
+        if limit and total >= limit:
+            break
+        effective_batch = min(batch_size, limit - total) if limit else batch_size
+        async with factory() as session:
+            async with session.begin():
+                subq = (
+                    select(CtLogBackfillRange.id)
+                    .where(
+                        CtLogBackfillRange.status == "complete",
+                        CtLogBackfillRange.completed_at < cutoff,
+                    )
+                    .limit(effective_batch)
+                    .scalar_subquery()
+                )
+                result = await session.execute(
+                    sa_delete(CtLogBackfillRange).where(CtLogBackfillRange.id.in_(subq))
+                )
+                deleted = result.rowcount or 0
+        if deleted == 0:
+            break
+        total += deleted
+    return total
 
 
 async def _count_before(
@@ -340,45 +467,6 @@ async def _count_before(
             select(func.count()).where(column < cutoff).select_from(model)
         )
     return int(result.scalar_one())
-
-
-async def _delete_observations(
-    factory: Any, cutoff: datetime, *, limit: int, batch_size: int
-) -> int:
-    return await _delete_before(
-        factory,
-        CtLogObservation,
-        "observed_at",
-        cutoff,
-        limit=limit,
-        batch_size=batch_size,
-    )
-
-
-async def _delete_entry_outcomes(
-    factory: Any, cutoff: datetime, *, limit: int, batch_size: int
-) -> int:
-    return await _delete_before(
-        factory,
-        CtEntryOutcome,
-        "first_seen_at",
-        cutoff,
-        limit=limit,
-        batch_size=batch_size,
-    )
-
-
-async def _delete_metrics(
-    factory: Any, cutoff: datetime, *, limit: int, batch_size: int
-) -> int:
-    return await _delete_before(
-        factory,
-        IngestionMetric,
-        "snapshot_at",
-        cutoff,
-        limit=limit,
-        batch_size=batch_size,
-    )
 
 
 async def _delete_before(

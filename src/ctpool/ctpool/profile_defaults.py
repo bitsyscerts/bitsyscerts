@@ -14,12 +14,22 @@ from ctpool.storage_modes import StorageProfile
 PROFILE_DEFAULTS: dict[StorageProfile, dict[str, object]] = {
     StorageProfile.LITE: {
         "storage_profile": "lite",
-        "cert_storage_mode": "none",
+        # Changed from "none" → "metadata": "none" sets skip_cert=True which
+        # bypasses ALL Certificate / CertificateHostname upserts.  Cert
+        # metadata (fingerprint, issuer, SANs, validity) is core product data
+        # and SANs are additional hostnames.  The Certificates page must work
+        # in LITE mode.
+        "cert_storage_mode": "metadata",
         "hostname_retention_mode": "forever",
         "backfill_days": 30,
         "cert_retention_days": 1,
-        "observation_retention_days": 7,
-        "entry_outcome_retention_days": 7,
+        # Changed from 7 → 1: observations are processing receipts only.
+        # No dedup/audit value once the window is fully processed.  Reclaims
+        # ~9 GB on the next pruner run.
+        "observation_retention_days": 1,
+        # Changed from 7 → 1: same rationale as observations.  Reclaims
+        # ~13 GB on the next pruner run.  Combined saving ~20 GB.
+        "entry_outcome_retention_days": 1,
         "metrics_retention_days": 14,
     },
     StorageProfile.STANDARD: {

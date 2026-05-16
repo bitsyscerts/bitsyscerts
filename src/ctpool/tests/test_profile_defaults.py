@@ -20,15 +20,18 @@ def test_defaults_for_profile_returns_copy() -> None:
 
 
 def test_lite_defaults() -> None:
-    """Lite profile defaults to none cert mode and 30-day backfill."""
+    """Lite profile defaults to metadata cert mode; observations/outcomes at 1 day."""
     d = defaults_for_profile(StorageProfile.LITE)
     assert d["storage_profile"] == "lite"
-    assert d["cert_storage_mode"] == "none"
+    # Changed from "none" to "metadata": cert metadata is product data and
+    # SANs are additional hostnames; skip_cert=True broke the Certificates page.
+    assert d["cert_storage_mode"] == "metadata"
     assert d["hostname_retention_mode"] == "forever"
     assert d["backfill_days"] == 30
     assert d["cert_retention_days"] == 1
-    assert d["observation_retention_days"] == 7
-    assert d["entry_outcome_retention_days"] == 7
+    # 7 days → 1 day: processing receipts only; no dedup/audit value post-window.
+    assert d["observation_retention_days"] == 1
+    assert d["entry_outcome_retention_days"] == 1
     assert d["metrics_retention_days"] == 14
 
 

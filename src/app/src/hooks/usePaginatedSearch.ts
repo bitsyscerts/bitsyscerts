@@ -10,6 +10,7 @@ export interface PaginatedSearchResult {
   data: HostnameListResponse | undefined;
   isLoading: boolean;
   isError: boolean;
+  error: Error | null;
   currentPage: number;
   /** Number of pages we have cursors for (increases as user navigates). */
   knownPageCount: number;
@@ -127,6 +128,7 @@ export function usePaginatedSearch(
     data: query.data,
     isLoading: query.isLoading,
     isError: query.isError,
+    error: query.error,
     currentPage: pageIndex + 1,
     knownPageCount,
     estimatedPageCount,

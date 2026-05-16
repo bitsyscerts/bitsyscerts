@@ -108,12 +108,15 @@ show_missing = true
 
 ### Unified React Test Command
 
-The command `npm run test` (run from `src/app/`) MUST perform all of the following in sequence:
+Two commands exist — use the correct one for the context:
 
-1. ESLint — linting (fails fast on lint errors)
-2. TypeScript type check (`tsc --noEmit`)
-3. Vitest test execution
-4. Coverage report with threshold enforcement
+| Command                 | What it runs                               | When to use                                                                                                                    |
+| ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run test`          | `lint` → `typecheck` → `vitest --coverage` | **Always use this** for agent task verification and pre-commit checks                                                          |
+| `npm run test:coverage` | `vitest --coverage` only                   | CI uses this as a separate step after explicit `lint` and `typecheck` steps; do NOT use this as a standalone verification gate |
+
+**Coding agents MUST use `npm run test`** (the full unified command). Using `npm run test:coverage`
+alone is insufficient — it does not catch linting or type errors.
 
 Configure in `package.json`:
 
@@ -121,6 +124,7 @@ Configure in `package.json`:
 {
   "scripts": {
     "test": "npm run lint && npm run typecheck && vitest run --coverage",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src/ --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "test:watch": "vitest"
