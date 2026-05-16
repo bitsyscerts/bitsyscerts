@@ -1,6 +1,6 @@
 ---
 description: "Use when adding, reviewing, or updating dependencies in package.json, pyproject.toml, or GitHub Actions workflow files. Enforces proactive upgrades to latest stable/secure versions and OSV.dev vulnerability verification before accepting any version."
-applyTo: ["src/**", ".github/workflows/**"]
+applyTo: "src/**, .github/workflows/**"
 ---
 
 # Dependency Update Rules
@@ -68,7 +68,7 @@ proceeding — do not silently leave a known-vulnerable version in the manifest.
 | Manifest           | OSV ecosystem name              | How to find the latest version                                |
 | ------------------ | ------------------------------- | ------------------------------------------------------------- |
 | `pyproject.toml`   | `PyPI`                          | `pip index versions <pkg>` or https://pypi.org/project/<pkg>/ |
-| `package.json`     | `npm`                           | `pnpm outdated` · `npm show <pkg> version`                    |
+| `package.json`     | `npm`                           | `npm outdated` · `npm show <pkg> version`                     |
 | GH Actions `uses:` | `GIT` (full repo URL as `name`) | GitHub releases page for each action repo                     |
 
 ---
@@ -87,14 +87,17 @@ proceeding — do not silently leave a known-vulnerable version in the manifest.
 - Use `^` (compatible minor/patch) for all packages — the existing convention.
 - When a new **major** version is available, upgrade to it proactively rather than
   waiting for a Dependabot PR.
-- After any `package.json` change: `pnpm install` then `npm run test`.
+- After any `package.json` change: `npm install` then `npm run test`.
 
 ### GitHub Actions — `.github/workflows/*.yml`
 
-- Pin to a **specific tag** (e.g., `actions/checkout@v4.2.2`), not just a major-version
-  alias (`@v4`). Specific tags are reproducible and auditable; major aliases can silently
-  pick up breaking changes.
-- When a newer release tag exists for an action, update the pin.
+- Pin to a **full commit SHA** (for example
+  `actions/checkout@<40-char-sha> # v4.2.2`), not a mutable major alias (`@v4`).
+- Release tags are mutable pointers; they are better than floating major aliases, but they are
+  not fully reproducible. Use tag comments only as human-readable labels for the pinned SHA.
+- For paired artifact steps, keep `actions/upload-artifact` and
+  `actions/download-artifact` on the same major version.
+- When a newer release tag exists for an action, update the pin to that tag's commit SHA.
 - Use the full `https://github.com/<owner>/<repo>` URL as the `name` field in OSV queries.
 
 ---
