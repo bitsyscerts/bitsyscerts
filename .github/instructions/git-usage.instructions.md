@@ -1,6 +1,6 @@
 ---
 description: "Use when running git or gh commands, committing changes, pushing branches, creating PRs, or performing any version control operation. Enforces read-only git access on integration branches (staging, main) and restricts direct commits to PR branches only."
-applyTo: "src/**"
+applyTo: "**"
 ---
 
 # Git Usage Rules
