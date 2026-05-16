@@ -26,14 +26,26 @@ Present this decomposition and wait for confirmation before proceeding.
 
 ## Step 2 — Create the Package Structure
 
-Under `src/api/<domain>/`, create:
+Determine which sub-project this module belongs to:
+
+- **`src/api/<domain>/`** — REST API logic (routers, services, repositories, Pydantic models)
+- **`src/ctpool/ctpool/`** — CT ingestion workers, CLI commands, DB schema, pruning logic
+
+**For `src/api/<domain>/`, create:**
 
 - `__init__.py` — exports only, no implementation code
 - `models.py` — Pydantic models (if this module has data structures crossing boundaries)
 - `<module_name>.py` — implementation (MUST be ≤200 lines)
 - `exceptions.py` — domain-specific exception classes (if applicable)
 
-MUST NOT place implementation code in `__init__.py`.
+**For `src/ctpool/ctpool/`, create:**
+
+- `<module_name>.py` — implementation (MUST be ≤200 lines); follow the existing
+  `_cli_*_impl.py` naming convention for CLI command implementations
+- If defining new DB models or queries, co-locate with the relevant domain module
+  (e.g., `prune_queries.py` alongside `_cli_prune_storage_profile_impl.py`)
+
+MUST NOT place implementation code in `__init__.py` in either sub-project.
 
 ---
 
@@ -51,7 +63,12 @@ MUST NOT place implementation code in `__init__.py`.
 
 ## Step 4 — Create the Test File
 
-Create `src/api/<domain>/tests/test_<module_name>.py`:
+Create the test file in the correct location:
+
+- `src/api/<domain>/tests/test_<module_name>.py` for API modules
+- `src/ctpool/tests/test_<module_name>.py` for ctpool modules
+
+(Replace `<module_name>` with the actual module name.)
 
 - Use pytest fixtures for all shared setup — no duplicated setup code.
 - Use `@pytest.mark.parametrize` for input variations.
@@ -69,13 +86,22 @@ Create `src/api/<domain>/tests/test_<module_name>.py`:
 
 ## Step 5 — Verify
 
-Run the following and confirm all pass before declaring complete:
+Run the following for the relevant sub-project and confirm all pass before declaring complete:
 
 ```bash
-ruff check src/api/<domain>/
-ruff format --check src/api/<domain>/
-mypy src/api/<domain>/
-pytest src/api/<domain>/tests/ --cov=src/api/<domain> --cov-fail-under=75
+# For src/api/ modules:
+cd /workspaces/bitsyscerts/src/api
+ruff check --fix certsapi/ tests/ && ruff format certsapi/ tests/
+ruff check certsapi/ tests/ && ruff format --check certsapi/ tests/
+mypy certsapi/
+pytest tests/ --cov=certsapi --cov-fail-under=75
+
+# For src/ctpool/ modules:
+cd /workspaces/bitsyscerts/src/ctpool
+ruff check --fix ctpool/ tests/ && ruff format ctpool/ tests/
+ruff check ctpool/ tests/ && ruff format --check ctpool/ tests/
+mypy ctpool/
+pytest tests/ --cov=ctpool --cov-fail-under=75
 ```
 
 Report the coverage percentages and confirm all checks pass.

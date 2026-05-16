@@ -54,6 +54,7 @@ class PruneAggregate:
     deleted_observations: int = 0
     deleted_entry_outcomes: int = 0
     deleted_ingestion_metrics: int = 0
+    preserved_hostnames: int | None = None
 
     categories: list[PruneCategory] = field(default_factory=list)
     error_message: str | None = None
@@ -86,6 +87,13 @@ def build_prune_plan(
             name="entry_outcomes", retention_days=entry_outcome_retention_days
         ),
         PruneCategory(name="ingestion_metrics", retention_days=metrics_retention_days),
+        # Unbounded operational tables — fixed retention windows (not profile-driven).
+        PruneCategory(
+            name="ingestion_errors", retention_days=entry_outcome_retention_days
+        ),
+        PruneCategory(name="maintenance_runs", retention_days=90),
+        PruneCategory(name="prune_runs", retention_days=90),
+        PruneCategory(name="completed_backfill_ranges", retention_days=30),
     ]
     return PruneAggregate(
         storage_profile=storage_profile,
@@ -118,20 +126,22 @@ def summarize_plan_for_console(aggregate: PruneAggregate) -> list[str]:
         for cat in aggregate.categories:
             if cat.is_disabled:
                 continue
-            lines.append(f"  {cat.name:<22} {cat.candidate_count:>12,}")
+            lines.append(f"  {cat.name:<28} {cat.candidate_count:>12,}")
     else:
         lines.append("Deleted:")
-        lines.append(f"  certificates           {aggregate.deleted_certificates:>12,}")
-        lines.append(
-            f"  certificate_hostnames  {aggregate.deleted_certificate_hostnames:>12,}"
-        )
-        lines.append(f"  ct_log_observations    {aggregate.deleted_observations:>12,}")
-        lines.append(
-            f"  ct_entry_outcomes      {aggregate.deleted_entry_outcomes:>12,}"
-        )
-        lines.append(
-            f"  ingestion_metrics      {aggregate.deleted_ingestion_metrics:>12,}"
-        )
+        for cat in aggregate.categories:
+            if cat.is_disabled:
+                continue
+            if cat.name == "certificates":
+                lines.append(
+                    f"  {'certificates':<28} {aggregate.deleted_certificates:>12,}"
+                )
+                lines.append(
+                    f"  {'certificate_hostnames':<28}"
+                    f" {aggregate.deleted_certificate_hostnames:>12,}"
+                )
+            else:
+                lines.append(f"  {cat.name:<28} {cat.deleted_count:>12,}")
     lines.append("")
     lines.append("Would preserve:")
     lines.append("  hostnames:                 preserved (always)")

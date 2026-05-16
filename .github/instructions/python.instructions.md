@@ -183,7 +183,21 @@ cd /workspaces/bitsyscerts/src/ctpool && ruff check ctpool/ tests/ && ruff forma
 ```
 
 If Step 2 still reports violations after Step 1, fix them manually, then re-run Step 2
-until it is clean. Only then declare the task complete.
+until it is clean.
+
+**Step 3 — Type check with mypy:**
+
+```
+# For files changed under src/api/
+cd /workspaces/bitsyscerts/src/api && source /workspaces/bitsyscerts/.venv/bin/activate && mypy certsapi/
+
+# For files changed under src/ctpool/
+cd /workspaces/bitsyscerts/src/ctpool && source /workspaces/bitsyscerts/.venv/bin/activate && mypy ctpool/
+```
+
+mypy MUST report zero errors before the task is declared complete. A task that passes
+ruff but fails mypy is not done. Only after Steps 1, 2, and 3 all pass may you declare
+the task complete.
 
 The most common violation is **I001 (unsorted imports)**. It is always auto-fixable.
 Running `ruff check --fix` before handing back prevents 100% of pre-commit import

@@ -2,9 +2,12 @@
 
 The orchestrator is responsible for:
     * recording every invocation as a ``ct_maintenance_runs`` row,
+    * reading effective settings from the DB row (with env-var fallback),
     * skipping categories whose ``retention_days`` is ``0`` (retain forever),
     * defaulting to dry-run unless ``execute=True``,
-    * surfacing failures via ``status='failed'`` + ``error_message``.
+    * surfacing failures via ``status='failed'`` + ``error_message``,
+    * including pruners for previously-unbounded tables (ingestion_errors,
+      maintenance_runs, prune_runs, completed_backfill_ranges).
 
 The tests stub out database I/O and category-level processing so each
 behavioural requirement can be exercised in isolation.
@@ -42,6 +45,19 @@ def _make_settings(**overrides: Any) -> MagicMock:
     return s
 
 
+def _params_from_settings(settings: MagicMock) -> dict[str, Any]:
+    """Return the dict that _read_prune_params would produce from env settings."""
+    return {
+        "storage_profile": settings.ct_storage_profile,
+        "cert_storage_mode": settings.ct_cert_storage_mode,
+        "hostname_retention_mode": settings.ct_hostname_retention_mode,
+        "cert_retention_days": settings.ct_cert_retention_days,
+        "observation_retention_days": settings.ct_observation_retention_days,
+        "entry_outcome_retention_days": settings.ct_entry_outcome_retention_days,
+        "metrics_retention_days": settings.ct_metrics_retention_days,
+    }
+
+
 class _Patches:
     """Context bundle that stubs all DB-touching helpers used by the run."""
 
@@ -54,6 +70,9 @@ class _Patches:
         self.count_hostnames_mock = AsyncMock(return_value=42)
         self.try_lock_mock = AsyncMock(return_value=True)
         self.release_lock_mock = AsyncMock(return_value=None)
+        self.read_prune_params_mock = AsyncMock(
+            return_value=_params_from_settings(settings)
+        )
         self.engine = MagicMock()
         self.engine.dispose = AsyncMock(return_value=None)
 
@@ -70,6 +89,10 @@ class _Patches:
             patch(
                 "ctpool._cli_prune_storage_profile_impl.create_session_factory",
                 return_value=MagicMock(),
+            ),
+            patch(
+                "ctpool._cli_prune_storage_profile_impl._read_prune_params",
+                self.read_prune_params_mock,
             ),
             patch(
                 "ctpool._cli_prune_storage_profile_impl.insert_maintenance_run",
@@ -179,3 +202,37 @@ class TestRunPruneForStorageProfile:
         # No maintenance row is recorded when the lock is unavailable.
         ctx.insert_mock.assert_not_awaited()
         ctx.finalize_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_db_backed_settings_override_env(self) -> None:
+        """DB-backed settings are used when present; env values are ignored."""
+        env_settings = _make_settings(ct_observation_retention_days=7)
+        db_params = dict(_params_from_settings(env_settings))
+        # Simulate UI change: DB says 1 day, env says 7 days.
+        db_params["observation_retention_days"] = 1
+        with _Patches(env_settings) as ctx:
+            ctx.read_prune_params_mock.return_value = db_params
+            agg = await run_prune_for_storage_profile(console=_QUIET_CONSOLE)
+        obs_cat = next(c for c in agg.categories if c.name == "observations")
+        assert obs_cat.retention_days == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_includes_unbounded_table_categories(self) -> None:
+        """Plan must include pruners for previously-unbounded operational tables."""
+        with _Patches(_make_settings()):
+            agg = await run_prune_for_storage_profile(console=_QUIET_CONSOLE)
+        category_names = {c.name for c in agg.categories}
+        assert "ingestion_errors" in category_names
+        assert "maintenance_runs" in category_names
+        assert "prune_runs" in category_names
+        assert "completed_backfill_ranges" in category_names
+
+    @pytest.mark.asyncio
+    async def test_operational_categories_have_fixed_retention(self) -> None:
+        """Operational table categories use fixed retention windows."""
+        with _Patches(_make_settings()):
+            agg = await run_prune_for_storage_profile(console=_QUIET_CONSOLE)
+        cats = {c.name: c for c in agg.categories}
+        assert cats["maintenance_runs"].retention_days == 90
+        assert cats["prune_runs"].retention_days == 90
+        assert cats["completed_backfill_ranges"].retention_days == 30

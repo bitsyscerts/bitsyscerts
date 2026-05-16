@@ -86,8 +86,11 @@ _FLAGS: dict[CertStorageMode, CertificatePersistenceFlags] = {
 }
 
 # Default cert_storage_mode per profile.
+# LITE uses METADATA so that Certificate rows (fingerprint, SANs, validity)
+# are always available; "none" would set skip_cert=True and break the
+# Certificates page entirely.
 _PROFILE_CERT_MODE: dict[StorageProfile, CertStorageMode] = {
-    StorageProfile.LITE: CertStorageMode.NONE,
+    StorageProfile.LITE: CertStorageMode.METADATA,
     StorageProfile.STANDARD: CertStorageMode.METADATA,
     StorageProfile.RESEARCH: CertStorageMode.METADATA,
     StorageProfile.ARCHIVE: CertStorageMode.FULL_DER,

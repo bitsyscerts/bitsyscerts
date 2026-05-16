@@ -1,14 +1,16 @@
 import { useState } from "react";
 import {
   ActionIcon,
+  Alert,
   Collapse,
   Container,
   Group,
   Paper,
   Stack,
+  Text,
   Tooltip,
 } from "@mantine/core";
-import { IconAdjustmentsHorizontal } from "@tabler/icons-react";
+import { IconAdjustmentsHorizontal, IconClock } from "@tabler/icons-react";
 import { SearchBox } from "@/components/SearchBox/SearchBox";
 import { SearchOptions } from "@/components/SearchOptions/SearchOptions";
 import { ResultsList } from "@/components/ResultsList/ResultsList";
@@ -17,6 +19,7 @@ import { useSearchStateContext } from "@/context/SearchStateContext";
 import { useDrawerState } from "@/hooks/useDrawerState";
 import { usePaginatedSearch } from "@/hooks/usePaginatedSearch";
 import { useSearchUrlSync } from "@/hooks/useSearchUrlSync";
+import { ApiTimeoutError } from "@/services/apiClient";
 import type { CertEmbedResponse, HostnameResult } from "@/types";
 
 /**
@@ -106,7 +109,27 @@ export function HostsContent() {
           </Paper>
         </Collapse>
 
-        {search.submittedQuery.trim() && (
+        {search.submittedQuery.trim() && pagination.isError && (
+          <Alert
+            icon={<IconClock size={16} />}
+            color={
+              pagination.error instanceof ApiTimeoutError ? "orange" : "red"
+            }
+            title={
+              pagination.error instanceof ApiTimeoutError
+                ? "Search timed out"
+                : "Search error"
+            }
+          >
+            <Text size="sm">
+              {pagination.error instanceof ApiTimeoutError
+                ? "Search timed out — try a more specific query."
+                : "An unexpected error occurred. Please try again."}
+            </Text>
+          </Alert>
+        )}
+
+        {search.submittedQuery.trim() && !pagination.isError && (
           <ResultsList
             items={pagination.data?.items ?? []}
             isLoading={pagination.isLoading}

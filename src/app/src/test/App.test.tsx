@@ -45,6 +45,7 @@ vi.mock("@/hooks/usePaginatedSearch", () => ({
     data: undefined,
     isLoading: false,
     isError: false,
+    error: null,
     currentPage: 1,
     knownPageCount: 1,
     estimatedPageCount: null,

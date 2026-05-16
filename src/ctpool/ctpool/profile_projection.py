@@ -34,10 +34,15 @@ _BYTES_PER_OBSERVATION = 150
 _BYTES_PER_ENTRY_OUTCOME = 250
 _BYTES_PER_CERT_HOSTNAME_JOIN = 120
 _BYTES_PER_METRICS_OPS = 80
-_INDEX_OVERHEAD_FACTOR = 1.35
+# Index overhead for unique B-tree on high-cardinality CT columns (e.g.
+# certificate fingerprint, hostname).  Empirically 2.0–2.5×; use 2.2× as the
+# conservative mid-point.  The old value of 1.35× significantly under-counted.
+_INDEX_OVERHEAD_FACTOR = 2.2
 
-# Estimated daily new CT entries across all monitored logs
-_DAILY_CT_ENTRIES_ESTIMATE = 4_000_000
+# Estimated daily new CT entries across all monitored logs.
+# Global CT issuance is ~12M/day as of 2025.  The old value of 4M/day was
+# based on 2020-era observations and caused a 3× under-projection.
+_DAILY_CT_ENTRIES_ESTIMATE = 12_000_000
 
 # Legacy per-observation mapping
 _LEGACY_BYTES_PER_OBS: dict[CertStorageMode, tuple[int, int]] = {

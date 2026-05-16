@@ -22,6 +22,7 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
         str(settings.database_url),
         pool_pre_ping=True,
         echo=False,
+        connect_args={"options": "-c statement_timeout=30000"},
     )
     return async_sessionmaker(engine, expire_on_commit=False)
 

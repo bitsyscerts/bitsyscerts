@@ -82,12 +82,7 @@ function collectMaintenanceIssues(
       message: "Last maintenance prune run failed.",
     });
   }
-  if (maintenance.status === "never_ran") {
-    issues.push({
-      severity: "warning",
-      message: "Maintenance has never run on this instance.",
-    });
-  }
+  // "never_ran" is expected on first boot — not surfaced as a warning.
   return issues;
 }
 
