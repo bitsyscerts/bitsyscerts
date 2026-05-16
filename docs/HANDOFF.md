@@ -47,6 +47,8 @@
 | 23 | `src/app/src/utils/deriveSystemStatus.ts` | 1C-2: `never_ran` maintenance status no longer surfaces as a warning |
 | 24 | `src/ctpool/ctpool/prune_profile_plan.py` | Fixed: added `preserved_hostnames: int \| None = None` field to `PruneAggregate` (mypy error introduced by Phase 1A) |
 | 25 | `.github/workflows/ci.yml` | CI/CD redesigned: fan-out/fan-in pattern with `gate` job; Semgrep promoted to hard gate; all publish jobs now share a single dependency so deployments are atomic |
+| 26 | `src/ctpool/migrations/versions/b2c3d4e5f6a7_hostname_sort_indexes.py` | Fixed: replaced `op.execute("COMMIT")` with `op.get_context().autocommit_block()` — raw COMMIT does not work with async psycopg, causing `ActiveSqlTransaction: CREATE INDEX CONCURRENTLY cannot run inside a transaction block` in production |
+| 27 | `.github/instructions/database.instructions.md` | Updated CONCURRENTLY rule: removed the broken `op.execute("COMMIT")` example; documented `autocommit_block()` as the only correct pattern with async psycopg drivers |
 
 ---
 
