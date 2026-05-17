@@ -9,7 +9,9 @@ import { DashboardOverview } from "./DashboardOverview";
 export function DashboardPage() {
   return (
     <ErrorBoundary>
-      <AnnouncementBanner />
+      <Container size="xl" px="md">
+        <AnnouncementBanner />
+      </Container>
       <Suspense fallback={<StatsPanelSkeleton />}>
         <Container size="xl" py="md">
           <DashboardOverview />
