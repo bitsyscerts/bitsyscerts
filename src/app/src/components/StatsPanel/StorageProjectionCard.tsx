@@ -23,6 +23,7 @@ import {
   formatRatioPct,
   formatStorageSize,
 } from "@/utils/format";
+import { computeStorageCeiling } from "@/utils/projectionUtils";
 
 interface StorageProjectionCardProps {
   projection: StorageProjection;
@@ -67,13 +68,8 @@ export function StorageProjectionCard({
 }: StorageProjectionCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const warning = warningMessage(projection);
-  const ceilingBytes =
-    projection.projection_high_bytes ??
-    projection.projected_final_database_size_bytes;
-  const storageValue =
-    ceilingBytes != null && ceilingBytes > 0
-      ? (projection.database_size_bytes / ceilingBytes) * 100
-      : (projection.storage_percent_of_projected ?? 0) * 100;
+  const { pct } = computeStorageCeiling(projection);
+  const storageValue = (pct ?? 0) * 100;
 
   return (
     <Paper withBorder radius="md" p="md">

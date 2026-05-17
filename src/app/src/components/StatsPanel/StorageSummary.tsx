@@ -1,4 +1,12 @@
-import { Button, Group, Paper, RingProgress, Stack, Text, Tooltip } from "@mantine/core";
+import {
+  Button,
+  Group,
+  Paper,
+  RingProgress,
+  Stack,
+  Text,
+  Tooltip,
+} from "@mantine/core";
 import { IconChartBar, IconEye } from "@tabler/icons-react";
 import { ProfileBadge } from "@/components/StatsPanel/ProfileBadge";
 import type {
@@ -7,6 +15,8 @@ import type {
   StorageProjection,
   StorageStats,
 } from "@/types";
+import { formatStorageSize } from "@/utils/format";
+import { computeStorageCeiling } from "@/utils/projectionUtils";
 
 interface StorageSummaryProps {
   storage: StorageStats;
@@ -32,71 +42,40 @@ function maintenanceLabel(maintenance: MaintenanceStatus | null | undefined) {
   }
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1_099_511_627_776) return `${(bytes / 1_099_511_627_776).toFixed(1)} TB`;
-  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
-  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(0)} MB`;
-  return `${(bytes / 1024).toFixed(0)} KB`;
-}
-
 interface DiskDonutProps {
   projection: StorageProjection;
 }
 
 function DiskDonut({ projection }: DiskDonutProps) {
-  // Primary: profile completeness — what % of planned observations are ingested
   const syncPct = projection.sync_percent_by_observation;
-  const completed = projection.planned_observations_completed;
-  const total = projection.planned_observations_total;
+  const { ceilingBytes, pct: storagePct } = computeStorageCeiling(projection);
 
-  // Fallback: actual disk usage when no observation plan exists
-  const diskUsed = projection.disk_used_bytes;
-  const diskTotal = projection.disk_total_bytes;
+  const hasSyncRing = syncPct != null;
+  const hasStorageRing =
+    ceilingBytes != null && ceilingBytes > 0 && storagePct != null;
 
-  if (syncPct != null) {
-    const pct = Math.min(Math.round(syncPct * 100), 100);
-    const color = pct >= 95 ? "green" : pct >= 75 ? "teal" : "yellow";
-    const tooltip =
-      total > 0
-        ? `${String(pct)}% of planned observations ingested (${completed.toLocaleString()} of ${total.toLocaleString()})`
-        : `${String(pct)}% of planned observations ingested`;
+  // Fallback: physical disk ring when no projection data is available at all
+  if (!hasSyncRing && !hasStorageRing) {
+    const diskUsed = projection.disk_used_bytes;
+    const diskTotal = projection.disk_total_bytes;
+    if (diskUsed == null || diskTotal == null || diskTotal <= 0) return null;
+    const v = Math.min(Math.round((diskUsed / diskTotal) * 100), 100);
+    const color = v >= 90 ? "red" : v >= 75 ? "orange" : "teal";
     return (
-      <Tooltip label={tooltip} withArrow position="top">
+      <Tooltip
+        label={`Disk: ${formatStorageSize(diskUsed)} used of ${formatStorageSize(diskTotal)} total`}
+        withArrow
+        position="top"
+      >
         <Stack gap={0} align="center" style={{ cursor: "default" }}>
           <RingProgress
-            size={64}
-            thickness={7}
+            size={56}
+            thickness={6}
             roundCaps
-            sections={[{ value: pct, color }]}
+            sections={[{ value: v, color }]}
             label={
               <Text size="xs" fw={700} ta="center" lh={1}>
-                {String(pct)}%
-              </Text>
-            }
-          />
-          <Text size="xs" c="dimmed" ta="center" lh={1}>
-            synced
-          </Text>
-        </Stack>
-      </Tooltip>
-    );
-  }
-
-  if (diskUsed != null && diskTotal != null && diskTotal > 0) {
-    const pct = Math.min(Math.round((diskUsed / diskTotal) * 100), 100);
-    const color = pct >= 90 ? "red" : pct >= 75 ? "orange" : "teal";
-    const tooltip = `Disk: ${formatBytes(diskUsed)} used of ${formatBytes(diskTotal)} total`;
-    return (
-      <Tooltip label={tooltip} withArrow position="top">
-        <Stack gap={0} align="center" style={{ cursor: "default" }}>
-          <RingProgress
-            size={64}
-            thickness={7}
-            roundCaps
-            sections={[{ value: pct, color }]}
-            label={
-              <Text size="xs" fw={700} ta="center" lh={1}>
-                {String(pct)}%
+                {String(v)}%
               </Text>
             }
           />
@@ -108,7 +87,66 @@ function DiskDonut({ projection }: DiskDonutProps) {
     );
   }
 
-  return null;
+  const syncV = hasSyncRing ? Math.min(Math.round(syncPct * 100), 100) : 0;
+  const syncColor = syncV >= 95 ? "green" : syncV >= 75 ? "teal" : "yellow";
+  const completed = projection.planned_observations_completed;
+  const total = projection.planned_observations_total;
+  const syncTooltip =
+    total > 0
+      ? `${String(syncV)}% of planned observations ingested (${completed.toLocaleString()} of ${total.toLocaleString()})`
+      : `${String(syncV)}% of planned observations ingested`;
+
+  const storageV = hasStorageRing
+    ? Math.min(Math.round(storagePct * 100), 100)
+    : 0;
+  const storageColor =
+    projection.projected_fits_on_disk === false ? "orange" : "teal";
+  const storageTooltip = `${formatStorageSize(projection.database_size_bytes)} of ~${formatStorageSize(ceilingBytes)} projected max`;
+
+  return (
+    <Group gap="xs" wrap="nowrap">
+      {hasSyncRing && (
+        <Tooltip label={syncTooltip} withArrow position="top">
+          <Stack gap={0} align="center" style={{ cursor: "default" }}>
+            <RingProgress
+              size={56}
+              thickness={6}
+              roundCaps
+              sections={[{ value: syncV, color: syncColor }]}
+              label={
+                <Text size="xs" fw={700} ta="center" lh={1}>
+                  {String(syncV)}%
+                </Text>
+              }
+            />
+            <Text size="xs" c="dimmed" ta="center" lh={1}>
+              synced
+            </Text>
+          </Stack>
+        </Tooltip>
+      )}
+      {hasStorageRing && (
+        <Tooltip label={storageTooltip} withArrow position="top">
+          <Stack gap={0} align="center" style={{ cursor: "default" }}>
+            <RingProgress
+              size={56}
+              thickness={6}
+              roundCaps
+              sections={[{ value: storageV, color: storageColor }]}
+              label={
+                <Text size="xs" fw={700} ta="center" lh={1}>
+                  {String(storageV)}%
+                </Text>
+              }
+            />
+            <Text size="xs" c="dimmed" ta="center" lh={1}>
+              used
+            </Text>
+          </Stack>
+        </Tooltip>
+      )}
+    </Group>
+  );
 }
 
 export function StorageSummary({
@@ -141,9 +179,7 @@ export function StorageSummary({
         </Group>
 
         <Group gap="md" wrap="nowrap" align="flex-start">
-          {storageProjection && (
-            <DiskDonut projection={storageProjection} />
-          )}
+          {storageProjection && <DiskDonut projection={storageProjection} />}
           <Group gap="md" wrap="wrap" style={{ flex: 1 }}>
             {storageProfile && (
               <Stack gap={2}>
