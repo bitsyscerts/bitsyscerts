@@ -58,3 +58,21 @@ class TestIsLiteEnforced:
     def test_missing_completed_at_is_not_enforced(self) -> None:
         run = self._make_run(completed_at=None)
         assert is_lite_enforced(run, interval_seconds=3600) is False
+
+    def test_running_status_within_grace_is_enforced(self) -> None:
+        run = self._make_run(
+            status="running", started_at=datetime.now(UTC), completed_at=None
+        )
+        assert is_lite_enforced(run, interval_seconds=3600) is True
+
+    def test_running_status_stale_is_not_enforced(self) -> None:
+        run = self._make_run(
+            status="running",
+            started_at=datetime.now(UTC) - timedelta(hours=10),
+            completed_at=None,
+        )
+        assert is_lite_enforced(run, interval_seconds=3600) is False
+
+    def test_running_status_missing_started_at_is_not_enforced(self) -> None:
+        run = self._make_run(status="running", started_at=None, completed_at=None)
+        assert is_lite_enforced(run, interval_seconds=3600) is False
