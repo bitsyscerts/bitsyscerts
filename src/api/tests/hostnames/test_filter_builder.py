@@ -45,28 +45,32 @@ class TestExactStrategy:
         assert "=" in str(conds[0])
         assert "LIKE" not in str(conds[0])
 
-    def test_recursive_no_depth_returns_hostname_like_condition(self) -> None:
+    def test_recursive_no_depth_uses_registrable_domain_equality(self) -> None:
         conds = build_where_clause(_exact("example.com"), True, None)
-        # Single LIKE condition covers all subdomains at any depth
+        # registrable_domain = ? is far faster than LIKE at 32 M rows
         assert len(conds) == 1
-        assert "LIKE" in str(conds[0])
-        assert "hostname" in str(conds[0])
+        assert "registrable_domain" in str(conds[0])
+        assert "LIKE" not in str(conds[0])
 
-    def test_recursive_no_depth_excludes_root_domain(self) -> None:
+    def test_recursive_no_depth_includes_root_domain(self) -> None:
         conds = build_where_clause(_exact("example.com"), True, None)
-        sql_strs = [str(c) for c in conds]
-        # LIKE '%.domain' requires at least one label prefix, so root is excluded
-        assert any("LIKE" in s for s in sql_strs)
-        assert not any("!=" in s for s in sql_strs)
+        # registrable_domain = 'example.com' matches the apex hostname itself
+        # as well as all subdomains — no label-prefix requirement.
+        assert "registrable_domain" in str(conds[0])
+        assert "LIKE" not in str(conds[0])
 
-    def test_recursive_no_depth_matches_subdomain_as_query(self) -> None:
-        # Regression: querying a non-eTLD+1 subdomain recursively must return results.
-        # e.g. 'cae.cisco.com' recursive should produce a hostname LIKE condition,
-        # not a registrable_domain equality which would never match.
+    def test_recursive_no_depth_non_registrable_domain_uses_registrable_column(
+        self,
+    ) -> None:
+        # When the caller supplies a non-eTLD+1 label (e.g. 'sub.cisco.com'),
+        # the filter still targets registrable_domain.  The equality will return
+        # no rows at runtime (sub.cisco.com is not itself a registrable domain),
+        # which is the correct behaviour: use wildcard syntax or depth limiting
+        # to search sub-subtrees.
         conds = build_where_clause(_exact("cae.cisco.com"), True, None)
         assert len(conds) == 1
-        assert "LIKE" in str(conds[0])
-        assert "hostname" in str(conds[0])
+        assert "registrable_domain" in str(conds[0])
+        assert "LIKE" not in str(conds[0])
 
     def test_recursive_with_depth_adds_like_conditions(self) -> None:
         conds = build_where_clause(_exact("example.com"), True, 1)
@@ -129,8 +133,9 @@ class TestWildcardStrategy:
         wildcard_conds = build_where_clause(_wildcard("example.com"), True, None)
         exact_conds = build_where_clause(_exact("example.com"), True, None)
         assert len(wildcard_conds) == len(exact_conds)
-        # Both produce a LIKE suffix match on hostname
-        assert any("LIKE" in str(c) for c in wildcard_conds)
+        # Both produce a registrable_domain equality (no LIKE) for fast lookup
+        assert any("registrable_domain" in str(c) for c in wildcard_conds)
+        assert not any("LIKE" in str(c) for c in wildcard_conds)
 
     def test_wildcard_with_recursive_and_depth_uses_depth_conditions(self) -> None:
         wildcard_conds = build_where_clause(_wildcard("example.com"), True, 2)

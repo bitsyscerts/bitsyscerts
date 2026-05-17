@@ -27,6 +27,23 @@ class Hostname(Base):
             sa.text("hostname gin_trgm_ops"),
             postgresql_using="gin",
         ),
+        # Composite indexes for fast registrable-domain recursive search with sort.
+        # Column order: (registrable_domain ASC, sort_col DESC NULLS LAST, id DESC)
+        # Forward scan  → ORDER BY sort_col DESC NULLS LAST, id DESC  (most common)
+        # Backward scan → ORDER BY sort_col ASC NULLS FIRST,  id ASC  (less common)
+        # One index covers both sort directions for each sort column.
+        Index(
+            "idx_hostnames_reg_domain_not_before",
+            "registrable_domain",
+            sa.text("latest_cert_not_before DESC NULLS LAST"),
+            sa.text("id DESC"),
+        ),
+        Index(
+            "idx_hostnames_reg_domain_not_after",
+            "registrable_domain",
+            sa.text("latest_cert_not_after DESC NULLS LAST"),
+            sa.text("id DESC"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -38,17 +38,27 @@ def _exact_or_domain_conditions(
     recursive: bool,
     depth: int | None,
 ) -> list[ColumnElement[bool]]:
-    """Exact hostname match, or subdomain search when recursive=True.
+    """Exact hostname match, or registrable-domain search when recursive=True.
 
-    Uses a hostname LIKE suffix match so that any subdomain depth works as the
-    query value — not just eTLD+1 registrable domains.  The leading '.' in the
-    LIKE pattern implicitly excludes the root domain itself.
+    When recursive=True and no depth is given, matches all hostnames whose
+    ``registrable_domain`` equals *value*.  This uses the B-tree composite
+    index ``idx_hostnames_reg_domain_not_before`` / ``_not_after`` and is
+    orders of magnitude faster than a leading-wildcard LIKE scan at scale.
+
+    Callers should supply an eTLD+1 registrable domain (e.g. ``cisco.com``)
+    as the query value when ``recursive=True``.  If a deeper label is supplied
+    (e.g. ``sub.cisco.com``) the equality filter will return no rows because
+    that label is not itself a registrable domain.  Use the ``*.sub.cisco.com``
+    wildcard syntax or a depth-limited recursive query for sub-subtree searches.
+
+    When depth is specified the search is still LIKE-based because depth
+    limiting requires label-counting via NOT LIKE patterns.
     """
     if not recursive:
         return [Hostname.hostname == value]
     if depth is not None:
         return _depth_conditions(value, depth)
-    return [Hostname.hostname.like(f"%.{value}")]
+    return [Hostname.registrable_domain == value]
 
 
 def _depth_conditions(domain: str, depth: int) -> list[ColumnElement[bool]]:

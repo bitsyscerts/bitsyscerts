@@ -5,9 +5,38 @@ applyTo: "**"
 
 # Git Usage Rules
 
+## Interactive vs Headless — The Fundamental Distinction
+
+How much git involvement is appropriate depends on the execution context:
+
+| Context         | Description                                               | Git write operations                                      |
+| --------------- | --------------------------------------------------------- | --------------------------------------------------------- |
+| **Interactive** | User is present in VS Code chat or terminal               | **Modify files only. Stop there.**                        |
+| **Headless**    | GitHub Actions, agent invoked by a PR, automated workflow | Commits and pushes on the current PR branch are permitted |
+
+### Interactive sessions (default)
+
+When a user is actively present in the conversation:
+
+1. **Make file changes only.** Edit, create, or delete files as requested.
+2. **Stop. Do not `git add`, `git commit`, `git push`, create branches, or open PRs.**
+3. Leave the working tree in a modified state for the user to review and commit at their own pace.
+
+This avoids creating commits, branches, or PRs that the user then has to clean up.
+The user owns the git workflow entirely. The agent owns only the file content.
+
+### Headless sessions
+
+When operating without a user present (GitHub Actions, a PR-triggered agent run, etc.),
+commits and pushes on the **current PR branch** are permitted. The headless context must be
+explicitly clear from the invocation environment — do not assume headless mode during a
+normal chat session.
+
+---
+
 ## Read Operations — Always Allowed
 
-The following commands are always permitted on any branch:
+The following commands are always permitted on any branch in any context:
 
 ```bash
 git status
@@ -26,11 +55,11 @@ gh issue view
 gh repo view
 ```
 
+---
+
 ## Integration Branches — No Commits, Ever
 
-**`staging` and `main` are integration branches. Do not create commits on them under any circumstances.**
-
-This applies to all write operations:
+**`staging` and `main` are integration branches. Do not create commits on them under any circumstances — interactive or headless.**
 
 | Operation                                 | Allowed on `staging`/`main`? |
 | ----------------------------------------- | ---------------------------- |
@@ -43,19 +72,16 @@ This applies to all write operations:
 | `git tag`                                 | **NEVER**                    |
 | `git push --force` / `--force-with-lease` | **NEVER**                    |
 
-If the current branch is `staging` or `main`, stop. Do not proceed with any write git operation. Tell the user which branch you are on and ask them to create a feature branch.
+If the current branch is `staging` or `main` and a write operation is needed: stop, tell
+the user which branch is active, and ask them to switch. Do not create a branch on their
+behalf during an interactive session.
 
-Check the current branch before any write operation:
+---
 
-```bash
-git rev-parse --abbrev-ref HEAD
-```
+## PR Branches — Commits Allowed (Headless Only)
 
-## PR Branches — Commits Allowed
-
-Commits, pushes, and branch operations are allowed when operating on a PR branch — a
-short-lived feature/fix branch that is not `staging` or `main`, typically named with a
-prefix such as `feat/`, `fix/`, `chore/`, `docs/`, `refactor/`.
+Short-lived feature/fix branches (`feat/`, `fix/`, `chore/`, `docs/`, `refactor/`) are the
+only branches where commits and pushes are ever appropriate — and only in headless context.
 
 Examples of valid PR branch names:
 
@@ -63,28 +89,23 @@ Examples of valid PR branch names:
 - `fix/migration-concurrently`
 - `chore/update-dependencies`
 
-When operating autonomously or headless (e.g., inside a GitHub Actions workflow or an
-agent invoked by a PR), commits and pushes to the current PR branch are permitted.
-
-## Creating New Branches
-
-Creating a new branch from `staging` is allowed. This is the expected way to begin new work:
-
-```bash
-git checkout -b feat/my-feature   # OK — creates a new PR branch
-git push -u origin feat/my-feature  # OK — publishes the PR branch
-```
+---
 
 ## Opening Pull Requests
 
-Opening a PR from a feature branch toward `staging` using `gh pr create` is allowed.
+Opening a PR from a feature branch toward `staging` is a headless-only operation.
 Opening a PR from `staging` toward `main` is a release operation — confirm with the user first.
+**Never open a PR during an interactive session without being explicitly asked to.**
+
+---
 
 ## Decision Flowchart
 
 ```
-git write operation requested?
-  └─ yes → check current branch
-               ├─ staging or main → STOP. Tell user; ask them to switch to a PR branch.
-               └─ feature branch  → proceed with the write operation
+any git write operation?
+  └─ interactive session?
+       ├─ yes → STOP. Make file changes only. Leave git to the user.
+       └─ no (headless) → check current branch
+                            ├─ staging or main → STOP. Do not commit.
+                            └─ PR branch       → proceed
 ```
