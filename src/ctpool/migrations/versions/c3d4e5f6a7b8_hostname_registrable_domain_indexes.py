@@ -33,12 +33,14 @@ def upgrade() -> None:
         op.execute(
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS"
             " idx_hostnames_reg_domain_not_before"
-            " ON hostnames (registrable_domain, latest_cert_not_before, id)"
+            " ON hostnames"
+            " (registrable_domain, latest_cert_not_before DESC NULLS LAST, id DESC)"
         )
         op.execute(
             "CREATE INDEX CONCURRENTLY IF NOT EXISTS"
             " idx_hostnames_reg_domain_not_after"
-            " ON hostnames (registrable_domain, latest_cert_not_after, id)"
+            " ON hostnames"
+            " (registrable_domain, latest_cert_not_after DESC NULLS LAST, id DESC)"
         )
 
 
