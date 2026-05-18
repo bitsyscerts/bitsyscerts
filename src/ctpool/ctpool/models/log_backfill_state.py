@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -75,7 +76,7 @@ class CtLogBackfillState(Base):
     terminal_error_count: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
-    details_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    details_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     observed_oldest_not_before: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

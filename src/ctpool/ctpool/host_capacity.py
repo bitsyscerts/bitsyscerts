@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import psutil
+import psutil  # type: ignore[import-untyped]
 
 _logger = logging.getLogger(__name__)
 

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy.pool import NullPool
 
 from ctpool.config import get_settings
+from ctpool.models.audit_finding import CtAuditFinding  # noqa: F401
 from ctpool.models.base import Base
 
 # Explicit model imports so Alembic autogenerate detects every table.
@@ -22,7 +23,6 @@ from ctpool.models.entry_outcome import CtEntryOutcome  # noqa: F401
 from ctpool.models.hostname import Hostname  # noqa: F401
 from ctpool.models.ingestion_error import IngestionError  # noqa: F401
 from ctpool.models.ingestion_metric import IngestionMetric  # noqa: F401
-from ctpool.models.audit_finding import CtAuditFinding  # noqa: F401
 from ctpool.models.instance_settings import CtInstanceSettings  # noqa: F401
 from ctpool.models.log_backfill_range import CtLogBackfillRange  # noqa: F401
 from ctpool.models.log_backfill_state import CtLogBackfillState  # noqa: F401

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from sqlalchemy.engine import RowMapping
 
@@ -196,7 +196,7 @@ def build_maintenance_status(
     from ctpool.maintenance_queries import compute_next_due, is_lite_enforced
 
     profile = (
-        active_settings.storage_profile  # type: ignore[union-attr]
+        active_settings.storage_profile  # type: ignore[attr-defined]
         if active_settings is not None
         else None
     )
@@ -207,7 +207,7 @@ def build_maintenance_status(
             is_enforced=False,
         )
     return MaintenanceStatus(
-        status=cast(str, maintenance_run.get("status", "unknown")),
+        status=cast(str, maintenance_run.get("status", "unknown")),  # type: ignore[arg-type]
         active_profile=(
             cast(str | None, maintenance_run.get("storage_profile")) or profile
         ),
@@ -215,9 +215,9 @@ def build_maintenance_status(
         last_prune_completed_at=cast(
             datetime | None, maintenance_run.get("completed_at")
         ),
-        last_prune_status=cast(str | None, maintenance_run.get("status")),
-        last_prune_mode=cast(str | None, maintenance_run.get("mode")),
-        last_prune_deleted=cast(dict[str, int], maintenance_run.get("deleted") or {}),
+        last_prune_status=cast(str | None, maintenance_run.get("status")),  # type: ignore[arg-type]
+        last_prune_mode=cast(str | None, maintenance_run.get("mode")),  # type: ignore[arg-type]
+        last_prune_deleted=cast(dict[str, int], maintenance_run.get("deleted") or {}),  # type: ignore[arg-type]
         preserved_hostnames=cast(
             int | None, maintenance_run.get("preserved_hostnames")
         ),
@@ -227,7 +227,7 @@ def build_maintenance_status(
             interval_seconds,
         ),
         is_enforced=is_lite_enforced(
-            cast(dict[str, object], maintenance_run),
+            maintenance_run,
             interval_seconds=interval_seconds,
         ),
         error_message=cast(str | None, maintenance_run.get("error_message")),
@@ -240,7 +240,7 @@ def build_storage_profile_block(
     """Convert an active settings row to StorageProfileSettings or None."""
     if active_settings is None:
         return None
-    s = active_settings  # type: ignore[union-attr]
+    s: Any = active_settings
     return StorageProfileSettings(
         storage_profile=s.storage_profile,
         cert_storage_mode=s.cert_storage_mode,
@@ -273,13 +273,13 @@ def resolve_backfill_range_mode(
     """Return (dispatch_mode, backfill_ranges_is_primary) from settings."""
     dispatch_mode = "per-log"
     if ctpool_settings is not None:
-        dispatch_mode = ctpool_settings.ct_backfill_dispatch_mode  # type: ignore[union-attr]
+        dispatch_mode = ctpool_settings.ct_backfill_dispatch_mode  # type: ignore[attr-defined]
     return dispatch_mode, dispatch_mode != "per-log"
 
 
 def coerce_datetime(value: object) -> datetime | None:
     """Return a datetime payload field only when the row value is one."""
-    return value if isinstance(value, datetime) else None  # type: ignore[return-value]
+    return value if isinstance(value, datetime) else None
 
 
 def _as_int(value: object) -> int:

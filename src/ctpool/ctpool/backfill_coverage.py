@@ -62,7 +62,7 @@ def estimate_extension_entries(
 
     span_seconds = (batch_newest - batch_oldest).total_seconds()
     if span_seconds < 1.0 or batch_entries < 1:
-        entries_per_day = _FALLBACK_ENTRIES_PER_DAY
+        entries_per_day: float = _FALLBACK_ENTRIES_PER_DAY
     else:
         entries_per_day = batch_entries / (span_seconds / 86_400.0)
 

@@ -75,8 +75,8 @@ class StatsSnapshotRepository:
             return None
         payload = row.payload_json
         if isinstance(payload, str):
-            return json.loads(payload)  # type: ignore[no-any-return]
-        return payload  # type: ignore[return-value]
+            return json.loads(payload)
+        return payload
 
     async def get_latest_snapshot_age_seconds(
         self,
@@ -121,4 +121,4 @@ class StatsSnapshotRepository:
         if snapshot_type is not None:
             stmt = stmt.where(CtStatsSnapshot.snapshot_type == snapshot_type)
         result = await session.execute(stmt)
-        return result.rowcount  # type: ignore[return-value]
+        return int(result.rowcount)  # type: ignore[attr-defined]

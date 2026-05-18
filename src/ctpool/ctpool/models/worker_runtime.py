@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import BigInteger, DateTime, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -85,4 +86,4 @@ class CtWorkerRuntime(Base):
 
     last_error_type: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    details_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    details_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)

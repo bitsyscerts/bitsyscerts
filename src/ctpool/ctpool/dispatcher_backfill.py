@@ -306,4 +306,4 @@ async def reap_stale_backfill_claims(
         )
     )
     result = await session.execute(stmt)
-    return list(result.all())
+    return list(result.all())  # type: ignore[arg-type]

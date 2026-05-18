@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from ctpool.audit_constants import (
     SEVERITY_CRITICAL,
@@ -99,7 +100,7 @@ class StatsRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_latest_snapshot(self, snapshot_type: str) -> dict | None:
+    async def get_latest_snapshot(self, snapshot_type: str) -> dict[str, Any] | None:
         """Return the payload of the most recent snapshot of *snapshot_type*.
 
         Returns ``None`` when the ``ct_stats_snapshots`` table does not exist
@@ -132,7 +133,7 @@ class StatsRepository:
         payload = row.payload_json
         if isinstance(payload, str):
             return json.loads(payload)  # type: ignore[no-any-return]
-        return payload  # type: ignore[return-value]
+        return payload  # type: ignore[no-any-return]
 
     async def get_snapshot_age_seconds(self, snapshot_type: str) -> float | None:
         """Return seconds since the most recent snapshot was generated.
@@ -162,7 +163,7 @@ class StatsRepository:
         if generated_at is None:
             return None
         now = datetime.now(UTC)
-        return (now - generated_at.replace(tzinfo=UTC)).total_seconds()
+        return float((now - generated_at.replace(tzinfo=UTC)).total_seconds())
 
     async def db_storage(self) -> RowMapping:
         """Return total DB size and per-table sizes using pg_* system functions."""
@@ -431,18 +432,27 @@ class StatsRepository:
     async def worker_summary(self, stale_seconds: int) -> dict[str, object]:
         """Return the worker summary block for live stats responses."""
         await reap_stale_worker_rows(self._session, stale_seconds=stale_seconds)
-        return await query_worker_summary(self._session, stale_seconds=stale_seconds)
+        return cast(
+            dict[str, object],
+            await query_worker_summary(self._session, stale_seconds=stale_seconds),
+        )
 
     async def backfill_state_summary(self, stale_seconds: int) -> dict[str, object]:
         """Return the per-log backfill state block for live stats responses."""
-        return await query_backfill_state_summary(
-            self._session,
-            stale_seconds=stale_seconds,
+        return cast(
+            dict[str, object],
+            await query_backfill_state_summary(
+                self._session,
+                stale_seconds=stale_seconds,
+            ),
         )
 
     async def latest_maintenance_run(self) -> dict[str, object] | None:
         """Return the most recent maintenance run for live stats responses."""
-        return await query_latest_maintenance_run(self._session)
+        return cast(
+            dict[str, object] | None,
+            await query_latest_maintenance_run(self._session),
+        )
 
     async def ct_log_progress_totals(self) -> dict[str, int]:
         """Return SUM(tree_size) and SUM(next_index) for eligible logs.

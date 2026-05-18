@@ -1,3 +1,10 @@
+/*
+ * NOTE (201–500 line warning): This file exceeds the 200-line preference.
+ * Consolidation is justified because StorageProjectionCard is a single
+ * cohesive presentation unit with available/unavailable branching and a
+ * collapsible details section. Splitting DetailItem helpers into a shared
+ * atoms file would resolve this; defer until a second card reuses them.
+ */
 import { useState } from "react";
 import {
   Alert,
@@ -70,6 +77,7 @@ export function StorageProjectionCard({
   const warning = warningMessage(projection);
   const { pct } = computeStorageCeiling(projection);
   const storageValue = (pct ?? 0) * 100;
+  const syncPct = projection.sync_percent_by_observation;
 
   return (
     <Paper withBorder radius="md" p="md">
@@ -126,6 +134,35 @@ export function StorageProjectionCard({
                   </Stack>
                 }
               />
+              {syncPct != null && (
+                <RingProgress
+                  size={132}
+                  thickness={14}
+                  roundCaps
+                  rootColor="gray.3"
+                  sections={[
+                    {
+                      value: Math.min(Math.round(syncPct * 100), 100),
+                      color:
+                        syncPct >= 0.95
+                          ? "green"
+                          : syncPct >= 0.75
+                            ? "teal"
+                            : "yellow",
+                    },
+                  ]}
+                  label={
+                    <Stack gap={0} align="center">
+                      <Text fw={700} size="lg">
+                        {formatRatioPct(syncPct)}
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        synced
+                      </Text>
+                    </Stack>
+                  }
+                />
+              )}
               <Stack gap={4} maw={280}>
                 <RetainedStorageSection projection={projection} />
                 {projection.ingestion_workload != null ? (
@@ -136,10 +173,6 @@ export function StorageProjectionCard({
                   <>
                     <Text size="sm" fw={600}>
                       Sync estimate
-                    </Text>
-                    <Text size="sm">
-                      {formatRatioPct(projection.sync_percent_by_observation)}{" "}
-                      of planned CT observations processed
                     </Text>
                     <Text size="sm" c="dimmed">
                       {formatCompactNumber(
@@ -169,7 +202,7 @@ export function StorageProjectionCard({
               {detailsOpen ? "Hide details" : "Show details"}
             </Button>
 
-            <Collapse in={detailsOpen}>
+            <Collapse expanded={detailsOpen}>
               <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="sm">
                 <DetailItem
                   label="Projected range"

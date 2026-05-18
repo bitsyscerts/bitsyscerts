@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -224,7 +224,7 @@ async def query_ingestion_rate_windows(
             ),
         ).where(IngestionMetric.snapshot_at >= cutoff)
         result = (await session.execute(stmt)).mappings().one()
-        rows.append({"window_seconds": window_seconds, **dict(result)})  # type: ignore[arg-type]
+        rows.append({"window_seconds": window_seconds, **dict(result)})
     return rows
 
 
@@ -391,7 +391,7 @@ async def query_ct_log_progress_totals(
         .join(CtLogSource, CtLogSource.id == CtLogRuntimeState.log_source_id)
         .where(CtLogSource.is_eligible_for_tail.is_(True))
     )
-    planned_total = int((await session.execute(runtime_stmt)).scalar_one())
+    planned_total = cast(int, (await session.execute(runtime_stmt)).scalar_one())
 
     cursor_stmt = (
         select(func.coalesce(func.sum(CtLogTailCursor.next_index), 0))

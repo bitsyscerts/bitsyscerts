@@ -126,6 +126,7 @@ export function StorageSettingsForm({
   useEffect(() => {
     const defaults = PROFILE_DEFAULTS[selectedProfile];
     if (defaults !== undefined) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setValues((prev) => ({ ...prev, ...defaults }));
     }
   }, [selectedProfile]);
@@ -137,7 +138,7 @@ export function StorageSettingsForm({
     setValues((prev) => ({ ...prev, [key]: value }));
   }
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.SyntheticEvent) {
     e.preventDefault();
     const { storage_profile, ...rest } = values;
     await onSubmit({ storage_profile, ...rest });

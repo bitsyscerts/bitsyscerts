@@ -32,6 +32,13 @@ Object.defineProperty(window, "matchMedia", {
   }),
 });
 
+// Mantine v9 Collapse uses nested requestAnimationFrame for CSS transitions.
+// jsdom does not process animation frames, so mock rAF to run synchronously.
+window.requestAnimationFrame = (callback) => {
+  callback(performance.now());
+  return 0;
+};
+
 // jsdom does not implement ResizeObserver; polyfill it for Mantine ScrollArea.
 global.ResizeObserver = class ResizeObserver {
   observe() {

@@ -304,7 +304,7 @@ def _build_entry_outcomes_dict(counts: dict[str, int]) -> dict[str, int]:
     }
 
 
-def _build_backfill_ranges_dict(counts: dict[str, int]) -> dict[str, int]:
+def _build_backfill_ranges_dict(counts: dict[str, int]) -> dict[str, Any]:
     """Build backfill_ranges sub-dict from status counts."""
     return {
         "pending": counts["pending"],

@@ -134,7 +134,7 @@ class HostnameRepository:
         statistics freshness; fast because the inner query stops scanning early.
         """
         where = build_where_clause(parsed, params.recursive, params.depth)
-        inner = (
+        inner: Any = (
             select(literal_column("1"))
             .select_from(Hostname)
             .where(*where)

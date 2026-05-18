@@ -92,7 +92,7 @@ async def run_prune_observations(
                 )
                 stmt = delete(CtLogObservation).where(CtLogObservation.id.in_(subq))
                 result = await session.execute(stmt)
-                deleted = result.rowcount
+                deleted: int = result.rowcount  # type: ignore[attr-defined]
         if deleted == 0:
             break
         total_deleted += deleted
