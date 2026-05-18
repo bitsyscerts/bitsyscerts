@@ -1,6 +1,7 @@
 import { Stack, Text } from "@mantine/core";
 import type { StorageProjection } from "@/types";
 import { formatRatioPct, formatStorageSize } from "@/utils/format";
+import { computeStorageCeiling } from "@/utils/projectionUtils";
 
 interface RetainedStorageSectionProps {
   projection: StorageProjection;
@@ -9,21 +10,16 @@ interface RetainedStorageSectionProps {
 export function RetainedStorageSection({
   projection,
 }: RetainedStorageSectionProps) {
-  const profile = projection.profile ?? null;
-  const projectedLabel =
-    profile != null && profile !== "archive"
-      ? `~${formatStorageSize(projection.projected_final_database_size_bytes)} retained`
-      : `~${formatStorageSize(projection.projected_final_database_size_bytes)} projected`;
+  const { ceilingBytes, pct } = computeStorageCeiling(projection);
 
   return (
     <Stack gap={4} maw={280}>
       <Text size="sm" fw={600}>
-        {formatStorageSize(projection.database_size_bytes)} used of{" "}
-        {projectedLabel}
+        {formatStorageSize(projection.database_size_bytes)} of ~
+        {formatStorageSize(ceilingBytes)} projected max
       </Text>
       <Text size="sm" c="dimmed">
-        {formatRatioPct(projection.storage_percent_of_projected)} of projected
-        storage
+        {formatRatioPct(pct)} of projected storage
       </Text>
     </Stack>
   );

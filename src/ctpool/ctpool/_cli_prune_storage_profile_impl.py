@@ -147,78 +147,89 @@ async def run_prune_for_storage_profile(
     settings = get_settings()
     engine = create_engine(settings)
     factory = create_session_factory(engine)
-
-    params = await _read_prune_params(factory, settings)
-    aggregate = build_prune_plan(
-        storage_profile=params["storage_profile"],
-        cert_storage_mode=params["cert_storage_mode"],
-        hostname_retention_mode=params["hostname_retention_mode"],
-        cert_retention_days=params["cert_retention_days"],
-        observation_retention_days=params["observation_retention_days"],
-        entry_outcome_retention_days=params["entry_outcome_retention_days"],
-        metrics_retention_days=params["metrics_retention_days"],
-        started_at=datetime.now(UTC),
-        mode="execute" if execute else "dry_run",
-    )
-    started_monotonic = time.monotonic()
-
-    lock_acquired = await _try_acquire_lock(factory)
-    if not lock_acquired:
-        await engine.dispose()
-        msg = "Another profile prune is already running; refusing to run concurrently."
-        _logger.warning(msg)
-        aggregate.status = "failed"
-        aggregate.error_message = msg
-        _render(aggregate, console=console, json_output=json_output)
-        raise ConcurrentPruneError(msg)
-
-    run_id = await insert_maintenance_run(
-        factory,
-        run_type=_RUN_TYPE,
-        mode=aggregate.mode,
-        storage_profile=aggregate.storage_profile,
-    )
+    run_id = None
 
     try:
-        for category in aggregate.categories:
-            if category.is_disabled:
-                continue
-            await _process_category(
-                aggregate=aggregate,
-                category=category,
-                factory=factory,
-                settings=settings,
-                execute=execute,
-                limit=limit,
-                batch_size=batch_size,
+        params = await _read_prune_params(factory, settings)
+        aggregate = build_prune_plan(
+            storage_profile=params["storage_profile"],
+            cert_storage_mode=params["cert_storage_mode"],
+            hostname_retention_mode=params["hostname_retention_mode"],
+            cert_retention_days=params["cert_retention_days"],
+            observation_retention_days=params["observation_retention_days"],
+            entry_outcome_retention_days=params["entry_outcome_retention_days"],
+            metrics_retention_days=params["metrics_retention_days"],
+            started_at=datetime.now(UTC),
+            mode="execute" if execute else "dry_run",
+        )
+        started_monotonic = time.monotonic()
+
+        lock_acquired = await _try_acquire_lock(factory)
+        if not lock_acquired:
+            msg = (
+                "Another profile prune is already running;"
+                " refusing to run concurrently."
             )
-        aggregate.preserved_hostnames = await _count_hostnames(factory)
-        aggregate.status = "complete"
-    except Exception as exc:  # noqa: BLE001 — surface any error to the row
-        aggregate.status = "failed"
-        aggregate.error_message = str(exc)
-        _logger.exception("prune-for-storage-profile failed")
+            _logger.warning(msg)
+            aggregate.status = "failed"
+            aggregate.error_message = msg
+            _render(aggregate, console=console, json_output=json_output)
+            raise ConcurrentPruneError(msg)
 
-    duration_ms = int((time.monotonic() - started_monotonic) * 1000)
-    await finalize_maintenance_run(
-        factory,
-        run_id,
-        status=aggregate.status,
-        deleted_certificates=aggregate.deleted_certificates,
-        deleted_certificate_hostnames=aggregate.deleted_certificate_hostnames,
-        deleted_observations=aggregate.deleted_observations,
-        deleted_entry_outcomes=aggregate.deleted_entry_outcomes,
-        deleted_ingestion_metrics=aggregate.deleted_ingestion_metrics,
-        preserved_hostnames=aggregate.preserved_hostnames,
-        duration_ms=duration_ms,
-        error_message=aggregate.error_message,
-        details=summarize_plan_as_json(aggregate),
-    )
+        run_id = await insert_maintenance_run(
+            factory,
+            run_type=_RUN_TYPE,
+            mode=aggregate.mode,
+            storage_profile=aggregate.storage_profile,
+        )
 
-    await _release_lock(factory)
-    await engine.dispose()
-    _render(aggregate, console=console, json_output=json_output)
-    return aggregate
+        try:
+            for category in aggregate.categories:
+                if category.is_disabled:
+                    continue
+                await _process_category(
+                    aggregate=aggregate,
+                    category=category,
+                    factory=factory,
+                    settings=settings,
+                    execute=execute,
+                    limit=limit,
+                    batch_size=batch_size,
+                )
+            aggregate.preserved_hostnames = await _count_hostnames(factory)
+            aggregate.status = "complete"
+        except Exception as exc:  # noqa: BLE001 — surface any error to the row
+            aggregate.status = "failed"
+            aggregate.error_message = str(exc)
+            _logger.exception("prune-for-storage-profile failed")
+
+        duration_ms = int((time.monotonic() - started_monotonic) * 1000)
+        try:
+            await finalize_maintenance_run(
+                factory,
+                run_id,
+                status=aggregate.status,
+                deleted_certificates=aggregate.deleted_certificates,
+                deleted_certificate_hostnames=aggregate.deleted_certificate_hostnames,
+                deleted_observations=aggregate.deleted_observations,
+                deleted_entry_outcomes=aggregate.deleted_entry_outcomes,
+                deleted_ingestion_metrics=aggregate.deleted_ingestion_metrics,
+                preserved_hostnames=aggregate.preserved_hostnames,
+                duration_ms=duration_ms,
+                error_message=aggregate.error_message,
+                details=summarize_plan_as_json(aggregate),
+            )
+        except Exception:
+            _logger.exception(
+                "Failed to finalize maintenance run %s; row may remain 'running'",
+                run_id,
+            )
+
+        _render(aggregate, console=console, json_output=json_output)
+        return aggregate
+    finally:
+        await _release_lock(factory)
+        await engine.dispose()
 
 
 async def _try_acquire_lock(factory: Any) -> bool:

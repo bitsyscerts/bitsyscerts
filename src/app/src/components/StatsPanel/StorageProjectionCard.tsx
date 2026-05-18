@@ -23,6 +23,7 @@ import {
   formatRatioPct,
   formatStorageSize,
 } from "@/utils/format";
+import { computeStorageCeiling } from "@/utils/projectionUtils";
 
 interface StorageProjectionCardProps {
   projection: StorageProjection;
@@ -67,7 +68,8 @@ export function StorageProjectionCard({
 }: StorageProjectionCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const warning = warningMessage(projection);
-  const storageValue = (projection.storage_percent_of_projected ?? 0) * 100;
+  const { pct } = computeStorageCeiling(projection);
+  const storageValue = (pct ?? 0) * 100;
 
   return (
     <Paper withBorder radius="md" p="md">
@@ -116,7 +118,7 @@ export function StorageProjectionCard({
                 label={
                   <Stack gap={0} align="center">
                     <Text fw={700} size="lg">
-                      {formatRatioPct(projection.storage_percent_of_projected)}
+                      {formatRatioPct(storageValue / 100)}
                     </Text>
                     <Text size="xs" c="dimmed">
                       used

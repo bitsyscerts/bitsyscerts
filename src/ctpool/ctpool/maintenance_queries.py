@@ -69,14 +69,27 @@ def is_lite_enforced(
     interval_seconds: int,
     grace_factor: float = 2.0,
 ) -> bool:
-    """Return True iff the most recent execute run completed within tolerance.
+    """Return True iff maintenance is actively enforcing retention.
+
+    A currently-executing run (``status='running'``) is treated as enforced
+    when it started within the grace window — the loop is healthy and a
+    completed result is imminent.  A completed execute run is enforced when
+    its ``completed_at`` is within the grace window.  Any other status
+    (failed, dry_run, stuck) returns False.
 
     ``grace_factor`` lets one missed cycle slip before the dashboard flips
     the indicator.
     """
     if last_run is None:
         return False
-    if last_run.get("status") != "complete":
+    status = last_run.get("status")
+    if status == "running":
+        started_at = last_run.get("started_at")
+        if started_at is None:
+            return False
+        age = (datetime.now(UTC) - started_at).total_seconds()
+        return age <= interval_seconds * grace_factor
+    if status != "complete":
         return False
     if last_run.get("mode") != "execute":
         return False
