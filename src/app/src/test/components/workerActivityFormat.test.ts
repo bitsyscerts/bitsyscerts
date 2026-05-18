@@ -11,7 +11,9 @@ import {
 } from "@/components/StatsPanel/workerActivityFormat";
 import type { WorkerSummaryItem } from "@/types";
 
-function makeItem(overrides: Partial<WorkerSummaryItem> = {}): WorkerSummaryItem {
+function makeItem(
+  overrides: Partial<WorkerSummaryItem> = {},
+): WorkerSummaryItem {
   return {
     worker_id: "host:1",
     worker_kind: "tail",
@@ -127,9 +129,9 @@ describe("formatWorkerLog", () => {
   });
 
   it("falls back to Service worker when both are null", () => {
-    expect(formatWorkerLog(makeItem({ log_name: null, log_source_id: null }))).toBe(
-      "Service worker",
-    );
+    expect(
+      formatWorkerLog(makeItem({ log_name: null, log_source_id: null })),
+    ).toBe("Service worker");
   });
 });
 
@@ -140,12 +142,16 @@ describe("formatWorkerLogMeta", () => {
 
   it("returns log_url when log_operator is null", () => {
     expect(
-      formatWorkerLogMeta(makeItem({ log_operator: null, log_url: "https://example.com" })),
+      formatWorkerLogMeta(
+        makeItem({ log_operator: null, log_url: "https://example.com" }),
+      ),
     ).toBe("https://example.com");
   });
 
   it("returns null when both are null", () => {
-    expect(formatWorkerLogMeta(makeItem({ log_operator: null, log_url: null }))).toBeNull();
+    expect(
+      formatWorkerLogMeta(makeItem({ log_operator: null, log_url: null })),
+    ).toBeNull();
   });
 });
 
@@ -155,7 +161,9 @@ describe("formatWorkerWork", () => {
   });
 
   it("includes direction when set", () => {
-    expect(formatWorkerWork(makeItem({ direction: "forward" }))).toBe("forward");
+    expect(formatWorkerWork(makeItem({ direction: "forward" }))).toBe(
+      "forward",
+    );
   });
 
   it("includes batch range when both indexes are set", () => {
@@ -199,7 +207,9 @@ describe("formatWorkerActivity", () => {
   });
 
   it("shows obs/min rate when set", () => {
-    const result = formatWorkerActivity(makeItem({ observations_per_min: 120.5 }));
+    const result = formatWorkerActivity(
+      makeItem({ observations_per_min: 120.5 }),
+    );
     expect(result).toContain("120.5 obs/min");
   });
 
@@ -231,7 +241,10 @@ describe("formatWorkerError", () => {
 
   it("formats error type with message when both set", () => {
     const result = formatWorkerError(
-      makeItem({ last_error_type: "TimeoutError", last_error_message: "deadline exceeded" }),
+      makeItem({
+        last_error_type: "TimeoutError",
+        last_error_message: "deadline exceeded",
+      }),
     );
     expect(result).toBe("TimeoutError: deadline exceeded");
   });
@@ -252,7 +265,9 @@ describe("formatWorkerError", () => {
   });
 
   it("formats retry count only when next_retry_at is null", () => {
-    const result = formatWorkerError(makeItem({ retry_count: 2, next_retry_at: null }));
+    const result = formatWorkerError(
+      makeItem({ retry_count: 2, next_retry_at: null }),
+    );
     expect(result).toBe("retry 2");
   });
 
