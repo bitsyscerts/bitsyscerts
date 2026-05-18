@@ -50,9 +50,9 @@ describe("StorageProjectionCard", () => {
 
     expect(screen.getByText("Storage Projection")).toBeInTheDocument();
     expect(screen.getByText(/Sync estimate/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/of planned CT observations processed/i),
-    ).toBeInTheDocument();
+    // Sync percentage is now shown in the ring; text section shows count only
+    expect(screen.getByText(/synced/i)).toBeInTheDocument();
+    expect(screen.getByText(/observations/i)).toBeInTheDocument();
     expect(screen.getByText(/Projected range/i)).not.toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: /show details/i }));
