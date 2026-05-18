@@ -44,6 +44,7 @@ export function useSearchUrlSync(search: SearchState) {
   const initialParamsRef = useRef(searchParams);
   const searchRef = useRef(search);
   // Keep searchRef current on every render so URL-sync effect sees latest state.
+  // eslint-disable-next-line react-hooks/refs
   searchRef.current = search;
 
   const didInit = useRef(false);

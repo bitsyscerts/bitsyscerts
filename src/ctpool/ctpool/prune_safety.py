@@ -58,19 +58,19 @@ async def delete_certificates_batch(
             CertificateHostname.certificate_id.in_(id_list)
         )
     )
-    ch_count = ch_result.rowcount
+    ch_count: int = ch_result.rowcount  # type: ignore[attr-defined]
 
     # Delete observation rows.
     obs_result = await session.execute(
         delete(CtLogObservation).where(CtLogObservation.certificate_id.in_(id_list))
     )
-    obs_count = obs_result.rowcount
+    obs_count: int = obs_result.rowcount  # type: ignore[attr-defined]
 
     # Delete the certificate rows.
     cert_result = await session.execute(
         delete(Certificate).where(Certificate.id.in_(id_list))
     )
-    cert_count = cert_result.rowcount
+    cert_count: int = cert_result.rowcount  # type: ignore[attr-defined]
 
     return DeletionCounts(
         deleted_certificates=cert_count,

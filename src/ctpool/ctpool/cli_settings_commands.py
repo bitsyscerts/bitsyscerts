@@ -22,7 +22,7 @@ def _console() -> Console:  # type: ignore[name-defined]  # noqa: F821
         from rich.console import Console
 
         _console_lazy = Console()
-    return _console_lazy  # type: ignore[return-value]
+    return _console_lazy
 
 
 profile_app = typer.Typer(
@@ -67,17 +67,17 @@ def show_profile(
         raise typer.Exit(code=1)
 
     data = {
-        "storage_profile": row.storage_profile,  # type: ignore[union-attr]
-        "cert_storage_mode": row.cert_storage_mode,  # type: ignore[union-attr]
-        "hostname_retention_mode": row.hostname_retention_mode,  # type: ignore[union-attr]
-        "backfill_days": row.backfill_days,  # type: ignore[union-attr]
-        "cert_retention_days": row.cert_retention_days,  # type: ignore[union-attr]
-        "observation_retention_days": row.observation_retention_days,  # type: ignore[union-attr]
-        "entry_outcome_retention_days": row.entry_outcome_retention_days,  # type: ignore[union-attr]
-        "metrics_retention_days": row.metrics_retention_days,  # type: ignore[union-attr]
-        "settings_hash": row.settings_hash,  # type: ignore[union-attr]
-        "updated_at": str(row.updated_at),  # type: ignore[union-attr]
-        "updated_by": row.updated_by,  # type: ignore[union-attr]
+        "storage_profile": row.storage_profile,  # type: ignore[attr-defined]
+        "cert_storage_mode": row.cert_storage_mode,  # type: ignore[attr-defined]
+        "hostname_retention_mode": row.hostname_retention_mode,  # type: ignore[attr-defined]
+        "backfill_days": row.backfill_days,  # type: ignore[attr-defined]
+        "cert_retention_days": row.cert_retention_days,  # type: ignore[attr-defined]
+        "observation_retention_days": row.observation_retention_days,  # type: ignore[attr-defined]
+        "entry_outcome_retention_days": row.entry_outcome_retention_days,  # type: ignore[attr-defined]
+        "metrics_retention_days": row.metrics_retention_days,  # type: ignore[attr-defined]
+        "settings_hash": row.settings_hash,  # type: ignore[attr-defined]
+        "updated_at": str(row.updated_at),  # type: ignore[attr-defined]
+        "updated_by": row.updated_by,  # type: ignore[attr-defined]
     }
     if json_output:
         typer.echo(_json.dumps(data, indent=2))

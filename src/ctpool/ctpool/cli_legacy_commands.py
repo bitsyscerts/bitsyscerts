@@ -40,7 +40,7 @@ legacy_app = typer.Typer(
 
 
 async def _query_status_counts() -> dict[str, int]:
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     engine = create_engine(settings)
     factory = create_session_factory(engine)
     try:
@@ -56,7 +56,7 @@ async def _query_status_counts() -> dict[str, int]:
 
 
 async def _execute_clear(*, dry_run: bool) -> int:
-    settings = Settings()
+    settings = Settings()  # type: ignore[call-arg]
     engine = create_engine(settings)
     factory = create_session_factory(engine)
     try:

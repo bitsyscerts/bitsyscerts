@@ -238,8 +238,8 @@ def _available_projection(
         profile_fields.get("_profile_total_bytes") if profile_fields else None
     )
     if profile_total is not None:
-        projected_remaining = max(int(profile_total) - inputs.database_size_bytes, 0)
-        projected_final = int(profile_total)
+        projected_remaining = max(int(profile_total) - inputs.database_size_bytes, 0)  # type: ignore[call-overload]
+        projected_final = int(profile_total)  # type: ignore[call-overload]
         try:
             from ctpool.profile_projection import compute_projection_confidence
 

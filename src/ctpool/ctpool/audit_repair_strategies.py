@@ -63,7 +63,7 @@ async def repair_stale_backfill_claim(
                 updated_at=now,
             )
         )
-        if result.rowcount == 0:
+        if result.rowcount == 0:  # type: ignore[attr-defined]
             # Range status already changed (e.g. worker completed it concurrently).
             # The stale condition is gone regardless — finding is still resolved.
             finding.repair_details_json = {"concurrent_resolution": True}
@@ -97,7 +97,7 @@ async def repair_failed_backfill_range(
                 updated_at=now,
             )
         )
-        if result.rowcount == 0:
+        if result.rowcount == 0:  # type: ignore[attr-defined]
             # Range status already changed (e.g. worker retried it concurrently).
             # The failed condition is gone regardless — finding is still resolved.
             finding.repair_details_json = {"concurrent_resolution": True}

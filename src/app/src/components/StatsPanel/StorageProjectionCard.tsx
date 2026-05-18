@@ -202,7 +202,7 @@ export function StorageProjectionCard({
               {detailsOpen ? "Hide details" : "Show details"}
             </Button>
 
-            <Collapse in={detailsOpen}>
+            <Collapse expanded={detailsOpen}>
               <SimpleGrid cols={{ base: 1, xs: 2 }} spacing="sm">
                 <DetailItem
                   label="Projected range"

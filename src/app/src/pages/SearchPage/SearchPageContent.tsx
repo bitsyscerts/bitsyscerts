@@ -92,7 +92,7 @@ export function HostsContent() {
           </Tooltip>
         </Group>
 
-        <Collapse in={optionsOpen}>
+        <Collapse expanded={optionsOpen}>
           <Paper p="md" radius="md" withBorder>
             <SearchOptions
               recursive={search.options.recursive}

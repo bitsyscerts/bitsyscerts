@@ -283,4 +283,4 @@ async def reap_stale_tail_leases(
         .where(CtLogTailLease.heartbeat_at < cutoff)
         .values(claimed_by=None, claimed_at=None, heartbeat_at=None)
     )
-    return result.rowcount
+    return int(result.rowcount)  # type: ignore[attr-defined]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL, make_url
+from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from ctpool.config import Settings
@@ -46,7 +46,7 @@ def database_exists_sync(settings: Settings) -> bool:
                 text("SELECT 1 FROM pg_database WHERE datname = :database_name"),
                 {"database_name": target_name},
             )
-            return result.scalar_one_or_none() == 1
+            return bool(result.scalar_one_or_none() == 1)
     except SQLAlchemyError as exc:
         raise _build_admin_error(
             exc,
@@ -161,7 +161,7 @@ def _raise_for_reserved_database(database_name: str) -> None:
         )
 
 
-def _admin_engine(settings: Settings):
+def _admin_engine(settings: Settings) -> Engine:
     return create_engine(
         resolve_admin_database_url(settings),
         isolation_level="AUTOCOMMIT",

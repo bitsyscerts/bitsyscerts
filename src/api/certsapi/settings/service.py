@@ -185,4 +185,4 @@ def get_worker_refresh_config_hint() -> int:
     """Return the configured worker refresh interval."""
     from ctpool.bootstrap_config import get_worker_refresh_config
 
-    return get_worker_refresh_config().settings_refresh_seconds
+    return get_worker_refresh_config().settings_refresh_seconds  # type: ignore[no-any-return]

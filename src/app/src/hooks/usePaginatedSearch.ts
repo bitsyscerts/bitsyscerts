@@ -72,6 +72,7 @@ export function usePaginatedSearch(
   useEffect(() => {
     const est = query.data?.total_estimate;
     if (est == null) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState((prev) => {
       if (prev.submittedQuery !== submittedQuery || prev.totalEstimate != null)
         return prev;
@@ -83,6 +84,7 @@ export function usePaginatedSearch(
   useEffect(() => {
     const next = query.data?.next_cursor;
     if (!next) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setState((prev) => {
       if (prev.submittedQuery !== submittedQuery) return prev;
       if (prev.pageIndex + 1 < prev.cursorCache.length) return prev;

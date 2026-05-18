@@ -88,7 +88,7 @@ def is_lite_enforced(
         if started_at is None:
             return False
         age = (datetime.now(UTC) - started_at).total_seconds()
-        return age <= interval_seconds * grace_factor
+        return bool(age <= interval_seconds * grace_factor)
     if status != "complete":
         return False
     if last_run.get("mode") != "execute":
@@ -97,4 +97,4 @@ def is_lite_enforced(
     if completed_at is None:
         return False
     age = (datetime.now(UTC) - completed_at).total_seconds()
-    return age <= interval_seconds * grace_factor
+    return bool(age <= interval_seconds * grace_factor)

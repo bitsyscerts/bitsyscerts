@@ -222,4 +222,4 @@ async def resolve_orphaned_repair_findings(session: AsyncSession) -> int:
         .execution_options(synchronize_session=False)
     )
     result = await session.execute(stmt)
-    return result.rowcount
+    return int(result.rowcount)  # type: ignore[attr-defined]

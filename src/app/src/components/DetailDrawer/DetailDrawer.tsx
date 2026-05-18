@@ -51,6 +51,7 @@ export function DetailDrawer({ isOpen, item, onClose }: DetailDrawerProps) {
   // Reset resolved CN whenever the drawer opens on a different item.
   const fingerprint = item?.type === "cert-lookup" ? item.fingerprint : null;
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setResolvedCn(null);
   }, [fingerprint]);
   return (

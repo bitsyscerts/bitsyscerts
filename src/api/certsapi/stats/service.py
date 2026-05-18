@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from sqlalchemy.engine import RowMapping
 
@@ -155,7 +155,7 @@ class StatsService:
             source=source,  # type: ignore[arg-type]
         )
 
-    async def _try_get_fresh_snapshot(self) -> dict | None:
+    async def _try_get_fresh_snapshot(self) -> dict[str, Any] | None:
         """Return snapshot payload if one exists and is fresh.
 
         Fresh means younger than ``ct_stats_heavy_refresh_seconds`` (default 300 s).
@@ -353,12 +353,12 @@ class StatsService:
                 }
             ),
             ingestion_health=build_ingestion_health(
-                cast(dict[str, object], backfill_state_summary),
-                cast(dict[str, object], worker_summary),
+                backfill_state_summary,
+                worker_summary,
                 outcome_counts,
             ),
             maintenance=build_maintenance_status(
-                cast(dict[str, object] | None, maintenance_run),
+                maintenance_run,
                 interval_seconds=maintenance_interval_seconds,
                 active_settings=active_settings,
             ),

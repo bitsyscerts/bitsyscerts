@@ -29,7 +29,7 @@ __all__ = [
 
 
 async def insert_maintenance_run(
-    factory: async_sessionmaker,
+    factory: async_sessionmaker[Any],
     *,
     run_type: str,
     mode: str,
@@ -54,7 +54,7 @@ async def insert_maintenance_run(
 
 
 async def finalize_maintenance_run(
-    factory: async_sessionmaker,
+    factory: async_sessionmaker[Any],
     run_id: uuid.UUID,
     *,
     status: str,

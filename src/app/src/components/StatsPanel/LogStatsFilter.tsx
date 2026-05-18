@@ -86,7 +86,7 @@ export function LogStatsFilter({
           {countLabel}
         </Text>
       </Group>
-      <Collapse in={open}>
+      <Collapse expanded={open}>
         <Chip.Group multiple value={stateFilter} onChange={onStateFilterChange}>
           <Group gap="xs" mb="xs">
             {STATE_OPTIONS.map(({ value, label, color }) => (

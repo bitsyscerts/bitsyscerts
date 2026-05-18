@@ -92,7 +92,7 @@ async def run_prune_entry_outcomes(
                 )
                 stmt = delete(CtEntryOutcome).where(CtEntryOutcome.id.in_(subq))
                 result = await session.execute(stmt)
-                deleted = result.rowcount
+                deleted: int = result.rowcount  # type: ignore[attr-defined]
         if deleted == 0:
             break
         total_deleted += deleted

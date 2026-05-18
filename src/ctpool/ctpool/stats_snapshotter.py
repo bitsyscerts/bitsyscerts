@@ -15,7 +15,7 @@ import socket
 import time
 from datetime import datetime
 from os import getpid
-from typing import Any
+from typing import Any, cast
 
 from rich.console import Console
 
@@ -277,7 +277,7 @@ def _serialise_payload(payload: dict[str, Any]) -> dict[str, Any]:
             return str(obj)
         raise TypeError(f"Object of type {type(obj)} is not JSON serialisable")
 
-    return json.loads(json.dumps(payload, default=_default))
+    return cast(dict[str, Any], json.loads(json.dumps(payload, default=_default)))
 
 
 async def _query_audit_counts(session: Any) -> dict[str, int]:
