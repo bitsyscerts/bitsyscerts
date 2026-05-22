@@ -186,6 +186,18 @@ PS1='\[\033[38;5;39m\]\u\[\033[0m\]@\[\033[38;5;42m\]\h\[\033[0m\] \[\033[38;5;2
 EOF
 fi
 
+# ---------------------------------------------------------------------------
+# 8. Install OSV Scanner (SCA)
+# ---------------------------------------------------------------------------
+step "Installing OSV Scanner (software composition analysis)"
+ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
+sudo curl -sSfL \
+    "https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_${ARCH}" \
+    -o /usr/local/bin/osv-scanner
+sudo chmod +x /usr/local/bin/osv-scanner
+ok "OSV Scanner $(osv-scanner --version 2>&1 | head -1) installed"
+
+
 ok "Development environment setup complete!"
 echo ""
 echo "  Python / ctpool:"
