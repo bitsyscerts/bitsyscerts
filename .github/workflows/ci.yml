@@ -277,8 +277,8 @@ jobs:
           context: .
           file: src/api/Dockerfile
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta-api.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels }}
           build-args: |
             BUILD_VERSION=${{ needs.version.outputs.version_docker }}
           cache-from: type=gha
