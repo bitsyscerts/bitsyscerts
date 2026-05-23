@@ -49,7 +49,7 @@ jobs:
   # This is a hard gate: any Semgrep finding blocks the gate job and prevents
   # publish/deploy steps from running.
   semgrep:
-    name: "SAST · Semgrep"
+    name: "Scan - SAST (Semgrep)"
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -407,8 +407,7 @@ jobs:
           format: "template"
           template: "@/contrib/sarif.tpl"
           output: trivy-api.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true # only report CVEs where a patched version exists
+          severity: CRITICAL,HIGH,MEDIUM
           exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · API
@@ -426,8 +425,7 @@ jobs:
           format: "template"
           template: "@/contrib/sarif.tpl"
           output: trivy-app.sarif
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true # only report CVEs where a patched version exists
+          severity: CRITICAL,HIGH,MEDIUM
           exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · App
@@ -464,7 +462,7 @@ jobs:
                   data = json.load(open(fname))
                   for run in data.get("runs", []):
                       for r in run.get("results", []):
-                          if r.get("level") != "error":
+                          if r.get("level") not in ("error", "warning"):
                               continue
                           f = parse_msg(r.get("message", {}).get("text", ""))
                           rows.append({
@@ -472,44 +470,83 @@ jobs:
                               "severity": f.get("Severity", "?"),
                               "package": f.get("Package", "?"),
                               "installed": f.get("Installed Version", "?"),
-                              "fixed": f.get("Fixed Version") or "none yet",
+                              "fixed": f.get("Fixed Version") or "",
                               "url": f.get("url", ""),
+                              "level": r.get("level"),
                           })
               return rows
+
+          def categorize(rows):
+              blocking  = [r for r in rows if r["level"] == "error" and r["fixed"]]
+              unpatched = [r for r in rows if r["level"] == "error" and not r["fixed"]]
+              medium    = [r for r in rows if r["level"] == "warning"]
+              return blocking, unpatched, medium
+
+          def md_row(r, show_fixed=True):
+              cve = f"[{r['cve']}]({r['url']})" if r["url"] else r["cve"]
+              base = f"| {r['image']} | {cve} | **{r['severity']}** | `{r['package']}` | `{r['installed']}`"
+              return base + (f" | `{r['fixed']}` |\n" if show_fixed else " |\n")
+
+          def write_blocking(fh, rows):
+              if rows:
+                  fh.write(f"## \\u26d4 CVA \\u2014 {len(rows)} HIGH/CRITICAL with fix available\\n\\n")
+                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\\n|---|---|---|---|---|---|\\n")
+                  for r in rows:
+                      fh.write(md_row(r, show_fixed=True))
+                  fh.write("\\n> Upgrade the package(s) above in the relevant Dockerfile to clear this gate.\\n\\n")
+              else:
+                  fh.write("## \\u2705 CVA \\u2014 no actionable HIGH/CRITICAL findings\\n\\n")
+
+          def write_detail(fh, icon, label, rows, show_fixed):
+              if not rows:
+                  return
+              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\\n\\n")
+              if show_fixed:
+                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\\n|---|---|---|---|---|---|\\n")
+              else:
+                  fh.write("|Image|CVE|Sev|Package|Installed|\\n|---|---|---|---|---|\\n")
+              for r in rows:
+                  fh.write(md_row(r, show_fixed=show_fixed))
+              fh.write("\\n</details>\\n\\n")
 
           def write_summary(rows):
               path = os.environ.get("GITHUB_STEP_SUMMARY")
               if not path:
                   return
+              blocking, unpatched, medium = categorize(rows)
               with open(path, "a") as fh:
-                  if not rows:
-                      fh.write("## \u2705 CVA \u2014 no HIGH/CRITICAL findings\n")
-                      return
-                  fh.write(f"## \u26d4 CVA \u2014 {len(rows)} HIGH/CRITICAL finding(s)\n\n")
-                  fh.write("|Image|CVE|Severity|Package|Installed|Fix available|\n")
-                  fh.write("|---|---|---|---|---|---|\n")
-                  for r in rows:
-                      cve = f"[{r['cve']}]({r['url']})" if r["url"] else r["cve"]
-                      fh.write(f"| {r['image']} | {cve} | **{r['severity']}** | `{r['package']}` | `{r['installed']}` | `{r['fixed']}` |\n")
-                  fh.write("\n> Upgrade the package(s) above in the relevant Dockerfile to clear this gate.\n")
+                  write_blocking(fh, blocking)
+                  write_detail(fh, "\\u26a0\\ufe0f", "HIGH/CRITICAL unpatched (no fix yet)", unpatched, False)
+                  write_detail(fh, "\\u2139\\ufe0f", "MEDIUM findings", medium, True)
 
-          def print_table(rows):
+          def print_table(label, rows):
+              if not rows:
+                  return
               W = (5, 20, 8, 30, 22, 14)
               cols = ("IMAGE", "CVE", "SEV", "PACKAGE", "INSTALLED", "FIX AVAILABLE")
               fmt = "  ".join(f"{{:<{w}}}" for w in W)
+              print(f"\\n  {label}:")
               print(fmt.format(*cols))
               print("  ".join("-" * w for w in W))
               for r in rows:
                   print(fmt.format(r["image"], r["cve"], r["severity"],
-                                   r["package"][:W[3]], r["installed"], r["fixed"]))
+                                   r["package"][:W[3]], r["installed"], r["fixed"] or "none yet"))
 
           rows = load_findings()
+          blocking, unpatched, medium = categorize(rows)
           write_summary(rows)
-          if rows:
-              print(f"FAIL \u2014 {len(rows)} HIGH/CRITICAL finding(s) in container images:\n")
-              print_table(rows)
+          if blocking:
+              print(f"FAIL \\u2014 {len(blocking)} HIGH/CRITICAL finding(s) with fix available:\\n")
+              print_table("BLOCKING", blocking)
+              print_table("UNPATCHED HIGH/CRITICAL (informational)", unpatched)
+              print_table("MEDIUM (informational)", medium)
               sys.exit(1)
-          print("OK: no HIGH/CRITICAL vulnerabilities found in container images")
+          if unpatched or medium:
+              print(f"OK \\u2014 no blocking CVEs. Informational findings below:")
+              print_table("UNPATCHED HIGH/CRITICAL", unpatched)
+              print_table("MEDIUM", medium)
+          else:
+              print("OK: no vulnerabilities found in container images")
           EOF
 
   # ── CI gate ─────────────────────────────────────────────────────────────────
