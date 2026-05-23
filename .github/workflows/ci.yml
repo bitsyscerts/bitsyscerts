@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
   API_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-api
@@ -32,7 +33,7 @@ jobs:
       version_docker: ${{ steps.gen.outputs.version_docker }}
       branch_safe: ${{ steps.gen.outputs.branch_safe }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Generate version strings
         id: gen
@@ -54,7 +55,7 @@ jobs:
     permissions:
       security-events: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Semgrep
         run: pip install semgrep --quiet
@@ -83,7 +84,7 @@ jobs:
                       msg,
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
@@ -176,7 +177,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -211,7 +212,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -244,7 +245,7 @@ jobs:
         working-directory: src/api
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -302,7 +303,7 @@ jobs:
         working-directory: src/ctpool
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -342,7 +343,7 @@ jobs:
         working-directory: src/app
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up pnpm
         uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
@@ -395,7 +396,7 @@ jobs:
       security-events: write
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install OSV Scanner
         run: |
@@ -511,7 +512,7 @@ jobs:
                       msg,
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
@@ -537,7 +538,7 @@ jobs:
       packages: read
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -582,7 +583,7 @@ jobs:
                       fields["Fixed Version"],
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
@@ -631,7 +632,7 @@ jobs:
                       fields["Fixed Version"],
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
@@ -850,7 +851,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [version, gate]
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Validate compose configuration
         run: docker compose -f src/docker-compose.yml --env-file src/.env.compose.example config >/dev/null
@@ -868,7 +869,7 @@ jobs:
             --python-bundle /tmp/bitsyscerts-dist/bitsyscerts-python-${{ needs.version.outputs.version_docker }}.zip
 
       - name: Upload runtime bundles
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-bundles
           path: |
@@ -887,17 +888,17 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download runtime bundles
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: runtime-bundles
           path: /tmp/runtime-bundles
 
       - name: Create GitHub Release
         id: create-release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: "v${{ needs.version.outputs.version_core }}"
           name: "v${{ needs.version.outputs.version_core }}"
@@ -947,17 +948,17 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download runtime bundles
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: runtime-bundles
           path: /tmp/runtime-bundles
 
       - name: Create GitHub Pre-Release
         id: create-pre-release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: "v${{ needs.version.outputs.version_docker }}"
           name: "v${{ needs.version.outputs.version_docker }}"
