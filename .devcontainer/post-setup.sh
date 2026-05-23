@@ -186,6 +186,31 @@ PS1='\[\033[38;5;39m\]\u\[\033[0m\]@\[\033[38;5;42m\]\h\[\033[0m\] \[\033[38;5;2
 EOF
 fi
 
+# ---------------------------------------------------------------------------
+# 8. Install OSV Scanner (SCA)
+# ---------------------------------------------------------------------------
+step "Installing OSV Scanner (software composition analysis)"
+ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
+sudo curl -sSfL \
+    "https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_${ARCH}" \
+    -o /usr/local/bin/osv-scanner
+sudo chmod +x /usr/local/bin/osv-scanner
+ok "OSV Scanner $(osv-scanner --version 2>&1 | head -1) installed"
+
+# ---------------------------------------------------------------------------
+# 9. Install Trivy (CVA)
+# ---------------------------------------------------------------------------
+step "Installing Trivy (container vulnerability analysis)"
+ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
+[[ "$ARCH" == "arm64" ]] && TRIVY_ARCH="Linux-ARM64" || TRIVY_ARCH="Linux-64bit"
+TRIVY_VERSION=$(curl -fsSL https://api.github.com/repos/aquasecurity/trivy/releases/latest \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
+curl -fsSL \
+    "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_${TRIVY_ARCH}.tar.gz" \
+    | sudo tar -xzf - -C /usr/local/bin trivy
+ok "Trivy $(trivy --version 2>&1 | head -1) installed"
+
+
 ok "Development environment setup complete!"
 echo ""
 echo "  Python / ctpool:"

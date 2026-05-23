@@ -12,6 +12,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
   API_IMAGE: ghcr.io/bitsyscerts/bitsyscerts-api
@@ -32,7 +33,7 @@ jobs:
       version_docker: ${{ steps.gen.outputs.version_docker }}
       branch_safe: ${{ steps.gen.outputs.branch_safe }}
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Generate version strings
         id: gen
@@ -49,12 +50,13 @@ jobs:
   # This is a hard gate: any Semgrep finding blocks the gate job and prevents
   # publish/deploy steps from running.
   semgrep:
-    name: "SAST · Semgrep"
+    name: "Scan - SAST (Semgrep)"
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Semgrep
         run: pip install semgrep --quiet
@@ -64,11 +66,92 @@ jobs:
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
+      - name: Normalize Semgrep SARIF fingerprints
+        if: always() && hashFiles('semgrep.sarif') != ''
+        run: python3 .github/scripts/sarif_normalize.py --sarif semgrep.sarif --label sast-semgrep
+
       - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3.35.5
+        uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
         with:
           sarif_file: semgrep.sarif
+          category: sast-semgrep
         if: always()
+
+      - name: Fail on HIGH / CRITICAL findings
+        run: python3 .github/scripts/sarif_gate_sast.py --sarif semgrep.sarif --tool sast
+
+  # ── Build · API image (candidate) ──────────────────────────────────────────
+  # Builds once and pushes a candidate tag so CVA can scan the real image.
+  # The promote job applies final version / latest tags only after all gates
+  # and scans pass — no image is downloaded; promotion is registry-side only.
+  build-api:
+    name: "Build · API image (candidate)"
+    runs-on: ubuntu-latest
+    needs: [version]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build and push candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: src/api/Dockerfile
+          push: true
+          tags: ${{ env.API_IMAGE }}:candidate-${{ github.sha }}
+          build-args: |
+            BUILD_VERSION=${{ needs.version.outputs.version_docker }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Build · App image (candidate) ──────────────────────────────────────────
+  build-app:
+    name: "Build · App image (candidate)"
+    runs-on: ubuntu-latest
+    needs: [version]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build and push candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: src/app/Dockerfile
+          push: true
+          tags: ${{ env.APP_IMAGE }}:candidate-${{ github.sha }}
+          build-args: |
+            BUILD_VERSION=${{ needs.version.outputs.version_docker }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ── Python: certsapi tests ──────────────────────────────────────────────────
   test-api:
@@ -79,10 +162,10 @@ jobs:
         working-directory: src/api
 
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -137,10 +220,10 @@ jobs:
         working-directory: src/ctpool
 
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -177,26 +260,31 @@ jobs:
         working-directory: src/app
 
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+        with:
+          version: 11.2.2
 
       - name: Set up Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4.4.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: src/app/package-lock.json
+          cache: pnpm
+          cache-dependency-path: src/app/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: npm run lint
+        run: pnpm lint
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm typecheck
 
       - name: Run tests (coverage)
-        run: npm run test:coverage
+        run: pnpm test:coverage
 
       - name: Coverage summary
         uses: davelosert/vitest-coverage-report-action@02f3c2e641286b7fa308cd3e430783103ce6103b # v2.12.0
@@ -213,75 +301,146 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
         continue-on-error: true
 
+  # ── SCA: OSV Scanner ────────────────────────────────────────────────────────
+  # Software Composition Analysis across all three dependency manifests.
+  # Fails on any HIGH or CRITICAL finding (SARIF level "error").
+  # SARIF is always uploaded to the GitHub Security tab so that lower-severity
+  # findings remain visible even when the gate passes.
+  scan-sca:
+    name: "Scan · SCA (OSV Scanner)"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install OSV Scanner
+        run: |
+          ARCH=$(uname -m)
+          [[ "$ARCH" == "aarch64" ]] && SLUG="linux_arm64" || SLUG="linux_amd64"
+          curl -fsSL \
+            "https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_${SLUG}" \
+            -o /usr/local/bin/osv-scanner
+          chmod +x /usr/local/bin/osv-scanner
+
+      - name: Scan all lockfiles
+        run: |
+          # || true: exit 1 = vulns found (handled by severity gate below);
+          #          exit 2 = scanner error (also caught below via missing file).
+          osv-scanner scan source \
+            --lockfile src/app/pnpm-lock.yaml \
+            --format sarif \
+            --output-file osv.sarif \
+            src/api src/ctpool \
+          || true
+
+      - name: Fail on HIGH / CRITICAL findings
+        run: python3 .github/scripts/sarif_gate_sast.py --sarif osv.sarif --tool sca
+
+      - name: Normalize OSV SARIF fingerprints
+        if: always() && hashFiles('osv.sarif') != ''
+        run: python3 .github/scripts/sarif_normalize.py --sarif osv.sarif --label sca-osv
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
+        with:
+          sarif_file: osv.sarif
+          category: sca-osv
+        if: always() && hashFiles('osv.sarif') != ''
+
+  # ── CVA: Trivy ──────────────────────────────────────────────────────────────
+  # Container Vulnerability Analysis on the candidate images built by build-api
+  # and build-app.  Fails on any CRITICAL or HIGH OS-package or dependency
+  # finding.  SARIF is always uploaded to the GitHub Security tab.
+  scan-cva:
+    name: "Scan · CVA (Trivy)"
+    runs-on: ubuntu-latest
+    needs: [build-api, build-app]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy scan · API candidate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.API_IMAGE }}:candidate-${{ github.sha }}
+          format: "template"
+          template: "@/contrib/sarif.tpl"
+          output: trivy-api.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: "0" # never fail here; gate step below owns pass/fail
+
+      - name: Normalize Trivy SARIF fingerprints · API
+        if: always() && hashFiles('trivy-api.sarif') != ''
+        run: python3 .github/scripts/sarif_normalize.py --sarif trivy-api.sarif --label cva-trivy-api --trivy
+
+      - name: Upload Trivy SARIF · API
+        uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
+        with:
+          sarif_file: trivy-api.sarif
+          category: cva-trivy-api
+        if: always() && hashFiles('trivy-api.sarif') != ''
+
+      - name: Trivy scan · App candidate
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        if: always() # run even if API scan step fails for a non-vuln reason
+        with:
+          image-ref: ${{ env.APP_IMAGE }}:candidate-${{ github.sha }}
+          format: "template"
+          template: "@/contrib/sarif.tpl"
+          output: trivy-app.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: "0" # never fail here; gate step below owns pass/fail
+
+      - name: Normalize Trivy SARIF fingerprints · App
+        if: always() && hashFiles('trivy-app.sarif') != ''
+        run: python3 .github/scripts/sarif_normalize.py --sarif trivy-app.sarif --label cva-trivy-app --trivy
+
+      - name: Upload Trivy SARIF · App
+        uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
+        with:
+          sarif_file: trivy-app.sarif
+          category: cva-trivy-app
+        if: always() && hashFiles('trivy-app.sarif') != ''
+
+      - name: Fail on HIGH / CRITICAL findings
+        if: always()
+        run: python3 .github/scripts/sarif_gate_cva.py --api trivy-api.sarif --app trivy-app.sarif
+
   # ── CI gate ─────────────────────────────────────────────────────────────────
-  # Fan-in point: all validation jobs (tests + SAST) must pass before any
-  # publish or deploy step is allowed to run.  Because all five upstream jobs
-  # run in parallel, CI always collects every failure before the gate evaluates.
-  # "We all deploy, or we all fail" — the gate is the single dependency for
-  # every publish job, ensuring atomic versioned deployments.
+  # True fan-in point: every left-side job must pass before anything on the
+  # right (promote, packages, release) is allowed to run.  On push events this
+  # includes the candidate builds and CVA scan; on pull_request events those
+  # are skipped and GitHub Actions treats skipped jobs as passing, so gate
+  # still runs against tests + SAST + SCA only.
   gate:
     name: "Gate · all checks passed"
     runs-on: ubuntu-latest
-    needs: [semgrep, test-api, test-ctpool, test-app]
+    needs: [semgrep, test-api, test-ctpool, test-app, scan-sca, scan-cva]
     steps:
       - name: All checks passed
         run: echo "All validation jobs passed — proceeding to publish."
 
-  # ── Build & push: API image (certsapi + ctpool) ─────────────────────────────
-  # This single image serves both the REST API and the ctpool ingest workers.
-  # Override CMD in docker-compose to run a ctpool worker instead of the API.
-  build-push-api:
-    name: "Build & push · API image"
-    runs-on: ubuntu-latest
-    needs: [version, gate]
-    # Build on every push (any branch); skip pull_request events to avoid
-    # double builds on same-repo PRs.
-    if: github.event_name == 'push'
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v4.3.1
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5.10.0
-        with:
-          images: ${{ env.API_IMAGE }}
-          # main     → <version>  +  latest
-          # non-main → <version>  +  latest-<branch>
-          tags: |
-            type=raw,value=${{ needs.version.outputs.version_docker }}
-            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
-            type=raw,value=latest-${{ needs.version.outputs.branch_safe }},enable=${{ github.ref_name != 'main' }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.12.0
-
-      - name: Build and push
-        uses: docker/build-push-action@v6.19.2
-        with:
-          context: .
-          file: src/api/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            BUILD_VERSION=${{ needs.version.outputs.version_docker }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ── Build & push: App image (React / Nginx) ─────────────────────────────────
-  build-push-app:
-    name: "Build & push · App image"
+  # ── Promote · images to final tags ─────────────────────────────────────────
+  # All gates and CVA scan passed.  Re-tag candidate images using a pure
+  # registry-side manifest copy (docker buildx imagetools create) — no image
+  # download required.
+  promote:
+    name: "Promote · images"
     runs-on: ubuntu-latest
     needs: [version, gate]
     if: github.event_name == 'push'
@@ -290,47 +449,87 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4.3.1
-
       - name: Log in to GHCR
-        uses: docker/login-action@v3.7.0
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5.10.0
-        with:
-          images: ${{ env.APP_IMAGE }}
-          tags: |
-            type=raw,value=${{ needs.version.outputs.version_docker }}
-            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
-            type=raw,value=latest-${{ needs.version.outputs.branch_safe }},enable=${{ github.ref_name != 'main' }}
-
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3.12.0
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - name: Build and push
-        uses: docker/build-push-action@v6.19.2
-        with:
-          context: .
-          file: src/app/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            BUILD_VERSION=${{ needs.version.outputs.version_docker }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Promote API image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          GIT_SHA: ${{ github.sha }}
+          IMAGE: ${{ env.API_IMAGE }}
+          VERSION_DOCKER: ${{ needs.version.outputs.version_docker }}
+          BRANCH_SAFE: ${{ needs.version.outputs.branch_safe }}
+        run: |
+          if [[ "$REF_NAME" == "main" ]]; then
+            LATEST_TAG="${IMAGE}:latest"
+          else
+            LATEST_TAG="${IMAGE}:latest-${BRANCH_SAFE}"
+          fi
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION_DOCKER}" \
+            --tag "${LATEST_TAG}" \
+            "${IMAGE}:candidate-${GIT_SHA}"
+
+      - name: Promote App image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          GIT_SHA: ${{ github.sha }}
+          IMAGE: ${{ env.APP_IMAGE }}
+          VERSION_DOCKER: ${{ needs.version.outputs.version_docker }}
+          BRANCH_SAFE: ${{ needs.version.outputs.branch_safe }}
+        run: |
+          if [[ "$REF_NAME" == "main" ]]; then
+            LATEST_TAG="${IMAGE}:latest"
+          else
+            LATEST_TAG="${IMAGE}:latest-${BRANCH_SAFE}"
+          fi
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VERSION_DOCKER}" \
+            --tag "${LATEST_TAG}" \
+            "${IMAGE}:candidate-${GIT_SHA}"
+
+      - name: Published images summary
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          API_IMG: ${{ env.API_IMAGE }}
+          APP_IMG: ${{ env.APP_IMAGE }}
+          VERSION_DOCKER: ${{ needs.version.outputs.version_docker }}
+          BRANCH_SAFE: ${{ needs.version.outputs.branch_safe }}
+        run: |
+          VER="${VERSION_DOCKER}"
+          if [[ "$REF_NAME" == "main" ]]; then
+            LATEST_SUFFIX="latest"
+          else
+            LATEST_SUFFIX="latest-${BRANCH_SAFE}"
+          fi
+          {
+            echo "## Published images"
+            echo ""
+            echo "| Image | Tags |"
+            echo "| ----- | ---- |"
+            echo "| [bitsyscerts-api](https://github.com/${REPOSITORY}/pkgs/container/bitsyscerts-api) | \`${VER}\` · \`${LATEST_SUFFIX}\` |"
+            echo "| [bitsyscerts-app](https://github.com/${REPOSITORY}/pkgs/container/bitsyscerts-app) | \`${VER}\` · \`${LATEST_SUFFIX}\` |"
+            echo ""
+            echo '```shell'
+            echo "docker pull ${API_IMG}:${VER}"
+            echo "docker pull ${APP_IMG}:${VER}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   package-runtime-bundles:
     name: "Package · runtime bundles"
     runs-on: ubuntu-latest
     needs: [version, gate]
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Validate compose configuration
         run: docker compose -f src/docker-compose.yml --env-file src/.env.compose.example config >/dev/null
@@ -348,7 +547,7 @@ jobs:
             --python-bundle /tmp/bitsyscerts-dist/bitsyscerts-python-${{ needs.version.outputs.version_docker }}.zip
 
       - name: Upload runtime bundles
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: runtime-bundles
           path: |
@@ -361,22 +560,23 @@ jobs:
   release:
     name: "GitHub Release"
     runs-on: ubuntu-latest
-    needs: [version, build-push-api, build-push-app, package-runtime-bundles]
+    needs: [version, promote, package-runtime-bundles]
     if: github.ref_name == 'main' && github.event_name == 'push'
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download runtime bundles
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: runtime-bundles
           path: /tmp/runtime-bundles
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        id: create-release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: "v${{ needs.version.outputs.version_core }}"
           name: "v${{ needs.version.outputs.version_core }}"
@@ -400,6 +600,14 @@ jobs:
 
             See the [README](https://github.com/bitsyscerts/bitsyscerts#docker-compose-quick-start-preferred) for setup instructions.
 
+      - name: Release summary
+        run: |
+          {
+            echo "## GitHub Release"
+            echo ""
+            echo "**[${{ steps.create-release.outputs.url }}](${{ steps.create-release.outputs.url }})**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ── GitHub Pre-Release (staging / develop / release/*) ──────────────────────
   # Creates a pre-release on every successful build from integration branches.
   # Tag format: v{version_docker}  e.g. v26.508.1542-staging-abc1234
@@ -407,7 +615,7 @@ jobs:
   pre-release:
     name: "GitHub Pre-Release"
     runs-on: ubuntu-latest
-    needs: [version, build-push-api, build-push-app, package-runtime-bundles]
+    needs: [version, promote, package-runtime-bundles]
     if: |
       github.event_name == 'push' && (
         github.ref_name == 'staging' ||
@@ -418,16 +626,17 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4.3.1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download runtime bundles
-        uses: actions/download-artifact@v4.3.0
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: runtime-bundles
           path: /tmp/runtime-bundles
 
       - name: Create GitHub Pre-Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        id: create-pre-release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: "v${{ needs.version.outputs.version_docker }}"
           name: "v${{ needs.version.outputs.version_docker }}"
@@ -455,3 +664,11 @@ jobs:
             - `bitsyscerts-python-${{ needs.version.outputs.version_docker }}.zip`
 
             See the [README](https://github.com/bitsyscerts/bitsyscerts#docker-compose-quick-start-preferred) for setup instructions.
+
+      - name: Pre-release summary
+        run: |
+          {
+            echo "## GitHub Pre-Release"
+            echo ""
+            echo "**[${{ steps.create-pre-release.outputs.url }}](${{ steps.create-pre-release.outputs.url }})**"
+          } >> "$GITHUB_STEP_SUMMARY"
