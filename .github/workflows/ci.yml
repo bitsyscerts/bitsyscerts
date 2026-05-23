@@ -70,6 +70,73 @@ jobs:
           sarif_file: semgrep.sarif
         if: always()
 
+      - name: Fail on HIGH / CRITICAL findings
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+
+          def load_findings():
+              if not os.path.exists("semgrep.sarif") or os.path.getsize("semgrep.sarif") == 0:
+                  print("WARN: semgrep.sarif missing or empty")
+                  return None
+              data = json.load(open("semgrep.sarif"))
+              rows = {"error": [], "warning": [], "note": []}
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      level = r.get("level", "note")
+                      if level not in rows:
+                          continue
+                      rows[level].append({
+                          "id": r.get("ruleId", "?"),
+                          "msg": r.get("message", {}).get("text", "").partition("\n")[0],
+                      })
+              return rows
+
+          def write_detail(fh, icon, label, rows):
+              if not rows:
+                  return
+              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\n\n")
+              fh.write("|Rule|Details|\n|---|---|\n")
+              for r in rows:
+                  fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
+              fh.write("\n</details>\n\n")
+
+          def write_summary(rows):
+              path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if not path:
+                  return
+              errors   = rows["error"]
+              warnings = rows["warning"]
+              notes    = rows["note"]
+              with open(path, "a") as fh:
+                  if errors:
+                      fh.write(f"## ⛔ SAST — {len(errors)} HIGH/CRITICAL finding(s)\n\n")
+                      fh.write("|Rule|Details|\n|---|---|\n")
+                      for r in errors:
+                          fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
+                      fh.write("\n> Fix the above finding(s) to clear this gate.\n\n")
+                  else:
+                      fh.write("## ✅ SAST — no HIGH/CRITICAL findings\n\n")
+                  write_detail(fh, "⚠️", "MEDIUM findings", warnings)
+                  write_detail(fh, "ℹ️", "LOW findings", notes)
+
+          rows = load_findings()
+          if rows is None:
+              sys.exit(0)
+          write_summary(rows)
+          errors = rows["error"]
+          if errors:
+              print(f"FAIL — {len(errors)} HIGH/CRITICAL SAST finding(s):\n")
+              for r in errors[:20]:
+                  print(f"  {r['id']}: {r['msg']}")
+              sys.exit(1)
+          total = len(rows["warning"]) + len(rows["note"])
+          if total:
+              print(f"OK — no blocking findings. {total} informational finding(s) -- see step summary.")
+          else:
+              print("OK: no SAST findings")
+          EOF
+
   # ── Build · API image (candidate) ──────────────────────────────────────────
   # Builds once and pushes a candidate tag so CVA can scan the real image.
   # The promote job applies final version / latest tags only after all gates
@@ -332,42 +399,72 @@ jobs:
 
           def load_findings():
               if not os.path.exists("osv.sarif") or os.path.getsize("osv.sarif") == 0:
-                  print("WARN: osv.sarif missing or empty — scanner may have errored")
+                  print("WARN: osv.sarif missing or empty -- scanner may have errored")
                   return None
               data = json.load(open("osv.sarif"))
-              rows = []
+              rows = {"error": [], "warning": [], "note": []}
               for run in data.get("runs", []):
                   for r in run.get("results", []):
-                      if r.get("level") != "error":
+                      level = r.get("level", "note")
+                      if level not in rows:
                           continue
-                      rows.append({"id": r.get("ruleId", "?"),
-                                   "msg": r.get("message", {}).get("text", "").partition("\n")[0]})
+                      rows[level].append({
+                          "id": r.get("ruleId", "?"),
+                          "msg": r.get("message", {}).get("text", "").partition("\n")[0],
+                      })
               return rows
+
+          def write_section(fh, icon, heading, rows, gate=False):
+              if not rows:
+                  return
+              fh.write(f"## {icon} SCA — {len(rows)} {heading}\n\n")
+              fh.write("|Vulnerability|Details|\n|---|---|\n")
+              for r in rows:
+                  fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
+              if gate:
+                  fh.write("\n> Update the affected dependency to clear this gate.\n\n")
+              else:
+                  fh.write("\n")
+
+          def write_detail(fh, icon, label, rows):
+              if not rows:
+                  return
+              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\n\n")
+              fh.write("|Vulnerability|Details|\n|---|---|\n")
+              for r in rows:
+                  fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
+              fh.write("\n</details>\n\n")
 
           def write_summary(rows):
               path = os.environ.get("GITHUB_STEP_SUMMARY")
               if not path:
                   return
+              errors   = rows["error"]
+              warnings = rows["warning"]
+              notes    = rows["note"]
               with open(path, "a") as fh:
-                  if not rows:
-                      fh.write("## \u2705 SCA \u2014 no HIGH/CRITICAL findings\n")
-                      return
-                  fh.write(f"## \u26d4 SCA \u2014 {len(rows)} HIGH/CRITICAL finding(s)\n\n")
-                  fh.write("|Vulnerability|Details|\n|---|---|\n")
-                  for r in rows:
-                      fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
-                  fh.write("\n> Update the affected dependency to clear this gate.\n")
+                  if errors:
+                      write_section(fh, "⛔", "HIGH/CRITICAL finding(s)", errors, gate=True)
+                  else:
+                      fh.write("## ✅ SCA — no HIGH/CRITICAL findings\n\n")
+                  write_detail(fh, "⚠️", "MEDIUM findings", warnings)
+                  write_detail(fh, "ℹ️", "LOW findings", notes)
 
           rows = load_findings()
           if rows is None:
               sys.exit(0)
           write_summary(rows)
-          if rows:
-              print(f"FAIL \u2014 {len(rows)} HIGH/CRITICAL finding(s) in dependencies:\n")
-              for r in rows[:20]:
+          errors = rows["error"]
+          if errors:
+              print(f"FAIL — {len(errors)} HIGH/CRITICAL finding(s) in dependencies:\n")
+              for r in errors[:20]:
                   print(f"  {r['id']}: {r['msg']}")
               sys.exit(1)
-          print("OK: no HIGH/CRITICAL vulnerabilities found in dependencies")
+          total = len(rows["warning"]) + len(rows["note"])
+          if total:
+              print(f"OK — no blocking findings. {total} informational finding(s) -- see step summary.")
+          else:
+              print("OK: no vulnerabilities found in dependencies")
           EOF
 
       - name: Upload SARIF to GitHub Security tab
@@ -407,7 +504,7 @@ jobs:
           format: "template"
           template: "@/contrib/sarif.tpl"
           output: trivy-api.sarif
-          severity: CRITICAL,HIGH,MEDIUM
+          severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · API
@@ -425,7 +522,7 @@ jobs:
           format: "template"
           template: "@/contrib/sarif.tpl"
           output: trivy-app.sarif
-          severity: CRITICAL,HIGH,MEDIUM
+          severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · App
@@ -457,12 +554,12 @@ jobs:
               rows = []
               for fname, label in SCANS.items():
                   if not os.path.exists(fname) or os.path.getsize(fname) == 0:
-                      print(f"WARN: {fname} missing or empty — scan may have errored")
+                      print(f"WARN: {fname} missing or empty -- scan may have errored")
                       continue
                   data = json.load(open(fname))
                   for run in data.get("runs", []):
                       for r in run.get("results", []):
-                          if r.get("level") not in ("error", "warning"):
+                          if r.get("level") not in ("error", "warning", "note"):
                               continue
                           f = parse_msg(r.get("message", {}).get("text", ""))
                           rows.append({
@@ -480,7 +577,8 @@ jobs:
               blocking  = [r for r in rows if r["level"] == "error" and r["fixed"]]
               unpatched = [r for r in rows if r["level"] == "error" and not r["fixed"]]
               medium    = [r for r in rows if r["level"] == "warning"]
-              return blocking, unpatched, medium
+              low       = [r for r in rows if r["level"] == "note"]
+              return blocking, unpatched, medium, low
 
           def md_row(r, show_fixed=True):
               cve = f"[{r['cve']}]({r['url']})" if r["url"] else r["cve"]
@@ -489,35 +587,36 @@ jobs:
 
           def write_blocking(fh, rows):
               if rows:
-                  fh.write(f"## \\u26d4 CVA \\u2014 {len(rows)} HIGH/CRITICAL with fix available\\n\\n")
-                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\\n|---|---|---|---|---|---|\\n")
+                  fh.write(f"## ⛔ CVA — {len(rows)} HIGH/CRITICAL with fix available\n\n")
+                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\n|---|---|---|---|---|---|\n")
                   for r in rows:
                       fh.write(md_row(r, show_fixed=True))
-                  fh.write("\\n> Upgrade the package(s) above in the relevant Dockerfile to clear this gate.\\n\\n")
+                  fh.write("\n> Upgrade the package(s) above in the relevant Dockerfile to clear this gate.\n\n")
               else:
-                  fh.write("## \\u2705 CVA \\u2014 no actionable HIGH/CRITICAL findings\\n\\n")
+                  fh.write("## ✅ CVA — no actionable HIGH/CRITICAL findings\n\n")
 
           def write_detail(fh, icon, label, rows, show_fixed):
               if not rows:
                   return
-              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\\n\\n")
+              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\n\n")
               if show_fixed:
-                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\\n|---|---|---|---|---|---|\\n")
+                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\n|---|---|---|---|---|---|\n")
               else:
-                  fh.write("|Image|CVE|Sev|Package|Installed|\\n|---|---|---|---|---|\\n")
+                  fh.write("|Image|CVE|Sev|Package|Installed|\n|---|---|---|---|---|\n")
               for r in rows:
                   fh.write(md_row(r, show_fixed=show_fixed))
-              fh.write("\\n</details>\\n\\n")
+              fh.write("\n</details>\n\n")
 
           def write_summary(rows):
               path = os.environ.get("GITHUB_STEP_SUMMARY")
               if not path:
                   return
-              blocking, unpatched, medium = categorize(rows)
+              blocking, unpatched, medium, low = categorize(rows)
               with open(path, "a") as fh:
                   write_blocking(fh, blocking)
-                  write_detail(fh, "\\u26a0\\ufe0f", "HIGH/CRITICAL unpatched (no fix yet)", unpatched, False)
-                  write_detail(fh, "\\u2139\\ufe0f", "MEDIUM findings", medium, True)
+                  write_detail(fh, "⚠️", "HIGH/CRITICAL unpatched (no fix yet)", unpatched, False)
+                  write_detail(fh, "ℹ️", "MEDIUM findings", medium, True)
+                  write_detail(fh, "ℹ️", "LOW findings", low, True)
 
           def print_table(label, rows):
               if not rows:
@@ -525,7 +624,7 @@ jobs:
               W = (5, 20, 8, 30, 22, 14)
               cols = ("IMAGE", "CVE", "SEV", "PACKAGE", "INSTALLED", "FIX AVAILABLE")
               fmt = "  ".join(f"{{:<{w}}}" for w in W)
-              print(f"\\n  {label}:")
+              print(f"\n  {label}:")
               print(fmt.format(*cols))
               print("  ".join("-" * w for w in W))
               for r in rows:
@@ -533,18 +632,20 @@ jobs:
                                    r["package"][:W[3]], r["installed"], r["fixed"] or "none yet"))
 
           rows = load_findings()
-          blocking, unpatched, medium = categorize(rows)
+          blocking, unpatched, medium, low = categorize(rows)
           write_summary(rows)
           if blocking:
-              print(f"FAIL \\u2014 {len(blocking)} HIGH/CRITICAL finding(s) with fix available:\\n")
+              print(f"FAIL — {len(blocking)} HIGH/CRITICAL finding(s) with fix available:\n")
               print_table("BLOCKING", blocking)
               print_table("UNPATCHED HIGH/CRITICAL (informational)", unpatched)
               print_table("MEDIUM (informational)", medium)
+              print_table("LOW (informational)", low)
               sys.exit(1)
-          if unpatched or medium:
-              print(f"OK \\u2014 no blocking CVEs. Informational findings below:")
+          if unpatched or medium or low:
+              print(f"OK — no blocking CVEs. Informational findings below:")
               print_table("UNPATCHED HIGH/CRITICAL", unpatched)
               print_table("MEDIUM", medium)
+              print_table("LOW", low)
           else:
               print("OK: no vulnerabilities found in container images")
           EOF
