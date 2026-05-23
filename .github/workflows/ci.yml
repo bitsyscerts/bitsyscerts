@@ -64,10 +64,35 @@ jobs:
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
+      - name: Normalize Semgrep SARIF fingerprints
+        if: always() && hashFiles('semgrep.sarif') != ''
+        run: |
+          python3 - <<'EOF'
+          import hashlib
+          import json
+
+          path = "semgrep.sarif"
+          data = json.load(open(path))
+          for run in data.get("runs", []):
+              for result in run.get("results", []):
+                  msg = result.get("message", {}).get("text", "").partition("\n")[0]
+                  seed = "|".join([
+                      "sast-semgrep",
+                      result.get("ruleId", "?"),
+                      result.get("level", "note"),
+                      msg,
+                  ])
+                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+          with open(path, "w") as fh:
+              json.dump(data, fh)
+          EOF
+
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
         with:
           sarif_file: semgrep.sarif
+          category: sast-semgrep
         if: always()
 
       - name: Fail on HIGH / CRITICAL findings
@@ -467,6 +492,30 @@ jobs:
               print("OK: no vulnerabilities found in dependencies")
           EOF
 
+      - name: Normalize OSV SARIF fingerprints
+        if: always() && hashFiles('osv.sarif') != ''
+        run: |
+          python3 - <<'EOF'
+          import hashlib
+          import json
+
+          path = "osv.sarif"
+          data = json.load(open(path))
+          for run in data.get("runs", []):
+              for result in run.get("results", []):
+                  msg = result.get("message", {}).get("text", "").partition("\n")[0]
+                  seed = "|".join([
+                      "sca-osv",
+                      result.get("ruleId", "?"),
+                      result.get("level", "note"),
+                      msg,
+                  ])
+                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+          with open(path, "w") as fh:
+              json.dump(data, fh)
+          EOF
+
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
         with:
@@ -507,6 +556,37 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0" # never fail here; gate step below owns pass/fail
 
+      - name: Normalize Trivy SARIF fingerprints · API
+        if: always() && hashFiles('trivy-api.sarif') != ''
+        run: |
+          python3 - <<'EOF'
+          import hashlib
+          import json
+
+          path = "trivy-api.sarif"
+          data = json.load(open(path))
+          for run in data.get("runs", []):
+              for result in run.get("results", []):
+                  msg = result.get("message", {}).get("text", "")
+                  fields = {"Package": "", "Installed Version": "", "Fixed Version": ""}
+                  for line in msg.splitlines():
+                      for k in fields:
+                          if line.startswith(f"{k}: "):
+                              fields[k] = line.split(": ", 1)[1].strip()
+                  seed = "|".join([
+                      "cva-trivy-api",
+                      result.get("ruleId", "?"),
+                      result.get("level", "note"),
+                      fields["Package"],
+                      fields["Installed Version"],
+                      fields["Fixed Version"],
+                  ])
+                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+          with open(path, "w") as fh:
+              json.dump(data, fh)
+          EOF
+
       - name: Upload Trivy SARIF · API
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
         with:
@@ -524,6 +604,37 @@ jobs:
           output: trivy-app.sarif
           severity: CRITICAL,HIGH,MEDIUM,LOW
           exit-code: "0" # never fail here; gate step below owns pass/fail
+
+      - name: Normalize Trivy SARIF fingerprints · App
+        if: always() && hashFiles('trivy-app.sarif') != ''
+        run: |
+          python3 - <<'EOF'
+          import hashlib
+          import json
+
+          path = "trivy-app.sarif"
+          data = json.load(open(path))
+          for run in data.get("runs", []):
+              for result in run.get("results", []):
+                  msg = result.get("message", {}).get("text", "")
+                  fields = {"Package": "", "Installed Version": "", "Fixed Version": ""}
+                  for line in msg.splitlines():
+                      for k in fields:
+                          if line.startswith(f"{k}: "):
+                              fields[k] = line.split(": ", 1)[1].strip()
+                  seed = "|".join([
+                      "cva-trivy-app",
+                      result.get("ruleId", "?"),
+                      result.get("level", "note"),
+                      fields["Package"],
+                      fields["Installed Version"],
+                      fields["Fixed Version"],
+                  ])
+                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+                  result.setdefault("partialFingerprints", {})["primaryLocationLineHash"] = fp
+          with open(path, "w") as fh:
+              json.dump(data, fh)
+          EOF
 
       - name: Upload Trivy SARIF · App
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
