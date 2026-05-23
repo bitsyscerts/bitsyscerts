@@ -6,8 +6,10 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-COPY src/app/package.json src/app/package-lock.json src/app/.npmrc ./
-RUN npm ci --prefer-offline
+RUN corepack enable && corepack prepare pnpm@11.2.2 --activate
+
+COPY src/app/package.json src/app/pnpm-lock.yaml src/app/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY src/app .
 
@@ -15,7 +17,7 @@ COPY src/app .
 ARG BUILD_VERSION
 ENV VITE_APP_VERSION="${BUILD_VERSION}"
 
-RUN npm run build
+RUN pnpm run build
 
 # ── Stage 2: serve with Nginx ─────────────────────────────────────────────────
 FROM nginx:1.27-alpine AS runtime
