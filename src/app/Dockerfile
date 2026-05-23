@@ -22,6 +22,9 @@ RUN pnpm run build
 # ── Stage 2: serve with Nginx ─────────────────────────────────────────────────
 FROM nginx:1.27-alpine AS runtime
 
+# Apply latest OS security patches (addresses OpenSSL CVEs in libcrypto3).
+RUN apk upgrade --no-cache
+
 # Remove the default Nginx config
 RUN rm /etc/nginx/conf.d/default.conf
 
