@@ -478,3 +478,12 @@ htmlcov/
 ,node,react,python,venv,dotenv,visualstudiocode
 
 .pnpm-store
+
+# Un-ignore CI helper scripts
+# The [Ss]cripts rule above (Python venv section) matches .github/scripts/.
+# These negations override it; cache debris is re-ignored below.
+!.github/scripts/
+!.github/scripts/**
+.github/scripts/**/__pycache__/
+.github/scripts/**/*.py[cod]
+.github/scripts/**/*.pyo
