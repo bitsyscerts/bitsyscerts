@@ -21,12 +21,6 @@ RUN pip wheel --no-cache-dir --wheel-dir /wheels --find-links /wheels /build/api
 # ── Stage 2: lean runtime image ───────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
-# Apply latest OS security patches before installing anything else.
-# Keeps the image clean: no lists are left behind after upgrade.
-RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
-
 # Non-root user for security
 RUN useradd --system --no-create-home appuser
 

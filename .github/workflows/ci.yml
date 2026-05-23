@@ -328,24 +328,46 @@ jobs:
       - name: Fail on HIGH / CRITICAL findings
         run: |
           python3 - <<'EOF'
-          import json, sys, os
-          if not os.path.exists("osv.sarif") or os.path.getsize("osv.sarif") == 0:
-              print("WARN: osv.sarif missing or empty — scanner may have errored; check previous step")
+          import json, os, sys
+
+          def load_findings():
+              if not os.path.exists("osv.sarif") or os.path.getsize("osv.sarif") == 0:
+                  print("WARN: osv.sarif missing or empty — scanner may have errored")
+                  return None
+              data = json.load(open("osv.sarif"))
+              rows = []
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      if r.get("level") != "error":
+                          continue
+                      rows.append({"id": r.get("ruleId", "?"),
+                                   "msg": r.get("message", {}).get("text", "").partition("\n")[0]})
+              return rows
+
+          def write_summary(rows):
+              path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if not path:
+                  return
+              with open(path, "a") as fh:
+                  if not rows:
+                      fh.write("## \u2705 SCA \u2014 no HIGH/CRITICAL findings\n")
+                      return
+                  fh.write(f"## \u26d4 SCA \u2014 {len(rows)} HIGH/CRITICAL finding(s)\n\n")
+                  fh.write("|Vulnerability|Details|\n|---|---|\n")
+                  for r in rows:
+                      fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
+                  fh.write("\n> Update the affected dependency to clear this gate.\n")
+
+          rows = load_findings()
+          if rows is None:
               sys.exit(0)
-          data = json.load(open("osv.sarif"))
-          errors = [
-              r for run in data.get("runs", [])
-              for r in run.get("results", [])
-              if r.get("level") == "error"
-          ]
-          if errors:
-              print(f"FAIL: {len(errors)} HIGH/CRITICAL finding(s):")
-              for r in errors[:10]:
-                  rule = r.get("ruleId", "?")
-                  msg  = r.get("message", {}).get("text", "")[:120]
-                  print(f"  {rule}: {msg}")
+          write_summary(rows)
+          if rows:
+              print(f"FAIL \u2014 {len(rows)} HIGH/CRITICAL finding(s) in dependencies:\n")
+              for r in rows[:20]:
+                  print(f"  {r['id']}: {r['msg']}")
               sys.exit(1)
-          print("OK: no HIGH/CRITICAL vulnerabilities found")
+          print("OK: no HIGH/CRITICAL vulnerabilities found in dependencies")
           EOF
 
       - name: Upload SARIF to GitHub Security tab
@@ -386,6 +408,7 @@ jobs:
           template: "@/contrib/sarif.tpl"
           output: trivy-api.sarif
           severity: CRITICAL,HIGH
+          ignore-unfixed: true # only report CVEs where a patched version exists
           exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · API
@@ -404,6 +427,7 @@ jobs:
           template: "@/contrib/sarif.tpl"
           output: trivy-app.sarif
           severity: CRITICAL,HIGH
+          ignore-unfixed: true # only report CVEs where a patched version exists
           exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · App
@@ -417,24 +441,73 @@ jobs:
         if: always()
         run: |
           python3 - <<'EOF'
-          import json, sys, os
-          findings = []
-          for fname in ("trivy-api.sarif", "trivy-app.sarif"):
-              if not os.path.exists(fname) or os.path.getsize(fname) == 0:
-                  print(f"WARN: {fname} missing or empty — scan may have errored")
-                  continue
-              data = json.load(open(fname))
-              for run in data.get("runs", []):
-                  for r in run.get("results", []):
-                      if r.get("level") != "error":
-                          continue
-                      rule = r.get("ruleId", "?")
-                      msg  = r.get("message", {}).get("text", "")[:100]
-                      findings.append((fname, rule, msg))
-          if findings:
-              print(f"FAIL: {len(findings)} HIGH/CRITICAL finding(s) in container images:")
-              for fname, rule, msg in findings[:10]:
-                  print(f"  [{fname}] {rule}: {msg}")
+          import json, os, re, sys
+
+          SCANS = {"trivy-api.sarif": "API", "trivy-app.sarif": "App"}
+
+          def parse_msg(text):
+              fields = {}
+              for line in text.splitlines():
+                  if ": " in line:
+                      k, _, v = line.partition(": ")
+                      fields[k.strip()] = v.strip()
+              m = re.search(r'\(https?://[^)]+\)', text)
+              fields["url"] = m.group(0)[1:-1] if m else ""
+              return fields
+
+          def load_findings():
+              rows = []
+              for fname, label in SCANS.items():
+                  if not os.path.exists(fname) or os.path.getsize(fname) == 0:
+                      print(f"WARN: {fname} missing or empty — scan may have errored")
+                      continue
+                  data = json.load(open(fname))
+                  for run in data.get("runs", []):
+                      for r in run.get("results", []):
+                          if r.get("level") != "error":
+                              continue
+                          f = parse_msg(r.get("message", {}).get("text", ""))
+                          rows.append({
+                              "image": label, "cve": r.get("ruleId", "?"),
+                              "severity": f.get("Severity", "?"),
+                              "package": f.get("Package", "?"),
+                              "installed": f.get("Installed Version", "?"),
+                              "fixed": f.get("Fixed Version") or "none yet",
+                              "url": f.get("url", ""),
+                          })
+              return rows
+
+          def write_summary(rows):
+              path = os.environ.get("GITHUB_STEP_SUMMARY")
+              if not path:
+                  return
+              with open(path, "a") as fh:
+                  if not rows:
+                      fh.write("## \u2705 CVA \u2014 no HIGH/CRITICAL findings\n")
+                      return
+                  fh.write(f"## \u26d4 CVA \u2014 {len(rows)} HIGH/CRITICAL finding(s)\n\n")
+                  fh.write("|Image|CVE|Severity|Package|Installed|Fix available|\n")
+                  fh.write("|---|---|---|---|---|---|\n")
+                  for r in rows:
+                      cve = f"[{r['cve']}]({r['url']})" if r["url"] else r["cve"]
+                      fh.write(f"| {r['image']} | {cve} | **{r['severity']}** | `{r['package']}` | `{r['installed']}` | `{r['fixed']}` |\n")
+                  fh.write("\n> Upgrade the package(s) above in the relevant Dockerfile to clear this gate.\n")
+
+          def print_table(rows):
+              W = (5, 20, 8, 30, 22, 14)
+              cols = ("IMAGE", "CVE", "SEV", "PACKAGE", "INSTALLED", "FIX AVAILABLE")
+              fmt = "  ".join(f"{{:<{w}}}" for w in W)
+              print(fmt.format(*cols))
+              print("  ".join("-" * w for w in W))
+              for r in rows:
+                  print(fmt.format(r["image"], r["cve"], r["severity"],
+                                   r["package"][:W[3]], r["installed"], r["fixed"]))
+
+          rows = load_findings()
+          write_summary(rows)
+          if rows:
+              print(f"FAIL \u2014 {len(rows)} HIGH/CRITICAL finding(s) in container images:\n")
+              print_table(rows)
               sys.exit(1)
           print("OK: no HIGH/CRITICAL vulnerabilities found in container images")
           EOF
