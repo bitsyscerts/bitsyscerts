@@ -84,7 +84,7 @@ jobs:
                       msg,
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
+                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
@@ -512,7 +512,7 @@ jobs:
                       msg,
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
+                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
@@ -583,7 +583,7 @@ jobs:
                       fields["Fixed Version"],
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
+                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
@@ -632,7 +632,7 @@ jobs:
                       fields["Fixed Version"],
                   ])
                   fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                    result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
+                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
           with open(path, "w") as fh:
               json.dump(data, fh)
           EOF
