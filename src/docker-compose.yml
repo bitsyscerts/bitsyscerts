@@ -5,8 +5,12 @@
 #   docker compose up -d
 #
 # The migrate service automatically applies migrations, syncs CT log sources,
-# and writes an initial stats snapshot on first start.  All other services
-# wait for it to complete before starting.
+# and writes an initial stats snapshot on first start.  Application services
+# start in parallel — they depend only on postgres being healthy.  This means
+# the site stays available during long-running background operations such as
+# CREATE INDEX CONCURRENTLY on large tables.  Services use restart: unless-stopped
+# so any transient startup errors (e.g. during a fresh install before the schema
+# is fully applied) are automatically retried.
 #
 # For manual operator tasks use the migrate service image directly, e.g.:
 #   docker compose run --rm migrate ctpool maintenance
@@ -59,6 +63,10 @@ services:
     #
     # sync-logs and stats-snapshot are non-fatal: a network hiccup or slow
     # CT-ecosystem API must not prevent the entire stack from starting.
+    #
+    # NOTE: application services no longer wait for this container to exit.
+    # They start in parallel against postgres.  This keeps deploy downtime
+    # under 30 s even when migrations include expensive index-build steps.
     command:
       - /bin/sh
       - -c
@@ -102,8 +110,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     networks:
       - internal
 
@@ -121,7 +127,8 @@ services:
       - BANNER_SEVERITY=${BANNER_SEVERITY:-info}
       - BANNER_ICON=${BANNER_ICON:-InfoCircle}
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
+      test:
+        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6
@@ -157,8 +164,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     networks:
       - internal
 
@@ -188,8 +193,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     networks:
       - internal
 
@@ -211,8 +214,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     networks:
       - internal
 
@@ -234,8 +235,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     networks:
       - internal
 
