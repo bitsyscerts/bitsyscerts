@@ -385,7 +385,7 @@ jobs:
           format: sarif
           output: trivy-api.sarif
           severity: CRITICAL,HIGH
-          exit-code: "0"  # never fail here; gate step below owns pass/fail
+          exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · API
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
@@ -396,13 +396,13 @@ jobs:
 
       - name: Trivy scan · App candidate
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        if: always()  # run even if API scan step fails for a non-vuln reason
+        if: always() # run even if API scan step fails for a non-vuln reason
         with:
           image-ref: ${{ env.APP_IMAGE }}:candidate-${{ github.sha }}
           format: sarif
           output: trivy-app.sarif
           severity: CRITICAL,HIGH
-          exit-code: "0"  # never fail here; gate step below owns pass/fail
+          exit-code: "0" # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · App
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
@@ -436,13 +436,15 @@ jobs:
           EOF
 
   # ── CI gate ─────────────────────────────────────────────────────────────────
-  # Fan-in point: all validation jobs (tests + SAST + SCA) must pass.
-  # CVA (scan-cva) gates the promote job directly — it requires built images
-  # and only runs on push events, so it is not included here.
+  # True fan-in point: every left-side job must pass before anything on the
+  # right (promote, packages, release) is allowed to run.  On push events this
+  # includes the candidate builds and CVA scan; on pull_request events those
+  # are skipped and GitHub Actions treats skipped jobs as passing, so gate
+  # still runs against tests + SAST + SCA only.
   gate:
     name: "Gate · all checks passed"
     runs-on: ubuntu-latest
-    needs: [semgrep, test-api, test-ctpool, test-app, scan-sca]
+    needs: [semgrep, test-api, test-ctpool, test-app, scan-sca, scan-cva]
     steps:
       - name: All checks passed
         run: echo "All validation jobs passed — proceeding to publish."
@@ -454,7 +456,7 @@ jobs:
   promote:
     name: "Promote · images"
     runs-on: ubuntu-latest
-    needs: [version, gate, build-api, build-app, scan-cva]
+    needs: [version, gate]
     if: github.event_name == 'push'
     permissions:
       contents: read
