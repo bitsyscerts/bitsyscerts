@@ -68,27 +68,7 @@ jobs:
 
       - name: Normalize Semgrep SARIF fingerprints
         if: always() && hashFiles('semgrep.sarif') != ''
-        run: |
-          python3 - <<'EOF'
-          import hashlib
-          import json
-
-          path = "semgrep.sarif"
-          data = json.load(open(path))
-          for run in data.get("runs", []):
-              for result in run.get("results", []):
-                  msg = result.get("message", {}).get("text", "").partition("\n")[0]
-                  seed = "|".join([
-                      "sast-semgrep",
-                      result.get("ruleId", "?"),
-                      result.get("level", "note"),
-                      msg,
-                  ])
-                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
-          with open(path, "w") as fh:
-              json.dump(data, fh)
-          EOF
+        run: python3 .github/scripts/sarif_normalize.py --sarif semgrep.sarif --label sast-semgrep
 
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
@@ -98,71 +78,7 @@ jobs:
         if: always()
 
       - name: Fail on HIGH / CRITICAL findings
-        run: |
-          python3 - <<'EOF'
-          import json, os, sys
-
-          def load_findings():
-              if not os.path.exists("semgrep.sarif") or os.path.getsize("semgrep.sarif") == 0:
-                  print("WARN: semgrep.sarif missing or empty")
-                  return None
-              data = json.load(open("semgrep.sarif"))
-              rows = {"error": [], "warning": [], "note": []}
-              for run in data.get("runs", []):
-                  for r in run.get("results", []):
-                      level = r.get("level", "note")
-                      if level not in rows:
-                          continue
-                      rows[level].append({
-                          "id": r.get("ruleId", "?"),
-                          "msg": r.get("message", {}).get("text", "").partition("\n")[0],
-                      })
-              return rows
-
-          def write_detail(fh, icon, label, rows):
-              if not rows:
-                  return
-              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\n\n")
-              fh.write("|Rule|Details|\n|---|---|\n")
-              for r in rows:
-                  fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
-              fh.write("\n</details>\n\n")
-
-          def write_summary(rows):
-              path = os.environ.get("GITHUB_STEP_SUMMARY")
-              if not path:
-                  return
-              errors   = rows["error"]
-              warnings = rows["warning"]
-              notes    = rows["note"]
-              with open(path, "a") as fh:
-                  if errors:
-                      fh.write(f"## ⛔ SAST — {len(errors)} HIGH/CRITICAL finding(s)\n\n")
-                      fh.write("|Rule|Details|\n|---|---|\n")
-                      for r in errors:
-                          fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
-                      fh.write("\n> Fix the above finding(s) to clear this gate.\n\n")
-                  else:
-                      fh.write("## ✅ SAST — no HIGH/CRITICAL findings\n\n")
-                  write_detail(fh, "⚠️", "MEDIUM findings", warnings)
-                  write_detail(fh, "ℹ️", "LOW findings", notes)
-
-          rows = load_findings()
-          if rows is None:
-              sys.exit(0)
-          write_summary(rows)
-          errors = rows["error"]
-          if errors:
-              print(f"FAIL — {len(errors)} HIGH/CRITICAL SAST finding(s):\n")
-              for r in errors[:20]:
-                  print(f"  {r['id']}: {r['msg']}")
-              sys.exit(1)
-          total = len(rows["warning"]) + len(rows["note"])
-          if total:
-              print(f"OK — no blocking findings. {total} informational finding(s) -- see step summary.")
-          else:
-              print("OK: no SAST findings")
-          EOF
+        run: python3 .github/scripts/sarif_gate_sast.py --sarif semgrep.sarif --tool sast
 
   # ── Build · API image (candidate) ──────────────────────────────────────────
   # Builds once and pushes a candidate tag so CVA can scan the real image.
@@ -421,103 +337,11 @@ jobs:
           || true
 
       - name: Fail on HIGH / CRITICAL findings
-        run: |
-          python3 - <<'EOF'
-          import json, os, sys
-
-          def load_findings():
-              if not os.path.exists("osv.sarif") or os.path.getsize("osv.sarif") == 0:
-                  print("WARN: osv.sarif missing or empty -- scanner may have errored")
-                  return None
-              data = json.load(open("osv.sarif"))
-              rows = {"error": [], "warning": [], "note": []}
-              for run in data.get("runs", []):
-                  for r in run.get("results", []):
-                      level = r.get("level", "note")
-                      if level not in rows:
-                          continue
-                      rows[level].append({
-                          "id": r.get("ruleId", "?"),
-                          "msg": r.get("message", {}).get("text", "").partition("\n")[0],
-                      })
-              return rows
-
-          def write_section(fh, icon, heading, rows, gate=False):
-              if not rows:
-                  return
-              fh.write(f"## {icon} SCA — {len(rows)} {heading}\n\n")
-              fh.write("|Vulnerability|Details|\n|---|---|\n")
-              for r in rows:
-                  fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
-              if gate:
-                  fh.write("\n> Update the affected dependency to clear this gate.\n\n")
-              else:
-                  fh.write("\n")
-
-          def write_detail(fh, icon, label, rows):
-              if not rows:
-                  return
-              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\n\n")
-              fh.write("|Vulnerability|Details|\n|---|---|\n")
-              for r in rows:
-                  fh.write(f"| `{r['id']}` | {r['msg'][:150]} |\n")
-              fh.write("\n</details>\n\n")
-
-          def write_summary(rows):
-              path = os.environ.get("GITHUB_STEP_SUMMARY")
-              if not path:
-                  return
-              errors   = rows["error"]
-              warnings = rows["warning"]
-              notes    = rows["note"]
-              with open(path, "a") as fh:
-                  if errors:
-                      write_section(fh, "⛔", "HIGH/CRITICAL finding(s)", errors, gate=True)
-                  else:
-                      fh.write("## ✅ SCA — no HIGH/CRITICAL findings\n\n")
-                  write_detail(fh, "⚠️", "MEDIUM findings", warnings)
-                  write_detail(fh, "ℹ️", "LOW findings", notes)
-
-          rows = load_findings()
-          if rows is None:
-              sys.exit(0)
-          write_summary(rows)
-          errors = rows["error"]
-          if errors:
-              print(f"FAIL — {len(errors)} HIGH/CRITICAL finding(s) in dependencies:\n")
-              for r in errors[:20]:
-                  print(f"  {r['id']}: {r['msg']}")
-              sys.exit(1)
-          total = len(rows["warning"]) + len(rows["note"])
-          if total:
-              print(f"OK — no blocking findings. {total} informational finding(s) -- see step summary.")
-          else:
-              print("OK: no vulnerabilities found in dependencies")
-          EOF
+        run: python3 .github/scripts/sarif_gate_sast.py --sarif osv.sarif --tool sca
 
       - name: Normalize OSV SARIF fingerprints
         if: always() && hashFiles('osv.sarif') != ''
-        run: |
-          python3 - <<'EOF'
-          import hashlib
-          import json
-
-          path = "osv.sarif"
-          data = json.load(open(path))
-          for run in data.get("runs", []):
-              for result in run.get("results", []):
-                  msg = result.get("message", {}).get("text", "").partition("\n")[0]
-                  seed = "|".join([
-                      "sca-osv",
-                      result.get("ruleId", "?"),
-                      result.get("level", "note"),
-                      msg,
-                  ])
-                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
-          with open(path, "w") as fh:
-              json.dump(data, fh)
-          EOF
+        run: python3 .github/scripts/sarif_normalize.py --sarif osv.sarif --label sca-osv
 
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
@@ -562,34 +386,7 @@ jobs:
 
       - name: Normalize Trivy SARIF fingerprints · API
         if: always() && hashFiles('trivy-api.sarif') != ''
-        run: |
-          python3 - <<'EOF'
-          import hashlib
-          import json
-
-          path = "trivy-api.sarif"
-          data = json.load(open(path))
-          for run in data.get("runs", []):
-              for result in run.get("results", []):
-                  msg = result.get("message", {}).get("text", "")
-                  fields = {"Package": "", "Installed Version": "", "Fixed Version": ""}
-                  for line in msg.splitlines():
-                      for k in fields:
-                          if line.startswith(f"{k}: "):
-                              fields[k] = line.split(": ", 1)[1].strip()
-                  seed = "|".join([
-                      "cva-trivy-api",
-                      result.get("ruleId", "?"),
-                      result.get("level", "note"),
-                      fields["Package"],
-                      fields["Installed Version"],
-                      fields["Fixed Version"],
-                  ])
-                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
-          with open(path, "w") as fh:
-              json.dump(data, fh)
-          EOF
+        run: python3 .github/scripts/sarif_normalize.py --sarif trivy-api.sarif --label cva-trivy-api --trivy
 
       - name: Upload Trivy SARIF · API
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
@@ -611,34 +408,7 @@ jobs:
 
       - name: Normalize Trivy SARIF fingerprints · App
         if: always() && hashFiles('trivy-app.sarif') != ''
-        run: |
-          python3 - <<'EOF'
-          import hashlib
-          import json
-
-          path = "trivy-app.sarif"
-          data = json.load(open(path))
-          for run in data.get("runs", []):
-              for result in run.get("results", []):
-                  msg = result.get("message", {}).get("text", "")
-                  fields = {"Package": "", "Installed Version": "", "Fixed Version": ""}
-                  for line in msg.splitlines():
-                      for k in fields:
-                          if line.startswith(f"{k}: "):
-                              fields[k] = line.split(": ", 1)[1].strip()
-                  seed = "|".join([
-                      "cva-trivy-app",
-                      result.get("ruleId", "?"),
-                      result.get("level", "note"),
-                      fields["Package"],
-                      fields["Installed Version"],
-                      fields["Fixed Version"],
-                  ])
-                  fp = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-                  result.setdefault("partialFingerprints", {})["stableResultHash"] = fp
-          with open(path, "w") as fh:
-              json.dump(data, fh)
-          EOF
+        run: python3 .github/scripts/sarif_normalize.py --sarif trivy-app.sarif --label cva-trivy-app --trivy
 
       - name: Upload Trivy SARIF · App
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
@@ -649,121 +419,7 @@ jobs:
 
       - name: Fail on HIGH / CRITICAL findings
         if: always()
-        run: |
-          python3 - <<'EOF'
-          import json, os, re, sys
-
-          SCANS = {"trivy-api.sarif": "API", "trivy-app.sarif": "App"}
-
-          def parse_msg(text):
-              fields = {}
-              for line in text.splitlines():
-                  if ": " in line:
-                      k, _, v = line.partition(": ")
-                      fields[k.strip()] = v.strip()
-              m = re.search(r'\(https?://[^)]+\)', text)
-              fields["url"] = m.group(0)[1:-1] if m else ""
-              return fields
-
-          def load_findings():
-              rows = []
-              for fname, label in SCANS.items():
-                  if not os.path.exists(fname) or os.path.getsize(fname) == 0:
-                      print(f"WARN: {fname} missing or empty -- scan may have errored")
-                      continue
-                  data = json.load(open(fname))
-                  for run in data.get("runs", []):
-                      for r in run.get("results", []):
-                          if r.get("level") not in ("error", "warning", "note"):
-                              continue
-                          f = parse_msg(r.get("message", {}).get("text", ""))
-                          rows.append({
-                              "image": label, "cve": r.get("ruleId", "?"),
-                              "severity": f.get("Severity", "?"),
-                              "package": f.get("Package", "?"),
-                              "installed": f.get("Installed Version", "?"),
-                              "fixed": f.get("Fixed Version") or "",
-                              "url": f.get("url", ""),
-                              "level": r.get("level"),
-                          })
-              return rows
-
-          def categorize(rows):
-              blocking  = [r for r in rows if r["level"] == "error" and r["fixed"]]
-              unpatched = [r for r in rows if r["level"] == "error" and not r["fixed"]]
-              medium    = [r for r in rows if r["level"] == "warning"]
-              low       = [r for r in rows if r["level"] == "note"]
-              return blocking, unpatched, medium, low
-
-          def md_row(r, show_fixed=True):
-              cve = f"[{r['cve']}]({r['url']})" if r["url"] else r["cve"]
-              base = f"| {r['image']} | {cve} | **{r['severity']}** | `{r['package']}` | `{r['installed']}`"
-              return base + (f" | `{r['fixed']}` |\n" if show_fixed else " |\n")
-
-          def write_blocking(fh, rows):
-              if rows:
-                  fh.write(f"## ⛔ CVA — {len(rows)} HIGH/CRITICAL with fix available\n\n")
-                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\n|---|---|---|---|---|---|\n")
-                  for r in rows:
-                      fh.write(md_row(r, show_fixed=True))
-                  fh.write("\n> Upgrade the package(s) above in the relevant Dockerfile to clear this gate.\n\n")
-              else:
-                  fh.write("## ✅ CVA — no actionable HIGH/CRITICAL findings\n\n")
-
-          def write_detail(fh, icon, label, rows, show_fixed):
-              if not rows:
-                  return
-              fh.write(f"<details><summary>{icon} {len(rows)} {label} (not blocking)</summary>\n\n")
-              if show_fixed:
-                  fh.write("|Image|CVE|Sev|Package|Installed|Fix|\n|---|---|---|---|---|---|\n")
-              else:
-                  fh.write("|Image|CVE|Sev|Package|Installed|\n|---|---|---|---|---|\n")
-              for r in rows:
-                  fh.write(md_row(r, show_fixed=show_fixed))
-              fh.write("\n</details>\n\n")
-
-          def write_summary(rows):
-              path = os.environ.get("GITHUB_STEP_SUMMARY")
-              if not path:
-                  return
-              blocking, unpatched, medium, low = categorize(rows)
-              with open(path, "a") as fh:
-                  write_blocking(fh, blocking)
-                  write_detail(fh, "⚠️", "HIGH/CRITICAL unpatched (no fix yet)", unpatched, False)
-                  write_detail(fh, "ℹ️", "MEDIUM findings", medium, True)
-                  write_detail(fh, "ℹ️", "LOW findings", low, True)
-
-          def print_table(label, rows):
-              if not rows:
-                  return
-              W = (5, 20, 8, 30, 22, 14)
-              cols = ("IMAGE", "CVE", "SEV", "PACKAGE", "INSTALLED", "FIX AVAILABLE")
-              fmt = "  ".join(f"{{:<{w}}}" for w in W)
-              print(f"\n  {label}:")
-              print(fmt.format(*cols))
-              print("  ".join("-" * w for w in W))
-              for r in rows:
-                  print(fmt.format(r["image"], r["cve"], r["severity"],
-                                   r["package"][:W[3]], r["installed"], r["fixed"] or "none yet"))
-
-          rows = load_findings()
-          blocking, unpatched, medium, low = categorize(rows)
-          write_summary(rows)
-          if blocking:
-              print(f"FAIL — {len(blocking)} HIGH/CRITICAL finding(s) with fix available:\n")
-              print_table("BLOCKING", blocking)
-              print_table("UNPATCHED HIGH/CRITICAL (informational)", unpatched)
-              print_table("MEDIUM (informational)", medium)
-              print_table("LOW (informational)", low)
-              sys.exit(1)
-          if unpatched or medium or low:
-              print(f"OK — no blocking CVEs. Informational findings below:")
-              print_table("UNPATCHED HIGH/CRITICAL", unpatched)
-              print_table("MEDIUM", medium)
-              print_table("LOW", low)
-          else:
-              print("OK: no vulnerabilities found in container images")
-          EOF
+        run: python3 .github/scripts/sarif_gate_cva.py --api trivy-api.sarif --app trivy-app.sarif
 
   # ── CI gate ─────────────────────────────────────────────────────────────────
   # True fan-in point: every left-side job must pass before anything on the
@@ -804,48 +460,67 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Promote API image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          GIT_SHA: ${{ github.sha }}
+          IMAGE: ${{ env.API_IMAGE }}
+          VERSION_DOCKER: ${{ needs.version.outputs.version_docker }}
+          BRANCH_SAFE: ${{ needs.version.outputs.branch_safe }}
         run: |
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            LATEST_TAG="${{ env.API_IMAGE }}:latest"
+          if [[ "$REF_NAME" == "main" ]]; then
+            LATEST_TAG="${IMAGE}:latest"
           else
-            LATEST_TAG="${{ env.API_IMAGE }}:latest-${{ needs.version.outputs.branch_safe }}"
+            LATEST_TAG="${IMAGE}:latest-${BRANCH_SAFE}"
           fi
           docker buildx imagetools create \
-            --tag "${{ env.API_IMAGE }}:${{ needs.version.outputs.version_docker }}" \
+            --tag "${IMAGE}:${VERSION_DOCKER}" \
             --tag "${LATEST_TAG}" \
-            "${{ env.API_IMAGE }}:candidate-${{ github.sha }}"
+            "${IMAGE}:candidate-${GIT_SHA}"
 
       - name: Promote App image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          GIT_SHA: ${{ github.sha }}
+          IMAGE: ${{ env.APP_IMAGE }}
+          VERSION_DOCKER: ${{ needs.version.outputs.version_docker }}
+          BRANCH_SAFE: ${{ needs.version.outputs.branch_safe }}
         run: |
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            LATEST_TAG="${{ env.APP_IMAGE }}:latest"
+          if [[ "$REF_NAME" == "main" ]]; then
+            LATEST_TAG="${IMAGE}:latest"
           else
-            LATEST_TAG="${{ env.APP_IMAGE }}:latest-${{ needs.version.outputs.branch_safe }}"
+            LATEST_TAG="${IMAGE}:latest-${BRANCH_SAFE}"
           fi
           docker buildx imagetools create \
-            --tag "${{ env.APP_IMAGE }}:${{ needs.version.outputs.version_docker }}" \
+            --tag "${IMAGE}:${VERSION_DOCKER}" \
             --tag "${LATEST_TAG}" \
-            "${{ env.APP_IMAGE }}:candidate-${{ github.sha }}"
+            "${IMAGE}:candidate-${GIT_SHA}"
 
       - name: Published images summary
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+          API_IMG: ${{ env.API_IMAGE }}
+          APP_IMG: ${{ env.APP_IMAGE }}
+          VERSION_DOCKER: ${{ needs.version.outputs.version_docker }}
+          BRANCH_SAFE: ${{ needs.version.outputs.branch_safe }}
         run: |
-          VER="${{ needs.version.outputs.version_docker }}"
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
+          VER="${VERSION_DOCKER}"
+          if [[ "$REF_NAME" == "main" ]]; then
             LATEST_SUFFIX="latest"
           else
-            LATEST_SUFFIX="latest-${{ needs.version.outputs.branch_safe }}"
+            LATEST_SUFFIX="latest-${BRANCH_SAFE}"
           fi
           {
             echo "## Published images"
             echo ""
             echo "| Image | Tags |"
             echo "| ----- | ---- |"
-            echo "| [bitsyscerts-api](https://github.com/${{ github.repository }}/pkgs/container/bitsyscerts-api) | \`${VER}\` · \`${LATEST_SUFFIX}\` |"
-            echo "| [bitsyscerts-app](https://github.com/${{ github.repository }}/pkgs/container/bitsyscerts-app) | \`${VER}\` · \`${LATEST_SUFFIX}\` |"
+            echo "| [bitsyscerts-api](https://github.com/${REPOSITORY}/pkgs/container/bitsyscerts-api) | \`${VER}\` · \`${LATEST_SUFFIX}\` |"
+            echo "| [bitsyscerts-app](https://github.com/${REPOSITORY}/pkgs/container/bitsyscerts-app) | \`${VER}\` · \`${LATEST_SUFFIX}\` |"
             echo ""
             echo '```shell'
-            echo "docker pull ${{ env.API_IMAGE }}:${VER}"
-            echo "docker pull ${{ env.APP_IMAGE }}:${VER}"
+            echo "docker pull ${API_IMG}:${VER}"
+            echo "docker pull ${APP_IMG}:${VER}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
