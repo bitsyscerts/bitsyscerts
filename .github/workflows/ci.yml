@@ -385,30 +385,55 @@ jobs:
           format: sarif
           output: trivy-api.sarif
           severity: CRITICAL,HIGH
-          exit-code: "1"
+          exit-code: "0"  # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · API
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
         with:
           sarif_file: trivy-api.sarif
           category: cva-trivy-api
-        if: always()
+        if: always() && hashFiles('trivy-api.sarif') != ''
 
       - name: Trivy scan · App candidate
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        if: always()  # run even if API scan step fails for a non-vuln reason
         with:
           image-ref: ${{ env.APP_IMAGE }}:candidate-${{ github.sha }}
           format: sarif
           output: trivy-app.sarif
           severity: CRITICAL,HIGH
-          exit-code: "1"
+          exit-code: "0"  # never fail here; gate step below owns pass/fail
 
       - name: Upload Trivy SARIF · App
         uses: github/codeql-action/upload-sarif@458d36d7d4f47d0dd16ca424c1d3cda0060f1360 # v3.35.5
         with:
           sarif_file: trivy-app.sarif
           category: cva-trivy-app
+        if: always() && hashFiles('trivy-app.sarif') != ''
+
+      - name: Fail on HIGH / CRITICAL findings
         if: always()
+        run: |
+          python3 - <<'EOF'
+          import json, sys, os
+          findings = []
+          for fname in ("trivy-api.sarif", "trivy-app.sarif"):
+              if not os.path.exists(fname) or os.path.getsize(fname) == 0:
+                  print(f"WARN: {fname} missing or empty — scan may have errored")
+                  continue
+              data = json.load(open(fname))
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      rule = r.get("ruleId", "?")
+                      msg  = r.get("message", {}).get("text", "")[:100]
+                      findings.append((fname, rule, msg))
+          if findings:
+              print(f"FAIL: {len(findings)} HIGH/CRITICAL finding(s) in container images:")
+              for fname, rule, msg in findings[:10]:
+                  print(f"  [{fname}] {rule}: {msg}")
+              sys.exit(1)
+          print("OK: no HIGH/CRITICAL vulnerabilities found in container images")
+          EOF
 
   # ── CI gate ─────────────────────────────────────────────────────────────────
   # Fan-in point: all validation jobs (tests + SAST + SCA) must pass.
