@@ -16,10 +16,25 @@ research, CTI, bug bounty, OSINT, and investigative workflows.**
 
 ---
 
+## The Problem
+
+Primarily for security researchers and bug bounty hunters, there is often a need to understand the hostnames within a domain. You can't just go to DNS and ask for all of the records. However, [for a few reasons](https://certificate.transparency.dev/), the TLS certificate authorities (CAs) are required by browser policy to publish the details of the certs they are issuing. You would very much think that should be private data, but it's not! So, this data is flowing non-stop as websites get new certs. This concept is called Certificate Transparency (CT) Logs.
+
+1. *"Great, I'll just query it directly!"*, you'll say. First, there isn't really a great API for this, there are ~35 log providers, and there is overlap on many of them. If you did overcome that, the actual data (e.g. hostnames, Subject Alternative Names, etc) is all encoded, so it's not searchable. So, you essentially "can't" search directly. Even if you could, the data is stored in a dense format, so you'd need to decode everything by hand. In the end, this just simply isn't an option.
+2. *"Fine, I'll just download everything and decode it myself"*, you'll say. Well, the bad news there is it would take weeks or months to get caught up, and estimates are that ALL of that data is somewhere around 75 TB or more. Plus again, you'd need to decode, organize, and index all of that data.
+3. *"This is crazy. Surely someone already offers an index to this data?"*, you'll say. And yes, many people will say *"Just use [crt.sh](https://crt.sh/), that's free!"* - which might be true, I don't know, because I've never visited that site when it was working. It always shows `502 Bad Gateway`. OK, but surely there is a paid option? Yes! This includes offerings like: SSLMate, SecurityTrails, Censys, Validin, and Netlas which may start at ~$500/mo, but could easily go to $1,500/mo+ or more if you want nearly unlimited use.
+
+The problem therefore, is that there is a valuable resource (the CT Log data), that you can't easily use. So, what if we build one, make it free and self-hostable, so that you can store as little or as much of this data as you want. If you just want the last 30 days (and keep hostnames forever) - that might be a few hundred GB. If you want the last year, then you're talking in the low TB's, and if you want all history of all time, that might be 75 TB or more. These are the "Storage Profiles" we talk about in the app, the default is to store as little as possible (e.g. hostnames, cert metadata for the latest cert only), and prune away everything else to save on disk space.
+
+
 ## What It Is
 
 BitsysCerts continuously ingests public Certificate Transparency (CT) log streams,
 normalises the data, and makes it queryable through a REST API and a lightweight web UI.
+
+![BitsysCerts dashboard — light mode](docs/screenshots/image.png)
+
+![BitsysCerts API Swagger documentation](docs/screenshots/image-9.png)
 
 It is designed for operators who want a **private, locally-controlled CT-derived hostname
 and certificate intelligence index** — without sending queries to third-party services.
