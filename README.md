@@ -32,7 +32,7 @@ The problem therefore, is that there is a valuable resource (the CT Log data), t
 BitsysCerts continuously ingests public Certificate Transparency (CT) log streams,
 normalises the data, and makes it queryable through a REST API and a lightweight web UI.
 
-![BitsysCerts dashboard — light mode](docs/screenshots/image.png)
+![BitsysCerts dashboard — light mode](docs/screenshots/image-1.png)
 
 ![BitsysCerts API Swagger documentation](docs/screenshots/image-9.png)
 
